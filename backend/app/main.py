@@ -23,18 +23,26 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 async def update_reservation_statuses_task():
-    """Background task to periodically update reservation statuses."""
+    """Background task to periodically update reservation statuses and reconcile enforcement."""
     from app.services.reservation_service import ReservationService
-    
+    from app.services.enforcement_service import ReservationEnforcementService
+
     while True:
         try:
             async with AsyncSessionLocal() as session:
                 service = ReservationService(session)
                 await service.update_reservation_statuses()
+
+                enforcement = ReservationEnforcementService(session)
+                result = enforcement.reconcile()
+                if asyncio.iscoroutine(result):
+                    result = await result
+                if result.get("provisioned") or result.get("cleaned"):
+                    logger.info(f"Enforcement reconcile: {result}")
         except Exception as e:
-            logger.error("Error updating reservation statuses:", e)
-        
-        await asyncio.sleep(60)  # Run every minute
+            logger.error(f"Error in reservation background task: {e}")
+
+        await asyncio.sleep(30)
 
 
 @asynccontextmanager

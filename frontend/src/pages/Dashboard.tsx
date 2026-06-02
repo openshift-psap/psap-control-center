@@ -38,6 +38,8 @@ export default function Dashboard() {
   const healthyClusters = clusters.filter((c) => c.status === 'healthy').length
   const totalGpus = clusters.reduce((sum, c) => sum + parseInt(c.gpu_count || '0'), 0)
   const activeReservations = reservations.filter((r) => r.status === 'active').length
+  const gpuReservations = reservations.filter((r) => r.status === 'active' && r.reservation_type === 'gpu')
+  const totalReservedGpus = gpuReservations.reduce((sum, r) => sum + (r.gpu_count || 0), 0)
 
   const stats = [
     {
@@ -131,6 +133,25 @@ export default function Dashboard() {
         ))}
       </div>
 
+      {/* GPU Reservation Summary */}
+      {totalReservedGpus > 0 && (
+        <div className="card p-4 bg-gradient-to-r from-purple-50 to-blue-50">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <CpuChipIcon className="h-6 w-6 text-purple-600" />
+              <div>
+                <p className="text-sm font-medium text-gray-700">GPU Reservations Active</p>
+                <p className="text-xs text-gray-500">{gpuReservations.length} reservation{gpuReservations.length !== 1 ? 's' : ''} using partial GPUs</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-2xl font-bold text-purple-700">{totalReservedGpus}</p>
+              <p className="text-xs text-gray-500">GPUs reserved of {totalGpus} total</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="card">
           <div className="px-6 py-4 border-b border-gray-200">
@@ -168,6 +189,7 @@ export default function Dashboard() {
                       <p className="font-medium text-gray-900">{cluster.name}</p>
                       <p className="text-sm text-gray-500">
                         {cluster.node_count || '?'} nodes · {cluster.gpu_count || '0'} GPUs
+                        {cluster.gpu_type && <span className="ml-1">({cluster.gpu_type})</span>}
                       </p>
                     </div>
                   </div>
@@ -228,12 +250,33 @@ export default function Dashboard() {
                       style={{ backgroundColor: reservation.color }}
                     />
                     <div>
-                      <p className="font-medium text-gray-900">{reservation.title}</p>
+                      <p className="font-medium text-gray-900">
+                        {reservation.title}
+                        {reservation.reservation_type === 'gpu' && (
+                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-800">
+                            {reservation.gpu_count} GPU
+                          </span>
+                        )}
+                      </p>
                       <p className="text-sm text-gray-500">
-                        {reservation.cluster_name}
+                        {reservation.cluster_name || 'Unknown'}
                       </p>
                       <p className="text-xs text-gray-400">
                         {reservation.user_name}{reservation.team && ` · ${reservation.team}`}
+                        {reservation.enforcement_namespace && (
+                          <span className="ml-1 font-mono">
+                            ({reservation.enforcement_namespace})
+                            {reservation.enforcement_status && (
+                              <span className={`ml-1 px-1 py-0.5 rounded text-[9px] font-medium ${
+                                reservation.enforcement_status === 'provisioned' ? 'bg-green-100 text-green-800' :
+                                reservation.enforcement_status === 'error' ? 'bg-red-100 text-red-800' :
+                                'bg-gray-100 text-gray-600'
+                              }`}>
+                                {reservation.enforcement_status}
+                              </span>
+                            )}
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>

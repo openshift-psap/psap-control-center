@@ -11,7 +11,8 @@ from app.schemas.cluster import (
     ClusterUpdate,
     ClusterResponse,
     ClusterStatus,
-    ClusterListResponse
+    ClusterListResponse,
+    GpuAllocationStatus as GpuAllocationStatusSchema,
 )
 from app.utils.logger import create_logger
 
@@ -322,6 +323,43 @@ async def get_cluster_topology(
         k8s_service = KubernetesService(cluster.kubeconfig_path)
         topology = k8s_service.get_topology()
         return topology
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{cluster_id}/gpu-status", response_model=GpuAllocationStatusSchema)
+async def get_gpu_status(
+    cluster_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get live GPU allocation status via DRA or legacy counting."""
+    service = ClusterService(db)
+    cluster = await service.get_cluster(cluster_id)
+
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    if not cluster.kubeconfig_path:
+        raise HTTPException(status_code=400, detail="Cluster has no kubeconfig configured")
+
+    try:
+        k8s_service = KubernetesService(cluster.kubeconfig_path)
+        allocation = k8s_service.get_gpu_allocation()
+        return GpuAllocationStatusSchema(
+            gpu_allocation_mode=allocation.gpu_allocation_mode,
+            dra_available=allocation.dra_available,
+            dra_api_version=allocation.dra_api_version,
+            total_gpus=allocation.total_gpus,
+            allocated_gpus=allocation.allocated_gpus,
+            free_gpus=allocation.free_gpus,
+            gpu_types=[{
+                "product": t.product,
+                "count": t.count,
+                "allocated": t.allocated,
+                "free": t.free,
+                "node_count": t.node_count,
+            } for t in allocation.gpu_types],
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
