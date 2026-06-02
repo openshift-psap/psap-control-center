@@ -12,10 +12,13 @@ import {
   EyeSlashIcon,
 } from '@heroicons/react/24/outline'
 import { useDropzone } from 'react-dropzone'
+import { useQueries } from '@tanstack/react-query'
 import { useClusters, useCreateCluster, useDeleteCluster } from '../hooks/useClusters'
+import { clusterApi } from '../services/api'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
+import type { GpuAllocationStatus } from '../types'
 
 type AuthMethod = 'kubeconfig' | 'credentials'
 
@@ -38,6 +41,20 @@ export default function Clusters() {
   const deleteCluster = useDeleteCluster()
 
   const clusters = data?.clusters || []
+
+  const gpuStatusQueries = useQueries({
+    queries: clusters.map((c) => ({
+      queryKey: ['gpu-status', c.id],
+      queryFn: () => clusterApi.getGpuStatus(c.id),
+      enabled: c.status === 'healthy',
+      staleTime: 30_000,
+      refetchInterval: 60_000,
+    })),
+  })
+  const gpuStatusByCluster = clusters.reduce<Record<string, GpuAllocationStatus | undefined>>((acc, c, i) => {
+    acc[c.id] = gpuStatusQueries[i]?.data as GpuAllocationStatus | undefined
+    return acc
+  }, {})
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: { 'application/x-yaml': ['.yaml', '.yml'], 'text/plain': ['.kubeconfig'] },
@@ -209,8 +226,12 @@ export default function Clusters() {
                     <p className="font-semibold text-gray-900">{cluster.node_count || 'N/A'}</p>
                   </div>
                   <div>
-                    <p className="text-gray-500">GPUs</p>
-                    <p className="font-semibold text-gray-900">{cluster.gpu_count || '0'}</p>
+                    <p className="text-gray-500">GPUs (used / total)</p>
+                    <p className="font-semibold text-gray-900">
+                      {gpuStatusByCluster[cluster.id]
+                        ? `${gpuStatusByCluster[cluster.id]!.allocated_gpus} / ${gpuStatusByCluster[cluster.id]!.total_gpus}`
+                        : `– / ${cluster.gpu_count || '0'}`}
+                    </p>
                   </div>
                   <div>
                     <p className="text-gray-500">Version</p>

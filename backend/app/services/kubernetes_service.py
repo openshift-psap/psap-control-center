@@ -15,6 +15,7 @@ logger = create_logger("KubernetesService")
 
 DRA_API_GROUP = "resource.k8s.io"
 DRA_VERSION_PREFERENCE = ["v1", "v1beta2", "v1beta1"]
+DRA_GPU_DRIVER_NAMES = ["gpu.nvidia.com", "gpu.intel.com", "gpu.amd.com"]
 DRA_CONFIGMAP_NAME = "gpu-fleet-viewer-config"
 DRA_CONFIGMAP_NAMESPACE = "gpu-fleet-viewer"
 K8S_API_TIMEOUT = 20
@@ -311,6 +312,19 @@ class KubernetesService:
 
         return default_config
 
+    @staticmethod
+    def _extract_dra_attribute(attrs: dict, key: str) -> Optional[str]:
+        """Extract a typed DRA device attribute value by key (exact or substring match)."""
+        for attr_key, attr_val in attrs.items():
+            if key == attr_key or key in attr_key:
+                if isinstance(attr_val, dict):
+                    return (attr_val.get("string")
+                            or attr_val.get("stringValue")
+                            or attr_val.get("version")
+                            or str(attr_val))
+                return str(attr_val)
+        return None
+
     def _get_gpu_allocation_dra(self, dra_version: str) -> GpuAllocationStatus:
         """Count GPUs via DRA ResourceSlice and ResourceClaim objects."""
         status = GpuAllocationStatus(
@@ -328,30 +342,32 @@ class KubernetesService:
             logger.warning(f"DRA ResourceSlice list failed ({e.status}), falling back to legacy")
             return self._get_gpu_allocation_legacy()
 
-        gpu_config = self._load_gpu_config_from_configmap()
-        product_label = gpu_config.get("product_label", "nvidia.com/gpu.product")
-
         node_gpus: Dict[str, NodeGpuInfo] = {}
         gpu_type_counts: Dict[str, GpuTypeInfo] = {}
+        gpu_driver_found = False
 
         for rs in slices.get("items", []):
+            driver = rs.get("spec", {}).get("driver", "")
+            if driver not in DRA_GPU_DRIVER_NAMES:
+                continue
+            gpu_driver_found = True
+
             node_name = rs.get("spec", {}).get("nodeName") or rs.get("nodeName")
             if not node_name:
                 continue
-            devices = rs.get("spec", {}).get("devices", []) or rs.get("devices", [])
+            devices = rs.get("spec", {}).get("devices", []) or []
             if not devices:
                 continue
 
             product = "Unknown GPU"
             for device in devices:
-                attrs = device.get("basic", {}).get("attributes", {})
-                for attr_key, attr_val in attrs.items():
-                    if "productName" in attr_key or "product" in attr_key.lower():
-                        val = attr_val
-                        if isinstance(val, dict):
-                            val = val.get("string", val.get("stringValue", str(val)))
-                        product = str(val)
-                        break
+                attrs = device.get("attributes", {})
+                if not attrs:
+                    attrs = device.get("basic", {}).get("attributes", {})
+                name = self._extract_dra_attribute(attrs, "productName")
+                if name:
+                    product = name
+                    break
 
             gpu_count = len(devices)
             if node_name not in node_gpus:
@@ -367,6 +383,10 @@ class KubernetesService:
                 )
             gpu_type_counts[product].count += gpu_count
 
+        if not gpu_driver_found:
+            logger.info("DRA API present but no GPU driver ResourceSlices found, falling back to legacy")
+            return self._get_gpu_allocation_legacy()
+
         # Count allocations from ResourceClaims
         try:
             claims = self.custom_objects.list_cluster_custom_object(
@@ -377,6 +397,9 @@ class KubernetesService:
                 alloc = claim.get("status", {}).get("allocation", {})
                 devices = alloc.get("devices", {}).get("results", [])
                 for result in devices:
+                    req_driver = result.get("driver", "")
+                    if req_driver and req_driver not in DRA_GPU_DRIVER_NAMES:
+                        continue
                     pool_name = result.get("pool", "")
                     for node_name, info in node_gpus.items():
                         if node_name in pool_name or pool_name == node_name:

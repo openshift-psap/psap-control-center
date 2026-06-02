@@ -9,11 +9,13 @@ import {
   LockClosedIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline'
+import { useQueries } from '@tanstack/react-query'
 import { useClusters } from '../hooks/useClusters'
 import { useReservations } from '../hooks/useReservations'
 import { useHearthClusters } from '../hooks/useHearth'
+import { clusterApi } from '../services/api'
 import { format, startOfDay, endOfDay, addDays } from 'date-fns'
-import type { HearthCluster } from '../types'
+import type { HearthCluster, GpuAllocationStatus } from '../types'
 
 export default function Dashboard() {
   const { data: clustersData, isLoading: clustersLoading } = useClusters()
@@ -36,10 +38,33 @@ export default function Dashboard() {
   const reservations = reservationsData?.reservations || []
 
   const healthyClusters = clusters.filter((c) => c.status === 'healthy').length
-  const totalGpus = clusters.reduce((sum, c) => sum + parseInt(c.gpu_count || '0'), 0)
   const activeReservations = reservations.filter((r) => r.status === 'active').length
   const gpuReservations = reservations.filter((r) => r.status === 'active' && r.reservation_type === 'gpu')
   const totalReservedGpus = gpuReservations.reduce((sum, r) => sum + (r.gpu_count || 0), 0)
+
+  const healthyClusterIds = clusters.filter((c) => c.status === 'healthy').map((c) => c.id)
+  const gpuStatusQueries = useQueries({
+    queries: healthyClusterIds.map((id) => ({
+      queryKey: ['gpu-status', id],
+      queryFn: () => clusterApi.getGpuStatus(id),
+      staleTime: 30_000,
+      refetchInterval: 60_000,
+    })),
+  })
+
+  const gpuTotals = gpuStatusQueries.reduce(
+    (acc, q) => {
+      const data = q.data as GpuAllocationStatus | undefined
+      if (data) {
+        acc.total += data.total_gpus
+        acc.allocated += data.allocated_gpus
+      }
+      return acc
+    },
+    { total: 0, allocated: 0 }
+  )
+  const gpuStatusLoading = gpuStatusQueries.some((q) => q.isLoading)
+  const totalGpus = gpuTotals.total || clusters.reduce((sum, c) => sum + parseInt(c.gpu_count || '0'), 0)
 
   const stats = [
     {
@@ -54,13 +79,6 @@ export default function Dashboard() {
       value: healthyClusters,
       icon: CheckCircleIcon,
       color: 'bg-green-500',
-      href: '/clusters',
-    },
-    {
-      name: 'Total GPUs',
-      value: totalGpus,
-      icon: CpuChipIcon,
-      color: 'bg-purple-500',
       href: '/clusters',
     },
     {
@@ -131,6 +149,29 @@ export default function Dashboard() {
             </div>
           </Link>
         ))}
+        <Link
+          to="/clusters"
+          className="card p-6 hover:shadow-md transition-shadow"
+        >
+          <div className="flex items-center">
+            <div className="bg-purple-500 rounded-lg p-3">
+              <CpuChipIcon className="h-6 w-6 text-white" />
+            </div>
+            <div className="ml-4">
+              <p className="text-sm font-medium text-gray-500">GPUs</p>
+              {clustersLoading || gpuStatusLoading ? (
+                <p className="text-2xl font-semibold text-gray-900">...</p>
+              ) : (
+                <div className="flex items-baseline gap-1.5">
+                  <p className="text-2xl font-semibold text-gray-900">{gpuTotals.allocated}</p>
+                  <p className="text-sm text-gray-400">/</p>
+                  <p className="text-lg text-gray-500">{totalGpus}</p>
+                </div>
+              )}
+              <p className="text-xs text-gray-400 mt-0.5">used / total</p>
+            </div>
+          </div>
+        </Link>
       </div>
 
       {/* GPU Reservation Summary */}
