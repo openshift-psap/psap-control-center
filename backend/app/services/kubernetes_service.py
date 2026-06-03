@@ -264,6 +264,8 @@ class KubernetesService:
     def _detect_dra_version(self) -> Optional[str]:
         """Probe the API server for supported DRA API versions."""
         try:
+            if self._api_client is None:
+                self._load_config()
             api_groups = client.ApisApi(self._api_client).get_api_versions()
             dra_versions = set()
             for group in api_groups.groups:
@@ -276,7 +278,8 @@ class KubernetesService:
                 if preferred in dra_versions:
                     return preferred
             return next(iter(dra_versions), None)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"DRA version detection failed: {e}")
             return None
 
     def _load_gpu_config_from_configmap(self) -> Dict[str, Any]:
@@ -387,7 +390,7 @@ class KubernetesService:
             logger.info("DRA API present but no GPU driver ResourceSlices found, falling back to legacy")
             return self._get_gpu_allocation_legacy()
 
-        # Count allocations from ResourceClaims
+        # Count allocations from DRA ResourceClaims
         try:
             claims = self.custom_objects.list_cluster_custom_object(
                 group=DRA_API_GROUP, version=dra_version, plural="resourceclaims",
@@ -409,6 +412,28 @@ class KubernetesService:
             logger.warning("Could not list ResourceClaims; allocation counts may be incomplete")
         except Exception as e:
             logger.warning(f"Error counting DRA allocations: {e}")
+
+        # Also count traditional pod-level nvidia.com/gpu resource requests
+        # (workloads not using DRA still request GPUs the classic way)
+        gpu_config = self._load_gpu_config_from_configmap()
+        gpu_resource = gpu_config.get("gpu_resource_name", "nvidia.com/gpu")
+        try:
+            pods = self.core_v1.list_pod_for_all_namespaces(
+                _request_timeout=K8S_API_TIMEOUT
+            )
+            for pod in pods.items:
+                if pod.status.phase not in ("Running", "Pending"):
+                    continue
+                pod_node = pod.spec.node_name
+                if not pod_node or pod_node not in node_gpus:
+                    continue
+                for container in (pod.spec.containers or []):
+                    requests = (container.resources.requests or {}) if container.resources else {}
+                    gpu_req = int(requests.get(gpu_resource, 0))
+                    if gpu_req > 0:
+                        node_gpus[pod_node].gpu_allocated += gpu_req
+        except Exception as e:
+            logger.warning(f"Could not list pods for legacy GPU counting: {e}")
 
         # Aggregate into the status object
         unique_nodes_per_type: Dict[str, set] = {}
