@@ -66,6 +66,7 @@ class ReservationService:
             end_time=reservation_data.end_time,
             reservation_type=reservation_data.reservation_type,
             gpu_count=reservation_data.gpu_count,
+            enforce_isolation=reservation_data.enforce_isolation,
             purpose=reservation_data.purpose,
             notes=reservation_data.notes,
             color=cluster_color,
@@ -79,7 +80,7 @@ class ReservationService:
         await self.db.commit()
         await self.db.refresh(reservation)
 
-        if starts_immediately and reservation.reservation_type == "gpu":
+        if starts_immediately and reservation.reservation_type == "gpu" and reservation.enforce_isolation:
             try:
                 from app.services.enforcement_service import (
                     ReservationEnforcementService,

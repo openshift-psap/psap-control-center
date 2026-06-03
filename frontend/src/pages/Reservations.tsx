@@ -40,6 +40,7 @@ const initialFormState = {
   purpose: '',
   reservation_type: 'cluster' as ReservationType,
   gpu_count: '' as string,
+  enforce_isolation: false,
 }
 
 interface WeekCalendarReservation {
@@ -359,6 +360,7 @@ export default function Reservations() {
       purpose: form.purpose || undefined,
       reservation_type: form.reservation_type,
       gpu_count: form.reservation_type === 'gpu' ? parseInt(form.gpu_count) : undefined,
+      enforce_isolation: form.reservation_type === 'gpu' ? form.enforce_isolation : false,
     })
 
     setIsOpen(false)
@@ -738,7 +740,7 @@ export default function Reservations() {
                       <div className="flex rounded-lg border border-gray-300 overflow-hidden">
                         <button
                           type="button"
-                          onClick={() => setForm(prev => ({ ...prev, reservation_type: 'cluster', gpu_count: '' }))}
+                          onClick={() => setForm(prev => ({ ...prev, reservation_type: 'cluster', gpu_count: '', enforce_isolation: false }))}
                           className={clsx(
                             'flex-1 py-2 px-4 text-sm font-medium transition-colors',
                             form.reservation_type === 'cluster'
@@ -803,6 +805,27 @@ export default function Reservations() {
                             )}
                           </div>
                         )}
+                        <div className="mt-3 relative">
+                          <label className="flex items-start gap-2 opacity-50 cursor-not-allowed">
+                            <input
+                              type="checkbox"
+                              checked={false}
+                              disabled
+                              className="mt-0.5 rounded border-gray-300 text-gray-400 cursor-not-allowed"
+                            />
+                            <span className="text-sm text-gray-500">
+                              <span className="font-medium">Enable isolation</span>
+                            </span>
+                          </label>
+                          <div className="group inline-block ml-1 align-middle">
+                            <span className="inline-flex items-center justify-center h-4 w-4 rounded-full bg-gray-300 text-[10px] font-bold text-white cursor-help">?</span>
+                            <div className="hidden group-hover:block absolute z-50 left-0 mt-1 w-72 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-lg">
+                              <p className="font-semibold mb-1">Isolation is currently disabled</p>
+                              <p>When enabled, this creates a dedicated Kubernetes namespace with a ResourceQuota to enforce GPU limits directly on the cluster, preventing workloads from exceeding the reserved GPU count.</p>
+                              <p className="mt-1.5">This feature is intentionally disabled while the team evaluates its use in production. Reservations currently operate on a trust-based model.</p>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     )}
 

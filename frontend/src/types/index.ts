@@ -83,6 +83,7 @@ export interface Reservation {
   end_time: string
   reservation_type: ReservationType
   gpu_count?: number | null
+  enforce_isolation: boolean
   enforcement_namespace?: string | null
   enforcement_status?: string | null
   purpose?: string

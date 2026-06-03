@@ -55,6 +55,7 @@ _MIGRATIONS = [
     ("reservations", "gpu_count", "INTEGER"),
     ("reservations", "enforcement_namespace", "VARCHAR(255)"),
     ("reservations", "enforcement_status", "VARCHAR(50)"),
+    ("reservations", "enforce_isolation", "BOOLEAN NOT NULL DEFAULT 0"),
 ]
 
 

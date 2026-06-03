@@ -31,6 +31,8 @@ class ReservationEnforcementService:
         """Create enforcement resources for a GPU reservation that just became active."""
         if (reservation.reservation_type or "cluster") != "gpu":
             return
+        if not getattr(reservation, "enforce_isolation", False):
+            return
         if reservation.enforcement_status == "provisioned":
             return
         if not reservation.cluster_id:
@@ -124,12 +126,13 @@ class ReservationEnforcementService:
         provisioned = 0
         cleaned = 0
 
-        # Provision for active GPU reservations that haven't been provisioned
+        # Provision for active GPU reservations with isolation enabled that haven't been provisioned
         result = await self.db.execute(
             select(Reservation).where(
                 and_(
                     Reservation.status == ReservationStatus.ACTIVE,
                     Reservation.reservation_type == "gpu",
+                    Reservation.enforce_isolation == True,
                     Reservation.enforcement_status.is_(None),
                 )
             )
@@ -144,6 +147,7 @@ class ReservationEnforcementService:
                 and_(
                     Reservation.status == ReservationStatus.ACTIVE,
                     Reservation.reservation_type == "gpu",
+                    Reservation.enforce_isolation == True,
                     Reservation.enforcement_status == "error",
                 )
             )

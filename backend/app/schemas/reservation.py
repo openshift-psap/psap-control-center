@@ -18,6 +18,7 @@ class ReservationBase(BaseModel):
     end_time: datetime
     reservation_type: str = "cluster"
     gpu_count: Optional[int] = None
+    enforce_isolation: bool = False
     purpose: Optional[str] = None
     notes: Optional[str] = None
     color: Optional[str] = Field(default="#3B82F6", pattern="^#[0-9A-Fa-f]{6}$")
@@ -62,6 +63,7 @@ class ReservationUpdate(BaseModel):
     notes: Optional[str] = None
     reservation_type: Optional[str] = None
     gpu_count: Optional[int] = None
+    enforce_isolation: Optional[bool] = None
     color: Optional[str] = Field(None, pattern="^#[0-9A-Fa-f]{6}$")
 
     @field_validator('reservation_type')
@@ -101,6 +103,7 @@ class ReservationResponse(BaseModel):
     end_time: datetime
     reservation_type: str = "cluster"
     gpu_count: Optional[int] = None
+    enforce_isolation: bool = False
     enforcement_namespace: Optional[str] = None
     enforcement_status: Optional[str] = None
     purpose: Optional[str] = None

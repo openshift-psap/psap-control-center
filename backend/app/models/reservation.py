@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, Text, ForeignKey, Enum
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, Text, ForeignKey, Enum
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
@@ -44,6 +44,7 @@ class Reservation(Base):
 
     reservation_type = Column(String(20), default="cluster", nullable=False)
     gpu_count = Column(Integer, nullable=True)
+    enforce_isolation = Column(Boolean, default=False, nullable=False)
 
     enforcement_namespace = Column(String(255), nullable=True)
     enforcement_status = Column(String(50), nullable=True)
