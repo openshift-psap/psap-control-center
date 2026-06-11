@@ -116,8 +116,7 @@ export default function Clusters() {
     let completed = 0
     setRefreshProgress({ total: clusterList.length, completed: 0, currentCluster: '', errors: [] })
 
-    // Refresh clusters sequentially to avoid SQLite write contention
-    for (const cluster of clusterList) {
+    const refreshOne = async (cluster: typeof clusterList[0]) => {
       try {
         await clusterApi.refreshStatus(cluster.id)
       } catch {
@@ -139,6 +138,8 @@ export default function Clusters() {
       completed++
       setRefreshProgress(prev => prev ? { ...prev, completed, errors: [...errors] } : prev)
     }
+
+    await Promise.all(clusterList.map(refreshOne))
 
     setRefreshProgress({ total: clusterList.length, completed: clusterList.length, currentCluster: '', errors })
 
