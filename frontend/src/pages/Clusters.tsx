@@ -100,23 +100,30 @@ export default function Clusters() {
     return () => clearInterval(id)
   }, [schedule?.next_refresh])
 
+  const serverRefreshing = schedule?.in_progress ?? false
+
   const handleRefreshAll = useCallback(async () => {
     const clusterList = data?.clusters || []
     if (clusterList.length === 0 || refreshing) return
+
+    if (serverRefreshing) {
+      toast('Server refresh already in progress — please wait', { icon: '⏳' })
+      return
+    }
 
     setRefreshing(true)
     const errors: string[] = []
     let completed = 0
     setRefreshProgress({ total: clusterList.length, completed: 0, currentCluster: '', errors: [] })
 
-    const refreshOne = async (cluster: typeof clusterList[0]) => {
+    // Refresh clusters sequentially to avoid SQLite write contention
+    for (const cluster of clusterList) {
       try {
         await clusterApi.refreshStatus(cluster.id)
       } catch {
         errors.push(cluster.name)
       }
 
-      // Immediately update the cluster list so the card reflects new status
       refetch()
 
       try {
@@ -133,8 +140,6 @@ export default function Clusters() {
       setRefreshProgress(prev => prev ? { ...prev, completed, errors: [...errors] } : prev)
     }
 
-    await Promise.all(clusterList.map(refreshOne))
-
     setRefreshProgress({ total: clusterList.length, completed: clusterList.length, currentCluster: '', errors })
 
     if (errors.length === 0) {
@@ -147,7 +152,7 @@ export default function Clusters() {
       setRefreshing(false)
       setRefreshProgress(null)
     }, 2000)
-  }, [data, refreshing, refetch, queryClient])
+  }, [data, refreshing, serverRefreshing, refetch, queryClient])
 
   const clusters = data?.clusters || []
 
@@ -288,11 +293,11 @@ export default function Clusters() {
         <div className="flex gap-3">
           <button
             onClick={handleRefreshAll}
-            disabled={refreshing}
+            disabled={refreshing || serverRefreshing}
             className="btn-secondary disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <ArrowPathIcon className={clsx('h-4 w-4 mr-2', refreshing && 'animate-spin')} />
-            {refreshing ? 'Refreshing...' : 'Refresh'}
+            <ArrowPathIcon className={clsx('h-4 w-4 mr-2', (refreshing || serverRefreshing) && 'animate-spin')} />
+            {refreshing ? 'Refreshing...' : serverRefreshing ? 'Auto-refreshing...' : 'Refresh'}
           </button>
           <button onClick={() => setIsAddOpen(true)} className="btn-primary">
             <PlusIcon className="h-4 w-4 mr-2" />
