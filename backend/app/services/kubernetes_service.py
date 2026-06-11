@@ -416,7 +416,9 @@ class KubernetesService:
                         continue
                     pool_name = result.get("pool", "")
                     for node_name, info in node_gpus.items():
-                        if node_name in pool_name or pool_name == node_name:
+                        if (pool_name == node_name
+                                or pool_name.endswith(
+                                    f"-{node_name}")):
                             info.gpu_allocated += 1
                             break
         except ApiException:
@@ -436,11 +438,21 @@ class KubernetesService:
             for pod in pods.items:
                 if pod.status.phase not in ("Running", "Pending"):
                     continue
+                # Skip pods that use DRA ResourceClaims to avoid
+                # double-counting GPUs already tallied above
+                pod_claims = getattr(
+                    pod.spec, "resource_claims", None
+                )
+                if pod_claims:
+                    continue
                 pod_node = pod.spec.node_name
                 pod_total_gpu = 0
-                for container in (pod.spec.containers or []):
-                    requests = (container.resources.requests or {}) if container.resources else {}
-                    gpu_req = int(requests.get(gpu_resource, 0))
+                for ctr in (pod.spec.containers or []):
+                    reqs = (
+                        (ctr.resources.requests or {})
+                        if ctr.resources else {}
+                    )
+                    gpu_req = int(reqs.get(gpu_resource, 0))
                     if gpu_req > 0:
                         pod_total_gpu += gpu_req
                         if pod_node and pod_node in node_gpus:
@@ -453,7 +465,9 @@ class KubernetesService:
                         node=pod_node,
                     ))
         except Exception as e:
-            logger.warning(f"Could not list pods for legacy GPU counting: {e}")
+            logger.warning(
+                f"Could not list pods for legacy GPU counting: {e}"
+            )
 
         # Aggregate into the status object
         unique_nodes_per_type: Dict[str, set] = {}

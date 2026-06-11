@@ -152,9 +152,20 @@ class ClusterService:
             enforcement = ReservationEnforcementService(self.db)
             cleaned = await enforcement.cleanup_cluster_enforcement(cluster_id)
             if cleaned:
-                logger.info(f"Cleaned {cleaned} enforcement namespaces for cluster {cluster.name}")
+                logger.info(
+                    f"Cleaned {cleaned} enforcement namespaces "
+                    f"for cluster {cluster.name}"
+                )
         except Exception as e:
-            logger.warning(f"Enforcement cleanup failed during cluster deletion: {e}")
+            logger.error(
+                f"Enforcement cleanup failed during "
+                f"cluster deletion: {e}"
+            )
+            await self.db.rollback()
+            raise RuntimeError(
+                "Failed to clean enforcement namespaces; "
+                "aborting cluster deletion"
+            ) from e
 
         result = await self.db.execute(
             select(Reservation).where(Reservation.cluster_id == cluster_id)
@@ -200,8 +211,10 @@ class ClusterService:
                 gpu_alloc = k8s_service.get_gpu_allocation()
                 cluster.gpu_allocation_mode = gpu_alloc.gpu_allocation_mode
                 cluster.gpu_count = gpu_alloc.total_gpus
-                if gpu_alloc.gpu_types:
-                    cluster.gpu_type = gpu_alloc.gpu_types[0].product
+                cluster.gpu_type = (
+                    gpu_alloc.gpu_types[0].product
+                    if gpu_alloc.gpu_types else None
+                )
             except Exception as e:
                 logger.warning(f"GPU allocation probe failed: {e}")
                 cluster.gpu_count = cluster_info.get("gpu_count")
