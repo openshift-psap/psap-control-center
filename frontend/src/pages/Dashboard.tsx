@@ -16,6 +16,7 @@ import { useHearthClusters } from '../hooks/useHearth'
 import { clusterApi } from '../services/api'
 import { format, startOfDay, endOfDay, addDays } from 'date-fns'
 import type { HearthCluster, GpuAllocationStatus } from '../types'
+import GpuDonutChart from '../components/GpuDonutChart'
 
 export default function Dashboard() {
   const { data: clustersData, isLoading: clustersLoading } = useClusters()
@@ -153,12 +154,16 @@ export default function Dashboard() {
           to="/clusters"
           className="card p-6 hover:shadow-md transition-shadow"
         >
-          <div className="flex items-center">
-            <div className="bg-purple-500 rounded-lg p-3">
-              <CpuChipIcon className="h-6 w-6 text-white" />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">GPUs</p>
+          <div className="flex items-center gap-4">
+            {clustersLoading || gpuStatusLoading ? (
+              <div className="bg-purple-500 rounded-lg p-3">
+                <CpuChipIcon className="h-6 w-6 text-white" />
+              </div>
+            ) : (
+              <GpuDonutChart used={gpuTotals.allocated} total={totalGpus} size={64} strokeWidth={7} />
+            )}
+            <div>
+              <p className="text-sm font-medium text-gray-500">GPU Utilization</p>
               {clustersLoading || gpuStatusLoading ? (
                 <p className="text-2xl font-semibold text-gray-900">...</p>
               ) : (
@@ -210,43 +215,56 @@ export default function Dashboard() {
                 </Link>
               </div>
             ) : (
-              clusters.slice(0, 5).map((cluster) => (
-                <Link
-                  key={cluster.id}
-                  to={`/clusters/${cluster.id}`}
-                  className="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <div
-                      className={`h-3 w-3 rounded-full ${
-                        cluster.status === 'healthy'
-                          ? 'bg-green-500'
-                          : cluster.status === 'error'
-                          ? 'bg-red-500'
-                          : 'bg-yellow-500'
-                      }`}
-                    />
-                    <div>
-                      <p className="font-medium text-gray-900">{cluster.name}</p>
-                      <p className="text-sm text-gray-500">
-                        {cluster.node_count || '?'} nodes · {cluster.gpu_count || '0'} GPUs
-                        {cluster.gpu_type && <span className="ml-1">({cluster.gpu_type})</span>}
-                      </p>
-                    </div>
-                  </div>
-                  <span
-                    className={`badge ${
-                      cluster.status === 'healthy'
-                        ? 'badge-success'
-                        : cluster.status === 'error'
-                        ? 'badge-error'
-                        : 'badge-warning'
-                    }`}
+              clusters.slice(0, 5).map((cluster) => {
+                const gpuData = gpuStatusQueries.find(
+                  (_q, i) => healthyClusterIds[i] === cluster.id
+                )?.data as GpuAllocationStatus | undefined
+                const clusterTotal = gpuData?.total_gpus ?? parseInt(cluster.gpu_count || '0')
+                const clusterUsed = gpuData?.allocated_gpus ?? 0
+
+                return (
+                  <Link
+                    key={cluster.id}
+                    to={`/clusters/${cluster.id}`}
+                    className="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors"
                   >
-                    {cluster.status}
-                  </span>
-                </Link>
-              ))
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`h-3 w-3 rounded-full ${
+                          cluster.status === 'healthy'
+                            ? 'bg-green-500'
+                            : cluster.status === 'error'
+                            ? 'bg-red-500'
+                            : 'bg-yellow-500'
+                        }`}
+                      />
+                      <div>
+                        <p className="font-medium text-gray-900">{cluster.name}</p>
+                        <p className="text-sm text-gray-500">
+                          {cluster.node_count || '?'} nodes · {clusterUsed}/{clusterTotal} GPUs
+                          {cluster.gpu_type && <span className="ml-1">({cluster.gpu_type})</span>}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {clusterTotal > 0 && (
+                        <GpuDonutChart used={clusterUsed} total={clusterTotal} size={40} strokeWidth={5} />
+                      )}
+                      <span
+                        className={`badge ${
+                          cluster.status === 'healthy'
+                            ? 'badge-success'
+                            : cluster.status === 'error'
+                            ? 'badge-error'
+                            : 'badge-warning'
+                        }`}
+                      >
+                        {cluster.status}
+                      </span>
+                    </div>
+                  </Link>
+                )
+              })
             )}
           </div>
           {clusters.length > 5 && (

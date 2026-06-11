@@ -40,6 +40,14 @@ class NodeGpuInfo:
 
 
 @dataclass
+class GpuPodInfo:
+    name: str
+    namespace: str
+    gpu_count: int
+    node: Optional[str] = None
+
+
+@dataclass
 class GpuAllocationStatus:
     gpu_allocation_mode: str = "legacy"
     dra_available: bool = False
@@ -49,12 +57,15 @@ class GpuAllocationStatus:
     free_gpus: int = 0
     gpu_types: list = None
     nodes: list = None
+    gpu_pods: list = None
 
     def __post_init__(self):
         if self.gpu_types is None:
             self.gpu_types = []
         if self.nodes is None:
             self.nodes = []
+        if self.gpu_pods is None:
+            self.gpu_pods = []
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -417,6 +428,7 @@ class KubernetesService:
         # (workloads not using DRA still request GPUs the classic way)
         gpu_config = self._load_gpu_config_from_configmap()
         gpu_resource = gpu_config.get("gpu_resource_name", "nvidia.com/gpu")
+        gpu_pods: List[GpuPodInfo] = []
         try:
             pods = self.core_v1.list_pod_for_all_namespaces(
                 _request_timeout=K8S_API_TIMEOUT
@@ -425,13 +437,21 @@ class KubernetesService:
                 if pod.status.phase not in ("Running", "Pending"):
                     continue
                 pod_node = pod.spec.node_name
-                if not pod_node or pod_node not in node_gpus:
-                    continue
+                pod_total_gpu = 0
                 for container in (pod.spec.containers or []):
                     requests = (container.resources.requests or {}) if container.resources else {}
                     gpu_req = int(requests.get(gpu_resource, 0))
                     if gpu_req > 0:
-                        node_gpus[pod_node].gpu_allocated += gpu_req
+                        pod_total_gpu += gpu_req
+                        if pod_node and pod_node in node_gpus:
+                            node_gpus[pod_node].gpu_allocated += gpu_req
+                if pod_total_gpu > 0:
+                    gpu_pods.append(GpuPodInfo(
+                        name=pod.metadata.name,
+                        namespace=pod.metadata.namespace,
+                        gpu_count=pod_total_gpu,
+                        node=pod_node,
+                    ))
         except Exception as e:
             logger.warning(f"Could not list pods for legacy GPU counting: {e}")
 
@@ -451,6 +471,7 @@ class KubernetesService:
 
         status.gpu_types = list(gpu_type_counts.values())
         status.nodes = list(node_gpus.values())
+        status.gpu_pods = gpu_pods
         status.total_gpus = sum(t.count for t in status.gpu_types)
         status.allocated_gpus = sum(t.allocated for t in status.gpu_types)
         status.free_gpus = status.total_gpus - status.allocated_gpus
@@ -506,15 +527,26 @@ class KubernetesService:
             gpu_type_counts[product].count += capacity
 
         # Sum pod GPU requests as allocated
+        gpu_pods: List[GpuPodInfo] = []
         for pod in pods.items:
             if pod.status.phase not in ("Running", "Pending"):
                 continue
             node_name = pod.spec.node_name
+            pod_total_gpu = 0
             for container in (pod.spec.containers or []):
                 requests = (container.resources.requests or {}) if container.resources else {}
                 gpu_req = int(requests.get(gpu_resource, 0))
-                if gpu_req > 0 and node_name and node_name in node_gpus:
-                    node_gpus[node_name].gpu_allocated += gpu_req
+                if gpu_req > 0:
+                    pod_total_gpu += gpu_req
+                    if node_name and node_name in node_gpus:
+                        node_gpus[node_name].gpu_allocated += gpu_req
+            if pod_total_gpu > 0:
+                gpu_pods.append(GpuPodInfo(
+                    name=pod.metadata.name,
+                    namespace=pod.metadata.namespace,
+                    gpu_count=pod_total_gpu,
+                    node=node_name,
+                ))
 
         # Aggregate per-type
         unique_nodes_per_type: Dict[str, set] = {}
@@ -532,6 +564,7 @@ class KubernetesService:
 
         status.gpu_types = list(gpu_type_counts.values())
         status.nodes = list(node_gpus.values())
+        status.gpu_pods = gpu_pods
         status.total_gpus = sum(t.count for t in status.gpu_types)
         status.allocated_gpus = sum(t.allocated for t in status.gpu_types)
         status.free_gpus = status.total_gpus - status.allocated_gpus

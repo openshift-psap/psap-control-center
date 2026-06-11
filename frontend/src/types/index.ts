@@ -40,6 +40,13 @@ export interface GpuTypeInfo {
   node_count: number
 }
 
+export interface GpuPodInfo {
+  name: string
+  namespace: string
+  gpu_count: number
+  node?: string
+}
+
 export interface GpuAllocationStatus {
   gpu_allocation_mode: string
   dra_available: boolean
@@ -48,6 +55,7 @@ export interface GpuAllocationStatus {
   allocated_gpus: number
   free_gpus: number
   gpu_types: GpuTypeInfo[]
+  gpu_pods: GpuPodInfo[]
 }
 
 export interface NodeInfo {

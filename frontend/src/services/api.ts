@@ -149,6 +149,32 @@ export const clusterApi = {
     const { data } = await api.get(`/clusters/${id}/gpu-status`)
     return data
   },
+
+  getGpuPodHistory: async (id: string, limit = 25): Promise<{
+    pods: Array<{
+      name: string
+      namespace: string
+      gpu_count: number
+      node?: string
+      first_seen: string
+      last_seen: string
+      finished_at: string
+    }>
+    total: number
+  }> => {
+    const { data } = await api.get(`/clusters/${id}/gpu-pod-history`, { params: { limit } })
+    return data
+  },
+
+  getRefreshSchedule: async (): Promise<{
+    server_time: string
+    last_refresh: string | null
+    next_refresh: string | null
+    in_progress: boolean
+  }> => {
+    const { data } = await api.get('/clusters/refresh-schedule')
+    return data
+  },
 }
 
 export const reservationApi = {

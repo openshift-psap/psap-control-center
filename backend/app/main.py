@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import asyncio
+from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.core.database import init_db, engine, AsyncSessionLocal
@@ -11,6 +12,14 @@ from app.utils.logger import create_logger, set_log_level_from_env
 
 set_log_level_from_env()
 logger = create_logger("Main")
+
+CLUSTER_REFRESH_INTERVAL = 600  # 10 minutes in seconds
+
+cluster_refresh_state = {
+    "last_refresh": None,       # datetime of last completed refresh
+    "next_refresh": None,       # datetime of next scheduled refresh
+    "in_progress": False,
+}
 
 
 async def global_exception_handler(request: Request, exc: Exception):
@@ -45,24 +54,70 @@ async def update_reservation_statuses_task():
         await asyncio.sleep(30)
 
 
+def _next_aligned_refresh() -> datetime:
+    """Return the next 10-minute-aligned UTC time (e.g. :00, :10, :20 ...)."""
+    now = datetime.now(timezone.utc)
+    epoch_s = int(now.timestamp())
+    next_s = epoch_s + (CLUSTER_REFRESH_INTERVAL - epoch_s % CLUSTER_REFRESH_INTERVAL)
+    return datetime.fromtimestamp(next_s, tz=timezone.utc)
+
+
+async def cluster_refresh_task():
+    """Background task to refresh all cluster statuses on a fixed 10-minute interval."""
+    from app.services.cluster_service import ClusterService
+
+    # Run immediately on startup so last_refresh is populated right away
+    cluster_refresh_state["next_refresh"] = datetime.now(timezone.utc)
+
+    while True:
+        cluster_refresh_state["in_progress"] = True
+        logger.info("Cluster auto-refresh: starting")
+        try:
+            async with AsyncSessionLocal() as session:
+                service = ClusterService(session)
+                clusters, _ = await service.get_clusters(0, 200, active_only=False)
+                for cluster in clusters:
+                    try:
+                        await service.refresh_cluster_status(cluster.id)
+                    except Exception as e:
+                        logger.warning(f"Auto-refresh failed for {cluster.name}: {e}")
+
+            cluster_refresh_state["last_refresh"] = datetime.now(timezone.utc)
+            logger.info(f"Cluster auto-refresh: completed {len(clusters)} clusters")
+        except Exception as e:
+            logger.error(f"Cluster auto-refresh error: {e}")
+        finally:
+            cluster_refresh_state["in_progress"] = False
+            cluster_refresh_state["next_refresh"] = _next_aligned_refresh()
+
+        wait = (cluster_refresh_state["next_refresh"] - datetime.now(timezone.utc)).total_seconds()
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up PSAP Control Center...")
     await init_db()
     logger.info("Database initialized")
     
-    # Start background task for reservation status updates
+    # Start background tasks
     status_task = asyncio.create_task(update_reservation_statuses_task())
     logger.info("Reservation status updater started")
+
+    refresh_task = asyncio.create_task(cluster_refresh_task())
+    logger.info("Cluster auto-refresh task started (every 10 min)")
     
     yield
     
     # Cleanup
     status_task.cancel()
-    try:
-        await status_task
-    except asyncio.CancelledError:
-        pass
+    refresh_task.cancel()
+    for t in (status_task, refresh_task):
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
     
     await engine.dispose()
     logger.info("Shutting down PSAP Control Center...")

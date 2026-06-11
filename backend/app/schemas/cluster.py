@@ -32,6 +32,13 @@ class GpuTypeInfo(BaseModel):
     node_count: int
 
 
+class GpuPodInfo(BaseModel):
+    name: str
+    namespace: str
+    gpu_count: int
+    node: Optional[str] = None
+
+
 class GpuAllocationStatus(BaseModel):
     gpu_allocation_mode: str = "legacy"
     dra_available: bool = False
@@ -40,6 +47,7 @@ class GpuAllocationStatus(BaseModel):
     allocated_gpus: int = 0
     free_gpus: int = 0
     gpu_types: List[GpuTypeInfo] = []
+    gpu_pods: List[GpuPodInfo] = []
 
 
 class ClusterStatus(BaseModel):
