@@ -306,6 +306,28 @@ export default function Clusters() {
         </div>
       </div>
 
+      {serverRefreshing && !refreshProgress && schedule && schedule.total > 0 && (
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
+              <ArrowPathIcon className="h-4 w-4 animate-spin text-primary-600" />
+              <span>
+                Auto-refreshing clusters... {schedule.completed} of {schedule.total} complete
+              </span>
+            </div>
+            <span className="text-xs text-gray-500">
+              {schedule.completed} / {schedule.total}
+            </span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+            <div
+              className="h-2 rounded-full transition-all duration-500 bg-primary-500"
+              style={{ width: `${schedule.total > 0 ? (schedule.completed / schedule.total) * 100 : 0}%` }}
+            />
+          </div>
+        </div>
+      )}
+
       {refreshProgress && (
         <div className="card p-4">
           <div className="flex items-center justify-between mb-2">

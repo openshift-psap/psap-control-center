@@ -16,9 +16,11 @@ logger = create_logger("Main")
 CLUSTER_REFRESH_INTERVAL = 600  # 10 minutes in seconds
 
 cluster_refresh_state = {
-    "last_refresh": None,       # datetime of last completed refresh
-    "next_refresh": None,       # datetime of next scheduled refresh
+    "last_refresh": None,
+    "next_refresh": None,
     "in_progress": False,
+    "total": 0,
+    "completed": 0,
 }
 
 
@@ -71,6 +73,8 @@ async def cluster_refresh_task():
 
     while True:
         cluster_refresh_state["in_progress"] = True
+        cluster_refresh_state["completed"] = 0
+        cluster_refresh_state["total"] = 0
         logger.info("Cluster auto-refresh: starting")
         try:
             async with AsyncSessionLocal() as session:
@@ -82,6 +86,8 @@ async def cluster_refresh_task():
                     (c.id, c.name) for c in clusters
                 ]
 
+            cluster_refresh_state["total"] = len(cluster_ids)
+
             for cid, cname in cluster_ids:
                 try:
                     async with AsyncSessionLocal() as session:
@@ -91,6 +97,7 @@ async def cluster_refresh_task():
                     logger.warning(
                         f"Auto-refresh failed for {cname}: {e}"
                     )
+                cluster_refresh_state["completed"] += 1
 
             cluster_refresh_state["last_refresh"] = (
                 datetime.now(timezone.utc)

@@ -171,6 +171,8 @@ export const clusterApi = {
     last_refresh: string | null
     next_refresh: string | null
     in_progress: boolean
+    total: number
+    completed: number
   }> => {
     const { data } = await api.get('/clusters/refresh-schedule')
     return data

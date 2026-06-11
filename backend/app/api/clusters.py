@@ -35,6 +35,8 @@ async def get_refresh_schedule():
         "last_refresh": last.isoformat() if last else None,
         "next_refresh": nxt.isoformat() if nxt else None,
         "in_progress": cluster_refresh_state.get("in_progress", False),
+        "total": cluster_refresh_state.get("total", 0),
+        "completed": cluster_refresh_state.get("completed", 0),
     }
 
 
