@@ -14,20 +14,24 @@ logger = create_logger("Database")
 connect_args = {}
 if settings.DATABASE_URL.startswith("sqlite"):
     connect_args["check_same_thread"] = False
+    connect_args["timeout"] = 30
 
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
-    connect_args=connect_args
+    connect_args=connect_args,
+    pool_pre_ping=True,
 )
 
 
 
-# Enable SQLite foreign key enforcement
+# Enable SQLite WAL mode, busy timeout, and foreign keys
 @event.listens_for(engine.sync_engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):  # noqa: ARG001
     if settings.DATABASE_URL.startswith("sqlite"):
         cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=10000")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 

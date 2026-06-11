@@ -75,15 +75,30 @@ async def cluster_refresh_task():
         try:
             async with AsyncSessionLocal() as session:
                 service = ClusterService(session)
-                clusters, _ = await service.get_clusters(0, 200, active_only=False)
-                for cluster in clusters:
-                    try:
-                        await service.refresh_cluster_status(cluster.id)
-                    except Exception as e:
-                        logger.warning(f"Auto-refresh failed for {cluster.name}: {e}")
+                clusters, _ = await service.get_clusters(
+                    0, 200, active_only=False
+                )
+                cluster_ids = [
+                    (c.id, c.name) for c in clusters
+                ]
 
-            cluster_refresh_state["last_refresh"] = datetime.now(timezone.utc)
-            logger.info(f"Cluster auto-refresh: completed {len(clusters)} clusters")
+            for cid, cname in cluster_ids:
+                try:
+                    async with AsyncSessionLocal() as session:
+                        svc = ClusterService(session)
+                        await svc.refresh_cluster_status(cid)
+                except Exception as e:
+                    logger.warning(
+                        f"Auto-refresh failed for {cname}: {e}"
+                    )
+
+            cluster_refresh_state["last_refresh"] = (
+                datetime.now(timezone.utc)
+            )
+            logger.info(
+                "Cluster auto-refresh: completed "
+                f"{len(cluster_ids)} clusters"
+            )
         except Exception as e:
             logger.error(f"Cluster auto-refresh error: {e}")
         finally:
