@@ -224,7 +224,7 @@ class ReservationService:
 
         return True
 
-    async def cancel_reservation(self, reservation_id: str, cancelled_by: str = None) -> Optional[Reservation]:
+    async def cancel_reservation(self, reservation_id: str, cancelled_by: Optional[str] = None) -> Optional[Reservation]:
         reservation = await self.get_reservation(reservation_id)
         if not reservation:
             return None
@@ -240,9 +240,9 @@ class ReservationService:
                 logger.warning(f"Enforcement cleanup on cancel failed: {e}")
 
         reservation.status = ReservationStatus.CANCELLED
-        reservation.updated_at = datetime.utcnow()
+        reservation.updated_at = datetime.now(timezone.utc)
 
-        cancel_time = datetime.utcnow().strftime("%b %d, %Y at %I:%M %p")
+        cancel_time = datetime.now(timezone.utc).strftime("%b %d, %Y at %I:%M %p")
         cancel_note = f"[Manually cancelled on {cancel_time}]"
         if cancelled_by:
             cancel_note = f"[Cancelled by {cancelled_by} on {cancel_time}]"

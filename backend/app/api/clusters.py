@@ -396,7 +396,11 @@ async def get_gpu_status(
             } for p in allocation.gpu_pods],
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Failed to fetch GPU status for cluster {cluster_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to fetch GPU allocation status",
+        ) from e
 
 
 @router.get("/{cluster_id}/gpu-pod-history")

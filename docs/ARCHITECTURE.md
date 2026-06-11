@@ -265,7 +265,7 @@ Both modes support a `gpu-fleet-viewer-config` ConfigMap for vendor abstraction 
 
 When a GPU reservation becomes active:
 
-```
+```text
 Reservation ACTIVE (type=gpu)
         │
         ▼

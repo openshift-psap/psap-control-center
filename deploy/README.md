@@ -7,6 +7,7 @@ using container images hosted on [Quay.io](https://quay.io).
 
 - `oc` CLI installed
 - `podman` installed (for building and pushing images)
+- Node.js and `npm` installed (for building frontend static assets)
 - Credentials for the target OpenShift cluster
 - A Quay.io account with push access to your organization
 

@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import (
     create_async_engine, AsyncSession, async_sessionmaker
 )
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import event, text
 
@@ -67,8 +68,13 @@ async def _run_migrations(conn):
                 f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
             ))
             logger.info(f"Migration: added {table}.{column}")
-        except Exception:
-            pass  # Column already exists
+        except OperationalError as e:
+            err_msg = str(e).lower()
+            if "duplicate column" in err_msg or "already exists" in err_msg:
+                pass
+            else:
+                logger.error(f"Migration failed for {table}.{column}: {e}")
+                raise
 
 
 async def init_db():

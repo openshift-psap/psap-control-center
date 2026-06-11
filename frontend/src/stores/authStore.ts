@@ -23,6 +23,15 @@ function loadFromStorage(): AuthCredentials | null {
 
 credentials = loadFromStorage()
 
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === STORAGE_KEY) {
+      credentials = loadFromStorage()
+      window.dispatchEvent(new Event('auth-change'))
+    }
+  })
+}
+
 export function getCredentials(): AuthCredentials | null {
   return credentials
 }

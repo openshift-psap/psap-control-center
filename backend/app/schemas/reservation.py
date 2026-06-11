@@ -80,6 +80,10 @@ class ReservationUpdate(BaseModel):
                 raise ValueError('gpu_count must be >= 1 when reservation_type is "gpu"')
         if self.reservation_type == "cluster" and self.gpu_count is not None:
             raise ValueError('gpu_count must be null when reservation_type is "cluster"')
+        if self.gpu_count is not None and self.reservation_type is None:
+            raise ValueError(
+                'reservation_type is required when gpu_count is set'
+            )
         return self
 
     @model_validator(mode='after')

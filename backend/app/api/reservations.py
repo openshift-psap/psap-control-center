@@ -21,7 +21,7 @@ router = APIRouter()
 logger = create_logger("ReservationsAPI")
 
 
-def _to_response(r, cluster_name_override: str = None) -> ReservationResponse:
+def _to_response(r, cluster_name_override: Optional[str] = None) -> ReservationResponse:
     """Build a ReservationResponse from an ORM Reservation instance."""
     cluster_name = cluster_name_override or r.cluster_name or (
         r.cluster.name if r.cluster else None
@@ -67,8 +67,8 @@ async def list_reservations(
     if status:
         try:
             status_enum = ReservationStatus(status)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid status: {status}") from e
 
     reservations, total = await service.get_reservations(
         skip=skip,
