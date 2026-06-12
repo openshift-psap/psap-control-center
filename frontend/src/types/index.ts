@@ -100,6 +100,9 @@ export interface Reservation {
   notes?: string
   color: string
   status: 'pending' | 'scheduled' | 'active' | 'completed' | 'cancelled' | 'denied'
+  pending_modification?: Record<string, unknown> | null
+  modification_requested_by?: string | null
+  modification_requested_at?: string | null
   created_at: string
   updated_at: string
 }

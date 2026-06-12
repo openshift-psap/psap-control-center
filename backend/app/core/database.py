@@ -62,6 +62,9 @@ _MIGRATIONS = [
     ("reservations", "enforcement_status", "VARCHAR(50)"),
     ("reservations", "enforce_isolation", "BOOLEAN NOT NULL DEFAULT FALSE"),
     ("reservations", "priority", "VARCHAR(20) NOT NULL DEFAULT 'normal'"),
+    ("reservations", "pending_modification", "TEXT"),
+    ("reservations", "modification_requested_by", "VARCHAR(255)"),
+    ("reservations", "modification_requested_at", "TIMESTAMP"),
 ]
 
 
@@ -112,6 +115,7 @@ async def init_db():
     from app.models.reservation import Reservation  # noqa: F401
     from app.models.user import User  # noqa: F401
     from app.models.gpu_pod_history import GpuPodHistory  # noqa: F401
+    from app.models.setting import Setting  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

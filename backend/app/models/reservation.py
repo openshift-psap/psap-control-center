@@ -55,7 +55,11 @@ class Reservation(Base):
     purpose = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
 
-    color = Column(String(7), default="#3B82F6")
+    color = Column(String(7), default="#0891b2")
+
+    pending_modification = Column(Text, nullable=True)
+    modification_requested_by = Column(String(255), nullable=True)
+    modification_requested_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -221,6 +221,21 @@ export const reservationApi = {
     return data
   },
 
+  requestModification: async (id: string, changes: Record<string, unknown>): Promise<Reservation> => {
+    const { data } = await api.post(`/reservations/${id}/request-modification`, changes)
+    return data
+  },
+
+  approveModification: async (id: string): Promise<Reservation> => {
+    const { data } = await api.post(`/reservations/${id}/approve-modification`)
+    return data
+  },
+
+  denyModification: async (id: string, reason?: string): Promise<Reservation> => {
+    const { data } = await api.post(`/reservations/${id}/deny-modification`, { reason })
+    return data
+  },
+
   getCalendarEvents: async (startDate: string, endDate: string, clusterId?: string): Promise<CalendarEvent[]> => {
     const { data } = await api.get('/reservations/calendar', {
       params: { start_date: startDate, end_date: endDate, cluster_id: clusterId },
@@ -277,6 +292,28 @@ export const authApi = {
 
   me: async (): Promise<AuthSession> => {
     const { data } = await api.get('/auth/me')
+    return data
+  },
+}
+
+export interface SlackSettings {
+  webhook_url: string | null
+  enabled: boolean
+}
+
+export const settingsApi = {
+  getSlack: async (): Promise<SlackSettings> => {
+    const { data } = await api.get('/settings/slack')
+    return data
+  },
+
+  updateSlack: async (webhook_url: string | null): Promise<SlackSettings> => {
+    const { data } = await api.put('/settings/slack', { webhook_url })
+    return data
+  },
+
+  testSlack: async (): Promise<{ status: string; message: string }> => {
+    const { data } = await api.post('/settings/slack/test')
     return data
   },
 }

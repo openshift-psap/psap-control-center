@@ -16,6 +16,7 @@ export function useReservations(params?: {
   return useQuery({
     queryKey: ['reservations', params],
     queryFn: () => reservationApi.list(params),
+    refetchInterval: 10_000,
   })
 }
 
@@ -32,6 +33,7 @@ export function useCalendarEvents(startDate: string, endDate: string, clusterId?
     queryKey: ['calendarEvents', { startDate, endDate, clusterId }],
     queryFn: () => reservationApi.getCalendarEvents(startDate, endDate, clusterId),
     enabled: !!startDate && !!endDate,
+    refetchInterval: 10_000,
   })
 }
 
@@ -166,6 +168,65 @@ export function useDenyReservation() {
     onError: (error: Error) => {
       logger.error('Failed to deny reservation:', error)
       toast.error(`Failed to deny: ${error.message}`)
+    },
+  })
+}
+
+export function useRequestModification() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ id, changes }: { id: string; changes: Record<string, unknown> }) =>
+      reservationApi.requestModification(id, changes),
+    onSuccess: (data) => {
+      logger.info('Modification requested:', data.id)
+      queryClient.invalidateQueries({ queryKey: ['reservations'] })
+      queryClient.invalidateQueries({ queryKey: ['reservation', data.id] })
+      toast.success('Modification request submitted — pending admin approval')
+    },
+    onError: (error: Error) => {
+      logger.error('Failed to request modification:', error)
+      toast.error(`Failed to request modification: ${error.message}`)
+    },
+  })
+}
+
+export function useApproveModification() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: reservationApi.approveModification,
+    onSuccess: (data) => {
+      logger.info('Modification approved:', data.id)
+      queryClient.invalidateQueries({ queryKey: ['reservations'] })
+      queryClient.invalidateQueries({ queryKey: ['calendarEvents'] })
+      if (data.cluster_id) {
+        queryClient.invalidateQueries({ queryKey: ['clusterOccupancy', data.cluster_id] })
+        queryClient.invalidateQueries({ queryKey: ['gpu-status', data.cluster_id] })
+      }
+      toast.success('Modification approved')
+    },
+    onError: (error: Error) => {
+      logger.error('Failed to approve modification:', error)
+      toast.error(`Failed to approve modification: ${error.message}`)
+    },
+  })
+}
+
+export function useDenyModification() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+      reservationApi.denyModification(id, reason),
+    onSuccess: (data) => {
+      logger.info('Modification denied:', data.id)
+      queryClient.invalidateQueries({ queryKey: ['reservations'] })
+      toast.success('Modification denied')
+    },
+    onError: (error: Error) => {
+      logger.error('Failed to deny modification:', error)
+      toast.error(`Failed to deny modification: ${error.message}`)
     },
   })
 }

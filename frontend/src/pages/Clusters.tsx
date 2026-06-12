@@ -269,7 +269,7 @@ export default function Clusters() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Clusters</h1>
+          <h1 className="text-2xl font-bold text-gray-900 font-display">Clusters</h1>
           <div className="mt-1 flex items-center gap-4 text-sm text-gray-500">
             <span>Manage your OCP clusters and their kubeconfigs</span>
             {schedule && (
@@ -293,16 +293,14 @@ export default function Clusters() {
           </div>
         </div>
         <div className="flex gap-3">
-          {isAdmin() && (
-            <button
-              onClick={handleRefreshAll}
-              disabled={refreshing || serverRefreshing}
-              className="btn-secondary disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              <ArrowPathIcon className={clsx('h-4 w-4 mr-2', (refreshing || serverRefreshing) && 'animate-spin')} />
-              {refreshing ? 'Refreshing...' : serverRefreshing ? 'Auto-refreshing...' : 'Refresh'}
-            </button>
-          )}
+          <button
+            onClick={handleRefreshAll}
+            disabled={refreshing || serverRefreshing}
+            className="btn-secondary disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <ArrowPathIcon className={clsx('h-4 w-4 mr-2', (refreshing || serverRefreshing) && 'animate-spin')} />
+            {refreshing ? 'Refreshing...' : serverRefreshing ? 'Auto-refreshing...' : 'Refresh'}
+          </button>
           {isAdmin() && (
             <button onClick={() => setIsAddOpen(true)} className="btn-primary">
               <PlusIcon className="h-4 w-4 mr-2" />
@@ -412,7 +410,7 @@ export default function Clusters() {
                         cluster.status === 'healthy'
                           ? 'bg-green-100'
                           : cluster.status === 'error'
-                          ? 'bg-red-100'
+                          ? 'bg-orange-100'
                           : 'bg-yellow-100'
                       }`}
                     >
@@ -421,7 +419,7 @@ export default function Clusters() {
                           cluster.status === 'healthy'
                             ? 'text-green-600'
                             : cluster.status === 'error'
-                            ? 'text-red-600'
+                            ? 'text-orange-600'
                             : 'text-yellow-600'
                         }`}
                       />
@@ -554,7 +552,7 @@ export default function Clusters() {
                   <button
                     onClick={() => handleRemove(cluster.id, cluster.name)}
                     disabled={deleteCluster.isPending}
-                    className="text-sm font-medium text-red-600 hover:text-red-700 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="text-sm font-medium text-orange-600 hover:text-orange-700 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <TrashIcon className="h-4 w-4" />
                     {deleteCluster.isPending ? 'Removing...' : 'Remove'}

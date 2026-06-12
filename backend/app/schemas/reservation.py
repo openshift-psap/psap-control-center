@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import Optional, List, Literal
+from typing import Any, Dict, Optional, List, Literal
 from datetime import datetime
 
 from app.models.reservation import (
@@ -27,7 +27,7 @@ class ReservationBase(BaseModel):
     priority: PriorityType = "normal"
     purpose: Optional[str] = None
     notes: Optional[str] = None
-    color: Optional[str] = Field(default="#3B82F6", pattern="^#[0-9A-Fa-f]{6}$")
+    color: Optional[str] = Field(default="#0891b2", pattern="^#[0-9A-Fa-f]{6}$")
 
     @field_validator('end_time')
     @classmethod
@@ -122,6 +122,9 @@ class ReservationResponse(BaseModel):
     notes: Optional[str] = None
     color: Optional[str] = None
     status: ReservationStatusEnum
+    pending_modification: Optional[Dict[str, Any]] = None
+    modification_requested_by: Optional[str] = None
+    modification_requested_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -173,6 +176,18 @@ class ClusterOccupancyResponse(BaseModel):
     occupied: bool
     reservations: List[OccupancyReservation] = []
     gpu_summary: Optional[GpuSummary] = None
+
+
+class ModificationRequestCreate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    purpose: Optional[str] = None
+    reservation_type: Optional[str] = None
+    gpu_count: Optional[int] = None
+    enforce_isolation: Optional[bool] = None
+    priority: Optional[PriorityType] = None
 
 
 class DenyAction(BaseModel):

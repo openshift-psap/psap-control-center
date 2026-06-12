@@ -1,3 +1,4 @@
+import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
@@ -199,7 +200,7 @@ class ClusterService:
 
         try:
             k8s_service = KubernetesService(cluster.kubeconfig_path)
-            cluster_info = k8s_service.get_cluster_info()
+            cluster_info = await asyncio.to_thread(k8s_service.get_cluster_info)
 
             cluster.status = cluster_info.get("status", "unknown")
             cluster.node_count = cluster_info.get("node_count")
@@ -208,7 +209,7 @@ class ClusterService:
             cluster.last_health_check = datetime.utcnow()
 
             try:
-                gpu_alloc = k8s_service.get_gpu_allocation()
+                gpu_alloc = await asyncio.to_thread(k8s_service.get_gpu_allocation)
                 cluster.gpu_allocation_mode = gpu_alloc.gpu_allocation_mode
                 cluster.gpu_count = str(gpu_alloc.total_gpus)
                 cluster.gpu_type = (
@@ -223,8 +224,8 @@ class ClusterService:
             await self.db.commit()
             await self.db.refresh(cluster)
 
-            namespaces = k8s_service.get_namespaces()
-            resource_usage = k8s_service.get_resource_usage()
+            namespaces = await asyncio.to_thread(k8s_service.get_namespaces)
+            resource_usage = await asyncio.to_thread(k8s_service.get_resource_usage)
 
             return ClusterStatus(
                 status=cluster.status,

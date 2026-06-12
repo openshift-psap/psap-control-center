@@ -95,7 +95,7 @@ export default function Dashboard() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-900 font-display">Dashboard</h1>
           <p className="mt-1 text-sm text-gray-500">
             Overview of your cluster infrastructure and reservations
           </p>
@@ -215,7 +215,7 @@ export default function Dashboard() {
                           cluster.status === 'healthy'
                             ? 'bg-green-500'
                             : cluster.status === 'error'
-                            ? 'bg-red-500'
+                            ? 'bg-orange-500'
                             : 'bg-yellow-500'
                         }`}
                       />
@@ -309,7 +309,7 @@ export default function Dashboard() {
                             {reservation.enforcement_status && (
                               <span className={`ml-1 px-1 py-0.5 rounded text-[9px] font-medium ${
                                 reservation.enforcement_status === 'provisioned' ? 'bg-green-100 text-green-800' :
-                                reservation.enforcement_status === 'error' ? 'bg-red-100 text-red-800' :
+                                reservation.enforcement_status === 'error' ? 'bg-orange-100 text-orange-800' :
                                 'bg-gray-100 text-gray-600'
                               }`}>
                                 {reservation.enforcement_status}
@@ -396,7 +396,7 @@ export default function Dashboard() {
                           <span className="text-sm font-medium text-gray-900">{hc.gpu_summary}</span>
                         </div>
                       ) : hc.hardware?.last_error ? (
-                        <div className="flex items-center gap-1 text-sm text-red-600">
+                        <div className="flex items-center gap-1 text-sm text-orange-600">
                           <ExclamationTriangleIcon className="h-4 w-4" />
                           Discovery error
                         </div>
