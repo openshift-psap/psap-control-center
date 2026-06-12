@@ -2,6 +2,7 @@ from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.models.setting import Setting
 
@@ -26,6 +27,15 @@ class SettingsService:
         if setting:
             setting.value = value
         else:
-            self.db.add(Setting(key=key, value=value))
+            try:
+                self.db.add(Setting(key=key, value=value))
+                await self.db.flush()
+            except IntegrityError:
+                await self.db.rollback()
+                result = await self.db.execute(
+                    select(Setting).where(Setting.key == key)
+                )
+                setting = result.scalar_one()
+                setting.value = value
 
         await self.db.commit()

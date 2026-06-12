@@ -121,9 +121,13 @@ export default function Layout() {
   const location = useLocation()
 
   const { data: hearthStatus } = useHearthStatus()
-  const { data: reservationsData } = useReservations({ status: 'pending' })
-  const pendingCount = reservationsData?.reservations?.length ?? 0
-  const filteredNav = navigation.filter(item => !item.adminOnly || isAdmin())
+  const admin = isAdmin()
+  const { data: reservationsData } = useReservations(
+    { status: 'pending' },
+    { enabled: admin },
+  )
+  const pendingCount = admin ? (reservationsData?.reservations?.length ?? 0) : 0
+  const filteredNav = navigation.filter(item => !item.adminOnly || admin)
 
   const syncAuth = useCallback(() => setAuthed(isAuthenticated()), [])
 

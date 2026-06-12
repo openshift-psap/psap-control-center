@@ -12,11 +12,12 @@ export function useReservations(params?: {
   start_date?: string
   end_date?: string
   status?: string
-}) {
+}, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['reservations', params],
     queryFn: () => reservationApi.list(params),
     refetchInterval: 10_000,
+    ...(options?.enabled !== undefined && { enabled: options.enabled }),
   })
 }
 

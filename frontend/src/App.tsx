@@ -10,7 +10,7 @@ import Testing from './pages/Testing'
 import Results from './pages/Results'
 import Settings from './pages/Settings'
 import LoginPage from './pages/LoginPage'
-import { isAuthenticated, setSession } from './stores/authStore'
+import { isAuthenticated, isAdmin, setSession } from './stores/authStore'
 import { authApi } from './services/api'
 
 function NotFound() {
@@ -48,7 +48,7 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#151515]">
+      <div className="min-h-screen flex items-center justify-center bg-[#f0f0f0]">
         <div className="flex flex-col items-center gap-3">
           <svg className="animate-spin h-8 w-8 text-[#73BCF7]" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
@@ -75,7 +75,7 @@ function App() {
         <Route path="calendar" element={<Calendar />} />
         <Route path="testing" element={<Testing />} />
         <Route path="results" element={<Results />} />
-        <Route path="settings" element={<Settings />} />
+        <Route path="settings" element={isAdmin() ? <Settings /> : <Navigate to="/dashboard" replace />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

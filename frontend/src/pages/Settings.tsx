@@ -9,7 +9,7 @@ import {
 import { useSlackSettings, useUpdateSlackSettings, useTestSlack } from '../hooks/useSettings'
 
 export default function Settings() {
-  const { data: slackSettings, isLoading } = useSlackSettings()
+  const { data: slackSettings, isLoading, isError, error } = useSlackSettings()
   const updateSlack = useUpdateSlackSettings()
   const testSlack = useTestSlack()
 
@@ -17,8 +17,8 @@ export default function Settings() {
   const [showUrl, setShowUrl] = useState(false)
 
   useEffect(() => {
-    if (slackSettings?.webhook_url) {
-      setWebhookUrl(slackSettings.webhook_url)
+    if (slackSettings?.webhook_url_masked) {
+      setWebhookUrl('')
     }
   }, [slackSettings])
 
@@ -32,7 +32,7 @@ export default function Settings() {
     updateSlack.mutate(null)
   }
 
-  const hasChanges = (webhookUrl.trim() || '') !== (slackSettings?.webhook_url || '')
+  const hasChanges = webhookUrl.trim().length > 0
 
   return (
     <div className="space-y-6">
@@ -59,7 +59,12 @@ export default function Settings() {
             </div>
             {!isLoading && (
               <div className="flex items-center gap-2">
-                {slackSettings?.enabled ? (
+                {isError ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-orange-100 px-3 py-1 text-xs font-medium text-orange-800">
+                    <XCircleIcon className="h-3.5 w-3.5" />
+                    Load failed
+                  </span>
+                ) : slackSettings?.enabled ? (
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-800">
                     <CheckCircleIcon className="h-3.5 w-3.5" />
                     Connected
@@ -75,9 +80,19 @@ export default function Settings() {
           </div>
 
           <div className="mt-6 space-y-4">
+            {isError && (
+              <div className="rounded-lg bg-orange-50 border border-orange-200 p-3 text-sm text-orange-800">
+                Failed to load Slack settings{error instanceof Error ? `: ${error.message}` : ''}. Please try refreshing the page.
+              </div>
+            )}
+            {slackSettings?.enabled && slackSettings.webhook_url_masked && (
+              <div className="text-sm text-gray-600">
+                Current webhook: <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{slackSettings.webhook_url_masked}</code>
+              </div>
+            )}
             <div>
               <label htmlFor="webhook-url" className="block text-sm font-medium text-gray-700 mb-1">
-                Webhook URL
+                {slackSettings?.enabled ? 'Replace Webhook URL' : 'Webhook URL'}
               </label>
               <div className="relative">
                 <input

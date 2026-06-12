@@ -230,6 +230,16 @@ async def cancel_reservation(
     db: AsyncSession = Depends(get_db),
 ):
     service = ReservationService(db)
+    existing = await service.get_reservation(reservation_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Reservation not found")
+    is_owner = existing.user_name == _user["username"]
+    if _user["role"] != "admin" and not is_owner:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to cancel this reservation",
+        )
+
     reservation = await service.cancel_reservation(
         reservation_id, cancelled_by=_user["username"]
     )

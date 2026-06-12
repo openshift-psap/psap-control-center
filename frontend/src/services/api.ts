@@ -297,7 +297,7 @@ export const authApi = {
 }
 
 export interface SlackSettings {
-  webhook_url: string | null
+  webhook_url_masked: string | null
   enabled: boolean
 }
 

@@ -1,4 +1,5 @@
 import httpx
+from urllib.parse import urlparse
 
 from app.core.database import AsyncSessionLocal
 from app.services.settings_service import SettingsService
@@ -7,6 +8,27 @@ from app.utils.logger import create_logger
 logger = create_logger("SlackNotifier")
 
 SLACK_WEBHOOK_KEY = "slack_webhook_url"
+
+_ALLOWED_WEBHOOK_HOSTS = {"hooks.slack.com", "hooks.slack-gov.com"}
+
+
+def validate_webhook_url(url: str) -> str | None:
+    """Return an error string if the URL is not a valid Slack webhook, else None."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "Invalid URL"
+    if parsed.scheme != "https":
+        return "Webhook URL must use HTTPS"
+    if parsed.hostname not in _ALLOWED_WEBHOOK_HOSTS:
+        return f"Webhook host must be one of: {', '.join(_ALLOWED_WEBHOOK_HOSTS)}"
+    return None
+
+
+def _escape_mrkdwn(value) -> str:
+    """Escape Slack mrkdwn special characters in untrusted text."""
+    text = "" if value is None else str(value)
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _is_workflow_webhook(url: str) -> bool:
@@ -45,12 +67,12 @@ def _format_incoming_webhook_payload(reservation) -> dict:
         {
             "type": "section",
             "fields": [
-                {"type": "mrkdwn", "text": f"*Title:*\n{fields['title']}"},
-                {"type": "mrkdwn", "text": f"*Requested By:*\n{fields['requested_by']}"},
-                {"type": "mrkdwn", "text": f"*Cluster:*\n{fields['cluster']}"},
-                {"type": "mrkdwn", "text": f"*Type:*\n{fields['type']}"},
-                {"type": "mrkdwn", "text": f"*Time:*\n{fields['time']}"},
-                {"type": "mrkdwn", "text": f"*Priority:*\n{fields['priority']}"},
+                {"type": "mrkdwn", "text": f"*Title:*\n{_escape_mrkdwn(fields['title'])}"},
+                {"type": "mrkdwn", "text": f"*Requested By:*\n{_escape_mrkdwn(fields['requested_by'])}"},
+                {"type": "mrkdwn", "text": f"*Cluster:*\n{_escape_mrkdwn(fields['cluster'])}"},
+                {"type": "mrkdwn", "text": f"*Type:*\n{_escape_mrkdwn(fields['type'])}"},
+                {"type": "mrkdwn", "text": f"*Time:*\n{_escape_mrkdwn(fields['time'])}"},
+                {"type": "mrkdwn", "text": f"*Priority:*\n{_escape_mrkdwn(fields['priority'])}"},
             ],
         },
     ]
@@ -58,7 +80,7 @@ def _format_incoming_webhook_payload(reservation) -> dict:
     if fields["purpose"]:
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*Purpose:*\n{fields['purpose']}"},
+            "text": {"type": "mrkdwn", "text": f"*Purpose:*\n{_escape_mrkdwn(fields['purpose'])}"},
         })
 
     blocks.append({
@@ -77,6 +99,9 @@ def _build_payload(reservation, webhook_url: str) -> dict:
 
 async def send_test_message(webhook_url: str) -> bool:
     """Send a test message to the given Slack webhook URL. Returns True on success."""
+    if validate_webhook_url(webhook_url):
+        logger.warning("Rejected test message to non-Slack URL")
+        return False
     if _is_workflow_webhook(webhook_url):
         payload = {
             "title": "Test Message",
@@ -123,6 +148,10 @@ async def _send_to_webhook(payload: dict, label: str) -> None:
         if not webhook_url:
             return
 
+        if validate_webhook_url(webhook_url):
+            logger.warning(f"Stored webhook URL is not a valid Slack host, skipping {label}")
+            return
+
         if _is_workflow_webhook(webhook_url) and "blocks" in payload:
             payload = payload.get("_workflow_fallback", payload)
 
@@ -144,6 +173,10 @@ async def send_new_reservation_notification(reservation) -> None:
             webhook_url = await service.get(SLACK_WEBHOOK_KEY)
 
         if not webhook_url:
+            return
+
+        if validate_webhook_url(webhook_url):
+            logger.warning("Stored webhook URL is not a valid Slack host, skipping new reservation notification")
             return
 
         payload = _build_payload(reservation, webhook_url)
@@ -197,6 +230,10 @@ async def send_modification_request_notification(reservation, changes: dict) -> 
         if not webhook_url:
             return
 
+        if validate_webhook_url(webhook_url):
+            logger.warning("Stored webhook URL is not a valid Slack host, skipping modification notification")
+            return
+
         start = changes.get("start_time") or reservation.start_time
         end = changes.get("end_time") or reservation.end_time
         try:
@@ -220,10 +257,10 @@ async def send_modification_request_notification(reservation, changes: dict) -> 
         else:
             change_lines = []
             for key, new_val in changes.items():
-                label = key.replace("_", " ").title()
+                label = _escape_mrkdwn(key.replace("_", " ").title())
                 old_val = getattr(reservation, key, None)
-                old_str = _fmt_field_value(key, old_val)
-                new_str = _fmt_field_value(key, new_val)
+                old_str = _escape_mrkdwn(_fmt_field_value(key, old_val))
+                new_str = _escape_mrkdwn(_fmt_field_value(key, new_val))
                 change_lines.append(f"• *{label}*: {old_str} → {new_str}")
             changes_text = "\n".join(change_lines) or "No details"
 
@@ -236,10 +273,10 @@ async def send_modification_request_notification(reservation, changes: dict) -> 
                     {
                         "type": "section",
                         "fields": [
-                            {"type": "mrkdwn", "text": f"*Reservation:*\n{reservation.title} (modify)"},
-                            {"type": "mrkdwn", "text": f"*Requested By:*\n{reservation.modification_requested_by or reservation.user_name}"},
-                            {"type": "mrkdwn", "text": f"*Cluster:*\n{reservation.cluster_name or 'Unknown'}"},
-                            {"type": "mrkdwn", "text": f"*Status:*\n{reservation.status}"},
+                            {"type": "mrkdwn", "text": f"*Reservation:*\n{_escape_mrkdwn(reservation.title)} (modify)"},
+                            {"type": "mrkdwn", "text": f"*Requested By:*\n{_escape_mrkdwn(reservation.modification_requested_by or reservation.user_name)}"},
+                            {"type": "mrkdwn", "text": f"*Cluster:*\n{_escape_mrkdwn(reservation.cluster_name or 'Unknown')}"},
+                            {"type": "mrkdwn", "text": f"*Status:*\n{_escape_mrkdwn(reservation.status)}"},
                         ],
                     },
                     {
