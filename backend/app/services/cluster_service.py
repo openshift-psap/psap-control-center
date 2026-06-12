@@ -210,7 +210,7 @@ class ClusterService:
             try:
                 gpu_alloc = k8s_service.get_gpu_allocation()
                 cluster.gpu_allocation_mode = gpu_alloc.gpu_allocation_mode
-                cluster.gpu_count = gpu_alloc.total_gpus
+                cluster.gpu_count = str(gpu_alloc.total_gpus)
                 cluster.gpu_type = (
                     gpu_alloc.gpu_types[0].product
                     if gpu_alloc.gpu_types else None

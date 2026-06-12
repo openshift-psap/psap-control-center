@@ -4,7 +4,7 @@ from typing import Optional, List
 from datetime import datetime
 
 from app.core.database import get_db
-from app.core.auth import require_auth
+from app.core.auth import require_auth, require_admin
 from app.services.reservation_service import ReservationService
 from app.models.reservation import ReservationStatus
 from app.schemas.reservation import (
@@ -14,6 +14,7 @@ from app.schemas.reservation import (
     ReservationListResponse,
     CalendarEvent,
     ClusterOccupancyResponse,
+    DenyAction,
 )
 from app.utils.logger import create_logger
 
@@ -41,10 +42,11 @@ def _to_response(r, cluster_name_override: Optional[str] = None) -> ReservationR
         gpu_count=r.gpu_count,
         enforcement_namespace=r.enforcement_namespace,
         enforcement_status=r.enforcement_status,
+        priority=r.priority or "normal",
         purpose=r.purpose,
         notes=r.notes,
         color=r.color,
-        status=r.status,
+        status=r.status.lower() if r.status else r.status,
         created_at=r.created_at,
         updated_at=r.updated_at,
     )
@@ -89,7 +91,7 @@ async def list_reservations(
 @router.post("", response_model=ReservationResponse, status_code=201)
 async def create_reservation(
     reservation_data: ReservationCreate,
-    _user: str = Depends(require_auth),
+    _user: dict = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ):
     service = ReservationService(db)
@@ -175,7 +177,7 @@ async def get_reservation(
 async def update_reservation(
     reservation_id: str,
     reservation_data: ReservationUpdate,
-    _user: str = Depends(require_auth),
+    _user: dict = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ):
     service = ReservationService(db)
@@ -193,7 +195,7 @@ async def update_reservation(
 @router.delete("/{reservation_id}", status_code=204)
 async def delete_reservation(
     reservation_id: str,
-    _user: str = Depends(require_auth),
+    _user: dict = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ):
     service = ReservationService(db)
@@ -206,13 +208,64 @@ async def delete_reservation(
 @router.post("/{reservation_id}/cancel", response_model=ReservationResponse)
 async def cancel_reservation(
     reservation_id: str,
-    _user: str = Depends(require_auth),
+    _user: dict = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ):
     service = ReservationService(db)
-    reservation = await service.cancel_reservation(reservation_id, cancelled_by=_user)
+    reservation = await service.cancel_reservation(
+        reservation_id, cancelled_by=_user["username"]
+    )
 
     if not reservation:
-        raise HTTPException(status_code=404, detail="Reservation not found")
+        raise HTTPException(
+            status_code=404, detail="Reservation not found"
+        )
 
     return _to_response(reservation)
+
+
+@router.post(
+    "/{reservation_id}/approve", response_model=ReservationResponse
+)
+async def approve_reservation(
+    reservation_id: str,
+    _user: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    service = ReservationService(db)
+    try:
+        reservation = await service.approve_reservation(
+            reservation_id, approved_by=_user["username"]
+        )
+        if not reservation:
+            raise HTTPException(
+                status_code=404, detail="Reservation not found"
+            )
+        return _to_response(reservation)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post(
+    "/{reservation_id}/deny", response_model=ReservationResponse
+)
+async def deny_reservation(
+    reservation_id: str,
+    body: DenyAction = DenyAction(),
+    _user: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    service = ReservationService(db)
+    try:
+        reservation = await service.deny_reservation(
+            reservation_id,
+            denied_by=_user["username"],
+            reason=body.reason,
+        )
+        if not reservation:
+            raise HTTPException(
+                status_code=404, detail="Reservation not found"
+            )
+        return _to_response(reservation)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

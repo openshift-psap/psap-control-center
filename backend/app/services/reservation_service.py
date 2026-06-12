@@ -28,31 +28,15 @@ class ReservationService:
         cluster_result = await self.db.execute(
             select(Cluster)
             .where(Cluster.id == reservation_data.cluster_id)
-            .with_for_update()
         )
         cluster = cluster_result.scalar_one_or_none()
         if not cluster:
             raise ValueError("Cluster not found")
 
-        await self.check_conflicts(
-            cluster_id=reservation_data.cluster_id,
-            start_time=reservation_data.start_time,
-            end_time=reservation_data.end_time,
-            reservation_type=reservation_data.reservation_type,
-            gpu_count=reservation_data.gpu_count,
-            cluster=cluster,
-        )
-
         cluster_color = getattr(cluster, 'color', '#3B82F6')
 
-        now = datetime.now(timezone.utc)
-        start = reservation_data.start_time
-        end = reservation_data.end_time
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
-        if end.tzinfo is None:
-            end = end.replace(tzinfo=timezone.utc)
-        starts_immediately = start <= now and end > now
+        start = reservation_data.start_time.replace(tzinfo=None)
+        end = reservation_data.end_time.replace(tzinfo=None)
 
         reservation = Reservation(
             cluster_id=reservation_data.cluster_id,
@@ -62,25 +46,84 @@ class ReservationService:
             user_name=reservation_data.user_name,
             user_email=reservation_data.user_email,
             team=reservation_data.team,
-            start_time=reservation_data.start_time,
-            end_time=reservation_data.end_time,
+            start_time=start,
+            end_time=end,
             reservation_type=reservation_data.reservation_type,
             gpu_count=reservation_data.gpu_count,
             enforce_isolation=reservation_data.enforce_isolation,
+            priority=reservation_data.priority,
             purpose=reservation_data.purpose,
             notes=reservation_data.notes,
             color=cluster_color,
-            status=(
-                ReservationStatus.ACTIVE if starts_immediately
-                else ReservationStatus.SCHEDULED
-            ),
+            status=ReservationStatus.PENDING.value,
         )
 
         self.db.add(reservation)
         await self.db.commit()
         await self.db.refresh(reservation)
 
-        if starts_immediately and reservation.reservation_type == "gpu" and reservation.enforce_isolation:
+        return reservation
+
+    async def approve_reservation(
+        self, reservation_id: str, approved_by: str
+    ) -> Optional[Reservation]:
+        reservation = await self.get_reservation(reservation_id)
+        if not reservation:
+            return None
+        if reservation.status != ReservationStatus.PENDING.value:
+            raise ValueError(
+                f"Only pending reservations can be approved "
+                f"(current status: {reservation.status})"
+            )
+
+        cluster = None
+        if reservation.cluster_id:
+            cluster_result = await self.db.execute(
+                select(Cluster)
+                .where(Cluster.id == reservation.cluster_id)
+                .with_for_update()
+            )
+            cluster = cluster_result.scalar_one_or_none()
+
+        await self.check_conflicts(
+            cluster_id=reservation.cluster_id,
+            start_time=reservation.start_time,
+            end_time=reservation.end_time,
+            reservation_type=reservation.reservation_type or "cluster",
+            gpu_count=reservation.gpu_count,
+            cluster=cluster,
+            exclude_id=reservation_id,
+        )
+
+        now = datetime.now(timezone.utc)
+        start = reservation.start_time
+        end = reservation.end_time
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        starts_immediately = start <= now and end > now
+
+        reservation.status = (
+            ReservationStatus.ACTIVE.value if starts_immediately
+            else ReservationStatus.SCHEDULED.value
+        )
+        reservation.updated_at = datetime.utcnow()
+
+        approve_time = now.strftime("%b %d, %Y at %I:%M %p")
+        note = f"[Approved by {approved_by} on {approve_time}]"
+        reservation.notes = (
+            (reservation.notes + "\n" if reservation.notes else "") + note
+        )
+
+        await self.db.commit()
+        await self.db.refresh(reservation)
+
+        if (
+            starts_immediately
+            and reservation.reservation_type == "gpu"
+            and reservation.enforce_isolation
+        ):
             try:
                 from app.services.enforcement_service import (
                     ReservationEnforcementService,
@@ -92,6 +135,38 @@ class ReservationService:
                     f"Inline enforcement provision failed: {e}"
                 )
 
+        return reservation
+
+    async def deny_reservation(
+        self,
+        reservation_id: str,
+        denied_by: str,
+        reason: Optional[str] = None,
+    ) -> Optional[Reservation]:
+        reservation = await self.get_reservation(reservation_id)
+        if not reservation:
+            return None
+        if reservation.status != ReservationStatus.PENDING.value:
+            raise ValueError(
+                f"Only pending reservations can be denied "
+                f"(current status: {reservation.status})"
+            )
+
+        reservation.status = ReservationStatus.DENIED.value
+        reservation.updated_at = datetime.now(timezone.utc)
+
+        deny_time = datetime.now(timezone.utc).strftime(
+            "%b %d, %Y at %I:%M %p"
+        )
+        note = f"[Denied by {denied_by} on {deny_time}]"
+        if reason:
+            note += f" Reason: {reason}"
+        reservation.notes = (
+            (reservation.notes + "\n" if reservation.notes else "") + note
+        )
+
+        await self.db.commit()
+        await self.db.refresh(reservation)
         return reservation
 
     async def get_reservation(self, reservation_id: str) -> Optional[Reservation]:
@@ -153,7 +228,11 @@ class ReservationService:
 
         update_data = reservation_data.model_dump(exclude_unset=True)
 
-        needs_conflict_check = any(
+        is_approved = reservation.status in (
+            ReservationStatus.SCHEDULED.value,
+            ReservationStatus.ACTIVE.value,
+        )
+        needs_conflict_check = is_approved and any(
             k in update_data
             for k in ('start_time', 'end_time', 'reservation_type', 'gpu_count')
         )
@@ -264,7 +343,7 @@ class ReservationService:
         query = select(Reservation).where(
             and_(
                 Reservation.cluster_id == cluster_id,
-                Reservation.status.in_([ReservationStatus.SCHEDULED, ReservationStatus.ACTIVE]),
+                Reservation.status.in_([ReservationStatus.SCHEDULED.value, ReservationStatus.ACTIVE.value]),
                 Reservation.start_time < end_time,
                 Reservation.end_time > start_time,
             )
@@ -366,8 +445,8 @@ class ReservationService:
                 Reservation.start_time <= end_date,
                 Reservation.end_time >= start_date,
                 Reservation.status.in_([
-                    ReservationStatus.SCHEDULED,
-                    ReservationStatus.ACTIVE
+                    ReservationStatus.SCHEDULED.value,
+                    ReservationStatus.ACTIVE.value
                 ])
             )
         )
@@ -401,6 +480,7 @@ class ReservationService:
                 description=r.description,
                 reservation_type=r.reservation_type or "cluster",
                 gpu_count=r.gpu_count,
+                priority=r.priority or "normal",
             ))
 
         return events
@@ -415,8 +495,8 @@ class ReservationService:
                     Reservation.start_time <= now,
                     Reservation.end_time > now,
                     Reservation.status.in_([
-                        ReservationStatus.SCHEDULED,
-                        ReservationStatus.ACTIVE
+                        ReservationStatus.SCHEDULED.value,
+                        ReservationStatus.ACTIVE.value
                     ])
                 )
             ).order_by(Reservation.start_time)
@@ -432,14 +512,14 @@ class ReservationService:
         scheduled_to_active = await self.db.execute(
             select(Reservation).where(
                 and_(
-                    Reservation.status == ReservationStatus.SCHEDULED,
+                    Reservation.status == ReservationStatus.SCHEDULED.value,
                     Reservation.start_time <= now,
                     Reservation.end_time > now
                 )
             )
         )
         for reservation in scheduled_to_active.scalars():
-            reservation.status = ReservationStatus.ACTIVE
+            reservation.status = ReservationStatus.ACTIVE.value
             reservation.updated_at = now
             activated += 1
 
@@ -447,15 +527,15 @@ class ReservationService:
             select(Reservation).where(
                 and_(
                     Reservation.status.in_([
-                        ReservationStatus.SCHEDULED,
-                        ReservationStatus.ACTIVE
+                        ReservationStatus.SCHEDULED.value,
+                        ReservationStatus.ACTIVE.value
                     ]),
                     Reservation.end_time <= now
                 )
             )
         )
         for reservation in active_to_complete.scalars():
-            reservation.status = ReservationStatus.COMPLETED
+            reservation.status = ReservationStatus.COMPLETED.value
             reservation.updated_at = now
             completed += 1
 

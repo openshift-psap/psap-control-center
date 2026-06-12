@@ -7,7 +7,7 @@ import {
 } from '@heroicons/react/24/outline'
 import toast from 'react-hot-toast'
 import { authApi } from '../services/api'
-import { setCredentials } from '../stores/authStore'
+import { setSession } from '../stores/authStore'
 
 const features = [
   {
@@ -43,9 +43,9 @@ export default function LoginPage() {
 
     setLoading(true)
     try {
-      await authApi.check(username, password)
-      setCredentials({ username, password })
-      toast.success('Welcome back, ' + username)
+      const session = await authApi.login(username, password)
+      setSession(session)
+      toast.success('Welcome back, ' + session.username)
     } catch {
       toast.error('Invalid credentials')
     } finally {

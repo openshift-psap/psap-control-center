@@ -16,7 +16,8 @@ import {
 import clsx from 'clsx'
 import LoginModal from './LoginModal'
 import HearthConnectModal from './HearthConnectModal'
-import { isAuthenticated, getCredentials, clearCredentials } from '../stores/authStore'
+import { isAuthenticated, getSession, clearSession } from '../stores/authStore'
+import { authApi } from '../services/api'
 import { useHearthStatus, useDisconnectHearth } from '../hooks/useHearth'
 
 const navigation = [
@@ -125,8 +126,13 @@ export default function Layout() {
     return () => window.removeEventListener('auth-change', syncAuth)
   }, [syncAuth])
 
-  const handleLogout = () => {
-    clearCredentials()
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+    } catch {
+      // clear locally even if the server call fails
+    }
+    clearSession()
   }
 
   return (
@@ -303,7 +309,7 @@ export default function Layout() {
                 <div className="flex items-center gap-3">
                   <span className="flex items-center gap-1.5 text-sm text-gray-600">
                     <LockClosedIcon className="h-4 w-4 text-green-500" />
-                    <span className="hidden sm:inline font-medium">{getCredentials()?.username}</span>
+                    <span className="hidden sm:inline font-medium">{getSession()?.username}</span>
                   </span>
                   <button
                     onClick={handleLogout}

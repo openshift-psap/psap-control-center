@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     
     SECRET_KEY: str = "your-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
     
     KUBECONFIG_STORAGE_PATH: str = "./kubeconfigs"
     
@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "admin"
+
+    USER_USERNAME: str = "user"
+    USER_PASSWORD: str = "user"
 
     HEARTH_ENABLED: bool = True
     HEARTH_NAMESPACE: str = "hearth"

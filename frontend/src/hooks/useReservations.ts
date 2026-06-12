@@ -57,7 +57,7 @@ export function useCreateReservation() {
         queryClient.invalidateQueries({ queryKey: ['clusterOccupancy', data.cluster_id] })
         queryClient.invalidateQueries({ queryKey: ['gpu-status', data.cluster_id] })
       }
-      toast.success('Reservation created successfully')
+      toast.success('Reservation submitted — pending admin approval')
     },
     onError: (error: Error) => {
       logger.error('Failed to create reservation:', error)
@@ -125,6 +125,47 @@ export function useCancelReservation() {
     onError: (error: Error) => {
       logger.error('Failed to cancel reservation:', error)
       toast.error(`Failed to cancel reservation: ${error.message}`)
+    },
+  })
+}
+
+export function useApproveReservation() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: reservationApi.approve,
+    onSuccess: (data) => {
+      logger.info('Reservation approved:', data.id)
+      queryClient.invalidateQueries({ queryKey: ['reservations'] })
+      queryClient.invalidateQueries({ queryKey: ['calendarEvents'] })
+      if (data.cluster_id) {
+        queryClient.invalidateQueries({ queryKey: ['clusterOccupancy', data.cluster_id] })
+        queryClient.invalidateQueries({ queryKey: ['gpu-status', data.cluster_id] })
+      }
+      toast.success('Reservation approved')
+    },
+    onError: (error: Error) => {
+      logger.error('Failed to approve reservation:', error)
+      toast.error(`Failed to approve: ${error.message}`)
+    },
+  })
+}
+
+export function useDenyReservation() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+      reservationApi.deny(id, reason),
+    onSuccess: (data) => {
+      logger.info('Reservation denied:', data.id)
+      queryClient.invalidateQueries({ queryKey: ['reservations'] })
+      queryClient.invalidateQueries({ queryKey: ['calendarEvents'] })
+      toast.success('Reservation denied')
+    },
+    onError: (error: Error) => {
+      logger.error('Failed to deny reservation:', error)
+      toast.error(`Failed to deny: ${error.message}`)
     },
   })
 }
