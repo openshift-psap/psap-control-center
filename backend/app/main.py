@@ -68,31 +68,24 @@ def _next_aligned_refresh() -> datetime:
     return datetime.fromtimestamp(next_s, tz=timezone.utc)
 
 
-def _sync_refresh_one_cluster(cluster_id: str, cluster_name: str) -> bool:
-    """Synchronously refresh a single cluster. Runs in a worker thread."""
-    import asyncio as _aio
-    loop = _aio.new_event_loop()
+async def _refresh_one_cluster(cluster_id: str, cluster_name: str) -> bool:
+    """Refresh a single cluster. K8s calls run on the dedicated thread pool;
+    DB operations stay on the main event loop."""
+    from app.services.cluster_service import ClusterService
     try:
-        _aio.set_event_loop(loop)
-
-        async def _do():
-            from app.services.cluster_service import ClusterService
-            async with AsyncSessionLocal() as session:
-                svc = ClusterService(session)
-                await svc.refresh_cluster_status(cluster_id)
-
-        loop.run_until_complete(_do())
+        async with AsyncSessionLocal() as session:
+            svc = ClusterService(session)
+            await svc.refresh_cluster_status(cluster_id, executor=_refresh_executor)
         return True
     except Exception as e:
         logger.warning(f"Auto-refresh failed for {cluster_name}: {e}")
         return False
-    finally:
-        loop.close()
 
 
 async def cluster_refresh_task():
-    """Background task to refresh all cluster statuses on a dedicated thread pool,
-    completely isolated from the main event loop."""
+    """Background task to refresh all cluster statuses in parallel.
+    K8s I/O is dispatched to a dedicated thread pool so the main event loop
+    stays responsive for API requests."""
     from app.services.cluster_service import ClusterService
 
     await asyncio.sleep(5)
@@ -115,24 +108,22 @@ async def cluster_refresh_task():
                 ]
 
             cluster_refresh_state["total"] = len(cluster_ids)
-            loop = asyncio.get_running_loop()
 
-            futures = [
-                loop.run_in_executor(
-                    _refresh_executor,
-                    _sync_refresh_one_cluster, cid, cname,
-                )
-                for cid, cname in cluster_ids
-            ]
-
-            for fut in asyncio.as_completed(futures, timeout=CLUSTER_REFRESH_TIMEOUT * 2):
+            async def _wrap(cid, cname):
                 try:
-                    await fut
+                    await asyncio.wait_for(
+                        _refresh_one_cluster(cid, cname),
+                        timeout=CLUSTER_REFRESH_TIMEOUT,
+                    )
                 except asyncio.TimeoutError:
-                    logger.warning("Cluster refresh timed out for a cluster")
+                    logger.warning(f"Cluster refresh timed out for {cname}")
                 except Exception as e:
-                    logger.warning(f"Cluster refresh error: {e}")
+                    logger.warning(f"Cluster refresh error for {cname}: {e}")
                 cluster_refresh_state["completed"] += 1
+
+            await asyncio.gather(
+                *[_wrap(cid, cname) for cid, cname in cluster_ids]
+            )
 
             cluster_refresh_state["last_refresh"] = (
                 datetime.now(timezone.utc)
