@@ -49,7 +49,7 @@ class Cluster(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     reservations = relationship("Reservation", back_populates="cluster")
-    cost = relationship("ClusterCost", back_populates="cluster", uselist=False, cascade="all, delete-orphan")
+    costs = relationship("ClusterCost", back_populates="cluster", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Cluster(name={self.name}, status={self.status})>"

@@ -38,20 +38,24 @@ async def _refresh_all_cluster_costs():
                 logger.warning("No billing CSVs available for batch refresh")
                 return
 
-            latest_csv = reports[-1]["file_path"]
-            rows = billing_csv_service.parse_billing_csv(latest_csv)
-            tag_ids = billing_csv_service._read_cluster_ids_from_header(latest_csv)
+            parsed_csvs = []
+            for report in reports:
+                csv_path = report["file_path"]
+                rows = billing_csv_service.parse_billing_csv(csv_path)
+                tag_ids = billing_csv_service._read_cluster_ids_from_header(csv_path)
+                parsed_csvs.append((csv_path, rows, tag_ids))
 
             for cluster in eligible:
-                try:
-                    await svc.refresh_cluster_cost(
-                        cluster.id,
-                        csv_path=latest_csv,
-                        rows=rows,
-                        tag_ids=tag_ids,
-                    )
-                except Exception as e:
-                    logger.warning(f"Cost refresh failed for {cluster.name}: {e}")
+                for csv_path, rows, tag_ids in parsed_csvs:
+                    try:
+                        await svc.refresh_cluster_cost(
+                            cluster.id,
+                            csv_path=csv_path,
+                            rows=rows,
+                            tag_ids=tag_ids,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Cost refresh failed for {cluster.name}: {e}")
                 cost_refresh_state["completed"] += 1
                 cost_refresh_state["last_cluster"] = cluster.name
 

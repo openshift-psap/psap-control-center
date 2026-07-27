@@ -67,14 +67,22 @@ export default function Dashboard() {
     })),
   })
   const costByCluster = ibmClusterIds.reduce<Record<string, ClusterCost | undefined>>((acc, id, i) => {
-    acc[id] = costQueries[i]?.data as ClusterCost | undefined
+    const costs = costQueries[i]?.data as ClusterCost[] | undefined
+    acc[id] = costs?.[0]
     return acc
   }, {})
   const totalMonthCost = costQueries.reduce((sum, q) => {
-    const c = q.data as ClusterCost | undefined
+    const costs = q.data as ClusterCost[] | undefined
+    const c = costs?.[0]
     return sum + (c && !c.error && c.total_cost != null ? c.total_cost : 0)
   }, 0)
-  const costCurrency = (costQueries.find((q) => (q.data as ClusterCost | undefined)?.currency)?.data as ClusterCost | undefined)?.currency || 'USD'
+  const costCurrency = (() => {
+    for (const q of costQueries) {
+      const costs = q.data as ClusterCost[] | undefined
+      if (costs?.[0]?.currency) return costs[0].currency
+    }
+    return 'USD'
+  })()
 
   const stats = [
     {

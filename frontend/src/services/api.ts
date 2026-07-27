@@ -165,14 +165,14 @@ export const clusterApi = {
     return data
   },
 
-  getCost: async (id: string): Promise<ClusterCost> => {
+  getCost: async (id: string): Promise<ClusterCost[]> => {
     const { data } = await api.get(`/clusters/${id}/cost`)
-    return data
+    return data.costs
   },
 
-  refreshCost: async (id: string): Promise<ClusterCost> => {
+  refreshCost: async (id: string): Promise<ClusterCost[]> => {
     const { data } = await api.post(`/clusters/${id}/cost/refresh`)
-    return data
+    return data.costs
   },
 
   getRefreshSchedule: async (): Promise<{

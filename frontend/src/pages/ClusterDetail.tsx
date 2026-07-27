@@ -34,7 +34,7 @@ import {
 import { useCurrentClusterUser } from '../hooks/useReservations'
 import { useHearthCluster } from '../hooks/useHearth'
 import { useGpuStatus } from '../hooks/useGpuStatus'
-import { useClusterCost, useRefreshClusterCost } from '../hooks/useClusterCost'
+import { useClusterCosts, useRefreshClusterCost } from '../hooks/useClusterCost'
 import { format } from 'date-fns'
 import clsx from 'clsx'
 import type { TopologyNode, PodInfo } from '../types'
@@ -500,7 +500,7 @@ export default function ClusterDetail() {
   const { data: ocpDetails, isLoading: ocpLoading } = useOcpDetails(id!)
   const { data: operatorsData, isLoading: operatorsLoading } = useClusterOperators(id!)
   const { data: workloads, isLoading: workloadsLoading } = useClusterWorkloads(id!)
-  const { data: cost } = useClusterCost(id!)
+  const { data: costs } = useClusterCosts(id!)
   const refreshCost = useRefreshClusterCost()
 
   const refreshStatus = useRefreshClusterStatus()
@@ -796,9 +796,9 @@ export default function ClusterDetail() {
               Cost
             </h3>
             <div className="flex items-center gap-3">
-              {cost?.fetched_at && (
+              {costs && costs.length > 0 && costs[0].fetched_at && (
                 <span className="text-xs text-gray-400">
-                  Updated {format(new Date(cost.fetched_at), 'MMM d, HH:mm')}
+                  Updated {format(new Date(costs[0].fetched_at), 'MMM d, HH:mm')}
                 </span>
               )}
               <button
@@ -812,40 +812,43 @@ export default function ClusterDetail() {
             </div>
           </div>
 
-          {cost?.error ? (
+          {(!costs || costs.length === 0) ? (
             <div className="flex items-start gap-2 text-sm text-orange-600 bg-orange-50 p-3 rounded-lg">
               <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
-              <span>{cost.error}</span>
+              <span>No billing data available</span>
             </div>
           ) : (
-            <>
-              <div className="text-sm mb-4">
-                <div className="text-center p-4 bg-emerald-50 rounded-lg">
-                  <p className="text-3xl font-bold text-emerald-700">
-                    {cost?.total_cost != null
-                      ? cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })
-                      : '—'}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {cost?.billing_month ?? 'No data'}
-                  </p>
-                </div>
-              </div>
-
-              {cost?.node_breakdown && cost.node_breakdown.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-gray-500 mb-2">Per-node cost breakdown</p>
-                  {cost.node_breakdown.map((n) => (
-                    <div key={n.node} className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded">
-                      <span className="font-mono text-xs text-gray-700 truncate">{n.node}</span>
-                      <span className="font-medium text-gray-900">
-                        {n.cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
-                      </span>
+            <div className="space-y-4">
+              {costs.map((cost) => (
+                <div key={cost.billing_month} className="border border-gray-200 rounded-lg overflow-hidden">
+                  <div className="flex items-center justify-between p-4 bg-emerald-50">
+                    <p className="text-sm font-medium text-gray-600">{cost.billing_month}</p>
+                    <p className="text-xl font-bold text-emerald-700">
+                      {cost.total_cost != null
+                        ? cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })
+                        : '—'}
+                    </p>
+                  </div>
+                  {cost.node_breakdown && cost.node_breakdown.length > 0 && (
+                    <div className="p-3 space-y-1">
+                      {cost.node_breakdown.map((n) => (
+                        <div key={n.node} className="flex items-center justify-between text-sm p-1.5">
+                          <span className="font-mono text-xs text-gray-700 truncate">{n.node}</span>
+                          <span className="font-medium text-gray-900">
+                            {n.cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
+                          </span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
+                  {cost.error && (
+                    <div className="px-4 py-2 text-xs text-orange-600 bg-orange-50 border-t border-orange-100">
+                      {cost.error}
+                    </div>
+                  )}
                 </div>
-              )}
-            </>
+              ))}
+            </div>
           )}
         </div>
       )}

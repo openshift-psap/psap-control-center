@@ -115,11 +115,12 @@ class ClusterCostResponse(BaseModel):
     billing_month: Optional[str] = None
     total_cost: Optional[float] = None
     node_breakdown: Optional[List[NodeCostInfo]] = None
-    prior_billing_month: Optional[str] = None
-    prior_total_cost: Optional[float] = None
-    prior_node_breakdown: Optional[List[NodeCostInfo]] = None
     fetched_at: Optional[datetime] = None
     error: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class ClusterCostListResponse(BaseModel):
+    costs: List[ClusterCostResponse]

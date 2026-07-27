@@ -195,7 +195,8 @@ export default function Clusters() {
     })),
   })
   const costByCluster = clusters.reduce<Record<string, ClusterCost | undefined>>((acc, c, i) => {
-    acc[c.id] = costQueries[i]?.data as ClusterCost | undefined
+    const costs = costQueries[i]?.data as ClusterCost[] | undefined
+    acc[c.id] = costs?.[0]
     return acc
   }, {})
 

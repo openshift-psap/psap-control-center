@@ -26,18 +26,12 @@ class ClusterCostResult:
         billing_month: str,
         total_cost: float,
         node_breakdown: List[Dict[str, Any]],
-        prior_billing_month: Optional[str],
-        prior_total_cost: Optional[float],
-        prior_node_breakdown: Optional[List[Dict[str, Any]]],
         unmatched_line_items: List[Dict[str, Any]],
     ):
         self.currency = currency
         self.billing_month = billing_month
         self.total_cost = total_cost
         self.node_breakdown = node_breakdown
-        self.prior_billing_month = prior_billing_month
-        self.prior_total_cost = prior_total_cost
-        self.prior_node_breakdown = prior_node_breakdown
         self.unmatched_line_items = unmatched_line_items
 
 
@@ -139,10 +133,9 @@ def get_cluster_cost_from_rows(
 def get_cluster_cost(
     infra_id: str,
     current_csv_path: str,
-    prior_csv_path: Optional[str] = None,
     rows: Optional[List[Dict[str, Any]]] = None,
 ) -> ClusterCostResult:
-    """Extract cluster costs from billing CSV(s) by matching infra_id.
+    """Extract cluster costs from a single billing CSV by matching infra_id.
     Pass pre-parsed rows to avoid re-reading the file."""
     current_rows = rows if rows is not None else parse_billing_csv(current_csv_path)
     billing_month = extract_billing_month(current_csv_path)
@@ -153,18 +146,11 @@ def get_cluster_cost(
         infra_id, current_rows, billing_month
     )
 
-    prior_billing_month = None
-    prior_total_cost = None
-    prior_node_breakdown = None
-
     return ClusterCostResult(
         currency="USD",
         billing_month=billing_month,
         total_cost=total_cost,
         node_breakdown=node_breakdown,
-        prior_billing_month=prior_billing_month,
-        prior_total_cost=prior_total_cost,
-        prior_node_breakdown=prior_node_breakdown,
         unmatched_line_items=unmatched,
     )
 

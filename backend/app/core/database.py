@@ -96,6 +96,29 @@ async def _run_migrations(conn):
                 )
                 raise
 
+    await _migrate_cluster_costs_multi_month(conn, is_pg)
+
+
+async def _migrate_cluster_costs_multi_month(conn, is_pg: bool):
+    """Recreate cluster_costs table for multi-month support (one row per cluster per month).
+    Old data is ephemeral (derived from CSVs) so safe to drop."""
+    result = await conn.execute(text(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='cluster_costs'"
+        if not is_pg else
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name='cluster_costs' AND column_name='prior_billing_month'"
+    ))
+    row = result.fetchone()
+    if not row:
+        return
+    has_old_schema = ("prior_billing_month" in (row[0] or "")) if not is_pg else True
+    if not has_old_schema:
+        return
+    logger.info("Migration: recreating cluster_costs for multi-month support")
+    await conn.execute(text("DROP TABLE IF EXISTS cluster_costs"))
+    from app.models.cluster_cost import ClusterCost
+    await conn.run_sync(lambda sync_conn: ClusterCost.__table__.create(sync_conn, checkfirst=True))
+
 
 async def _normalize_status_values(conn):
     """Fix legacy UPPERCASE status values to lowercase."""

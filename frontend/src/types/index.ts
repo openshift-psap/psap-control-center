@@ -162,13 +162,9 @@ export interface ClusterCost {
   billing_month?: string
   total_cost?: number
   node_breakdown?: NodeCostInfo[]
-  prior_billing_month?: string
-  prior_total_cost?: number
-  prior_node_breakdown?: NodeCostInfo[]
   fetched_at?: string
   error?: string
 }
-
 export interface BillingReport {
   billing_month: string
   file_name: string
