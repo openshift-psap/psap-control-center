@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import {
   ArrowLeftIcon,
@@ -505,15 +505,6 @@ export default function ClusterDetail() {
 
   const refreshStatus = useRefreshClusterStatus()
   const uploadKubeconfig = useUploadKubeconfig()
-
-  const costAutoRefreshed = useRef<string | null>(null)
-  useEffect(() => {
-    if (cluster && cluster.provider === 'ibm' && id && costAutoRefreshed.current !== id) {
-      costAutoRefreshed.current = id
-      refreshCost.mutate(id)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cluster?.id, cluster?.provider, id])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: { 'application/x-yaml': ['.yaml', '.yml'], 'text/plain': ['.kubeconfig'] },

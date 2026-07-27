@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+import re
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -11,6 +12,7 @@ from app.utils.logger import create_logger
 logger = create_logger("BillingCsvService")
 
 HEADER_SKIP_LINES = 3
+_BILLING_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
 
 class BillingCsvServiceError(Exception):
@@ -61,7 +63,7 @@ def extract_billing_month(file_path: str) -> Optional[str]:
 
     reader = csv.reader(io.StringIO(lines[1]))
     row = next(reader, None)
-    if row and len(row) >= 3:
+    if row and len(row) >= 3 and _BILLING_MONTH_RE.match(row[2]):
         return row[2]
     return None
 
@@ -73,7 +75,7 @@ def _extract_billing_month_from_content(content: str) -> Optional[str]:
         return None
     reader = csv.reader(io.StringIO(lines[1]))
     row = next(reader, None)
-    if row and len(row) >= 3:
+    if row and len(row) >= 3 and _BILLING_MONTH_RE.match(row[2]):
         return row[2]
     return None
 
@@ -92,7 +94,10 @@ def get_cluster_cost_from_rows(
         if infra_id not in instance_name:
             continue
 
-        cost = float(row.get("Cost") or 0)
+        try:
+            cost = float(row.get("Cost") or 0)
+        except (ValueError, TypeError):
+            continue
         if cost == 0:
             continue
 
@@ -185,15 +190,34 @@ def get_available_reports(storage_path: Optional[str] = None) -> List[Dict[str, 
         fpath = os.path.join(path, fname)
         stat = os.stat(fpath)
         billing_month = extract_billing_month(fpath)
+        cluster_count = len(_read_cluster_ids_from_header(fpath))
         reports.append({
             "billing_month": billing_month or "unknown",
             "file_name": fname,
             "file_path": fpath,
             "file_size": stat.st_size,
             "uploaded_at": datetime.fromtimestamp(stat.st_mtime),
+            "cluster_count": cluster_count,
         })
 
     return reports
+
+
+def _read_cluster_ids_from_header(csv_path: str) -> List[str]:
+    """Read cluster infra IDs from CSV column headers without parsing the full file."""
+    with open(csv_path, "r", encoding="utf-8") as f:
+        for _ in range(HEADER_SKIP_LINES):
+            f.readline()
+        header_line = f.readline()
+    if not header_line:
+        return []
+    reader = csv.reader(io.StringIO(header_line))
+    headers = next(reader, [])
+    return sorted(
+        col.replace("kubernetes-io-cluster-", "")
+        for col in headers
+        if col and col.startswith("kubernetes-io-cluster-")
+    )
 
 
 def find_csv_for_month(billing_month: str, storage_path: Optional[str] = None) -> Optional[str]:
@@ -205,7 +229,9 @@ def find_csv_for_month(billing_month: str, storage_path: Optional[str] = None) -
     return None
 
 
-def prior_billing_month(billing_month: str) -> str:
+def prior_billing_month(billing_month: str) -> Optional[str]:
+    if not _BILLING_MONTH_RE.match(billing_month):
+        return None
     year, month = (int(part) for part in billing_month.split("-"))
     if month == 1:
         return f"{year - 1}-12"

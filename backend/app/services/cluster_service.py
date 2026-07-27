@@ -349,7 +349,7 @@ class ClusterService:
         current_csv = reports[-1]["file_path"]
         current_month = reports[-1]["billing_month"]
         prior_month = billing_csv_service.prior_billing_month(current_month)
-        prior_csv = billing_csv_service.find_csv_for_month(prior_month)
+        prior_csv = billing_csv_service.find_csv_for_month(prior_month) if prior_month else None
 
         try:
             loop = asyncio.get_running_loop()

@@ -529,7 +529,8 @@ async def get_cluster_cost(
 @router.post("/{cluster_id}/cost/refresh", response_model=ClusterCostResponse)
 async def refresh_cluster_cost(
     cluster_id: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(require_admin),
 ):
     """Fetch fresh cost data for a cluster from IBM Cloud and update the cache."""
     service = ClusterService(db)

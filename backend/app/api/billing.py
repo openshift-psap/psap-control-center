@@ -10,6 +10,8 @@ logger = create_logger("BillingAPI")
 
 router = APIRouter()
 
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
 
 @router.post("/upload", response_model=BillingReportInfo)
 async def upload_billing_csv(
@@ -19,6 +21,8 @@ async def upload_billing_csv(
     """Upload an IBM Cloud billing CSV export."""
     try:
         content = await file.read()
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds 50 MB limit")
         text = content.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be a valid UTF-8 CSV")
@@ -37,7 +41,7 @@ async def upload_billing_csv(
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(text)
 
-    infra_ids = billing_csv_service.detect_cluster_infra_ids(file_path)
+    infra_ids = billing_csv_service._read_cluster_ids_from_header(file_path)
     stat = os.stat(file_path)
 
     logger.info(
@@ -56,18 +60,19 @@ async def upload_billing_csv(
 
 
 @router.get("/reports", response_model=BillingReportListResponse)
-async def list_billing_reports():
+async def list_billing_reports(
+    _user: dict = Depends(require_admin),
+):
     """List all uploaded billing CSV reports."""
     reports = billing_csv_service.get_available_reports()
     infos = []
     for r in reports:
-        infra_ids = billing_csv_service.detect_cluster_infra_ids(r["file_path"])
         infos.append(BillingReportInfo(
             billing_month=r["billing_month"],
             file_name=r["file_name"],
             file_size=r["file_size"],
             uploaded_at=r["uploaded_at"],
-            cluster_count=len(infra_ids),
+            cluster_count=r.get("cluster_count", 0),
         ))
     return BillingReportListResponse(reports=infos)
 
