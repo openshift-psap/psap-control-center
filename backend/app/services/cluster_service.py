@@ -346,13 +346,13 @@ class ClusterService:
             await self.db.refresh(cost_row)
             return cost_row
 
-        current_csv = reports[-1]["file_path"]
+        latest_csv = reports[-1]["file_path"]
 
         try:
-            result = billing_csv_service.get_cluster_cost(
-                cluster.infra_id,
-                current_csv,
+            match_id = billing_csv_service.resolve_billing_id(
+                cluster.infra_id, latest_csv, cluster.name
             )
+            result = billing_csv_service.get_cluster_cost(match_id, latest_csv)
 
             no_match = (
                 result.total_cost == 0

@@ -238,6 +238,21 @@ def prior_billing_month(billing_month: str) -> Optional[str]:
     return f"{year}-{month - 1:02d}"
 
 
+def resolve_billing_id(infra_id: str, csv_path: str, cluster_name: Optional[str] = None) -> str:
+    """Find the billing ID that matches Instance Name rows in the CSV.
+    Tries infra_id first, then falls back to CSV tag column IDs that contain
+    the cluster name (handles OpenShift infrastructureName != IBM billing ID)."""
+    rows = parse_billing_csv(csv_path)
+    if any(infra_id in (r.get("Instance Name") or "") for r in rows):
+        return infra_id
+    tag_ids = _read_cluster_ids_from_header(csv_path)
+    for tag_id in tag_ids:
+        if cluster_name and cluster_name in tag_id:
+            if any(tag_id in (r.get("Instance Name") or "") for r in rows):
+                return tag_id
+    return infra_id
+
+
 def detect_cluster_infra_ids(csv_path: str) -> List[str]:
     """Extract unique cluster infra IDs from the CSV tag column names."""
     rows = parse_billing_csv(csv_path)
