@@ -324,7 +324,13 @@ class ClusterService:
             self.db.add(cost_row)
         return cost_row
 
-    async def refresh_cluster_cost(self, cluster_id: str) -> Optional[ClusterCost]:
+    async def refresh_cluster_cost(
+        self,
+        cluster_id: str,
+        csv_path: Optional[str] = None,
+        rows: Optional[list] = None,
+        tag_ids: Optional[list] = None,
+    ) -> Optional[ClusterCost]:
         cluster = await self.get_cluster(cluster_id)
         if not cluster:
             return None
@@ -338,21 +344,23 @@ class ClusterService:
             await self.db.refresh(cost_row)
             return cost_row
 
-        reports = billing_csv_service.get_available_reports()
-        if not reports:
-            cost_row.error = "No billing CSVs uploaded — upload one via the billing API"
-            cost_row.fetched_at = datetime.utcnow()
-            await self.db.commit()
-            await self.db.refresh(cost_row)
-            return cost_row
-
-        latest_csv = reports[-1]["file_path"]
+        if not csv_path:
+            reports = billing_csv_service.get_available_reports()
+            if not reports:
+                cost_row.error = "No billing CSVs uploaded — upload one via the billing API"
+                cost_row.fetched_at = datetime.utcnow()
+                await self.db.commit()
+                await self.db.refresh(cost_row)
+                return cost_row
+            csv_path = reports[-1]["file_path"]
 
         try:
+            parsed_rows = rows if rows is not None else billing_csv_service.parse_billing_csv(csv_path)
+            parsed_tags = tag_ids if tag_ids is not None else billing_csv_service._read_cluster_ids_from_header(csv_path)
             match_id = billing_csv_service.resolve_billing_id(
-                cluster.infra_id, latest_csv, cluster.name
+                cluster.infra_id, parsed_rows, parsed_tags, cluster.name
             )
-            result = billing_csv_service.get_cluster_cost(match_id, latest_csv)
+            result = billing_csv_service.get_cluster_cost(match_id, csv_path, rows=parsed_rows)
 
             no_match = (
                 result.total_cost == 0

@@ -18,6 +18,10 @@ async def _refresh_all_cluster_costs():
     from app.main import cost_refresh_state
     from app.services.cluster_service import ClusterService
 
+    if cost_refresh_state["in_progress"]:
+        logger.info("Batch cost refresh already in progress, skipping")
+        return
+
     cost_refresh_state["in_progress"] = True
     cost_refresh_state["completed"] = 0
     cost_refresh_state["last_cluster"] = None
@@ -29,9 +33,23 @@ async def _refresh_all_cluster_costs():
             eligible = [c for c in clusters if c.infra_id]
             cost_refresh_state["total"] = len(eligible)
 
+            reports = billing_csv_service.get_available_reports()
+            if not reports:
+                logger.warning("No billing CSVs available for batch refresh")
+                return
+
+            latest_csv = reports[-1]["file_path"]
+            rows = billing_csv_service.parse_billing_csv(latest_csv)
+            tag_ids = billing_csv_service._read_cluster_ids_from_header(latest_csv)
+
             for cluster in eligible:
                 try:
-                    await svc.refresh_cluster_cost(cluster.id)
+                    await svc.refresh_cluster_cost(
+                        cluster.id,
+                        csv_path=latest_csv,
+                        rows=rows,
+                        tag_ids=tag_ids,
+                    )
                 except Exception as e:
                     logger.warning(f"Cost refresh failed for {cluster.name}: {e}")
                 cost_refresh_state["completed"] += 1

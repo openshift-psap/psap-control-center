@@ -140,9 +140,11 @@ def get_cluster_cost(
     infra_id: str,
     current_csv_path: str,
     prior_csv_path: Optional[str] = None,
+    rows: Optional[List[Dict[str, Any]]] = None,
 ) -> ClusterCostResult:
-    """Extract cluster costs from billing CSV(s) by matching infra_id."""
-    current_rows = parse_billing_csv(current_csv_path)
+    """Extract cluster costs from billing CSV(s) by matching infra_id.
+    Pass pre-parsed rows to avoid re-reading the file."""
+    current_rows = rows if rows is not None else parse_billing_csv(current_csv_path)
     billing_month = extract_billing_month(current_csv_path)
     if not billing_month:
         raise BillingCsvServiceError(f"Could not extract billing month from {current_csv_path}")
@@ -154,16 +156,6 @@ def get_cluster_cost(
     prior_billing_month = None
     prior_total_cost = None
     prior_node_breakdown = None
-
-    if prior_csv_path and os.path.exists(prior_csv_path):
-        try:
-            prior_rows = parse_billing_csv(prior_csv_path)
-            prior_billing_month = extract_billing_month(prior_csv_path)
-            prior_total_cost, prior_node_breakdown, _ = get_cluster_cost_from_rows(
-                infra_id, prior_rows, prior_billing_month or ""
-            )
-        except Exception as e:
-            logger.warning(f"Prior month CSV parse failed: {e}")
 
     return ClusterCostResult(
         currency="USD",
@@ -238,18 +230,22 @@ def prior_billing_month(billing_month: str) -> Optional[str]:
     return f"{year}-{month - 1:02d}"
 
 
-def resolve_billing_id(infra_id: str, csv_path: str, cluster_name: Optional[str] = None) -> str:
-    """Find the billing ID that matches Instance Name rows in the CSV.
-    Tries infra_id first, then falls back to CSV tag column IDs that contain
+def resolve_billing_id(
+    infra_id: str,
+    rows: List[Dict[str, Any]],
+    tag_ids: List[str],
+    cluster_name: Optional[str] = None,
+) -> str:
+    """Find the billing ID that matches Instance Name rows.
+    Tries infra_id first, then falls back to tag column IDs that contain
     the cluster name (handles OpenShift infrastructureName != IBM billing ID)."""
-    rows = parse_billing_csv(csv_path)
     if any(infra_id in (r.get("Instance Name") or "") for r in rows):
         return infra_id
-    tag_ids = _read_cluster_ids_from_header(csv_path)
-    for tag_id in tag_ids:
-        if cluster_name and cluster_name in tag_id:
-            if any(tag_id in (r.get("Instance Name") or "") for r in rows):
-                return tag_id
+    if cluster_name:
+        for tag_id in tag_ids:
+            if cluster_name in tag_id:
+                if any(tag_id in (r.get("Instance Name") or "") for r in rows):
+                    return tag_id
     return infra_id
 
 
