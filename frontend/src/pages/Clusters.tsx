@@ -510,15 +510,11 @@ export default function Clusters() {
                   return (
                     <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-sm">
                       <span className="text-gray-500">
-                        This month <span className="font-semibold text-gray-900">
+                        <span className="font-semibold text-gray-900">
                           {cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
                         </span>
+                        {cost.billing_month && <span className="ml-1 text-gray-400">({cost.billing_month})</span>}
                       </span>
-                      {cost.prior_total_cost != null && (
-                        <span className="text-gray-400">
-                          Last month {cost.prior_total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
-                        </span>
-                      )}
                     </div>
                   )
                 })()}

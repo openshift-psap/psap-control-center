@@ -183,7 +183,7 @@ export default function Dashboard() {
                 <ServerStackIcon className="h-6 w-6 text-white" />
               </div>
               <div className="ml-4">
-                <p className="text-sm font-medium text-gray-500">Cost This Month</p>
+                <p className="text-sm font-medium text-gray-500">Total Cost</p>
                 <p className="text-2xl font-semibold text-gray-900">
                   {totalMonthCost.toLocaleString(undefined, { style: 'currency', currency: costCurrency, maximumFractionDigits: 0 })}
                 </p>
@@ -265,7 +265,7 @@ export default function Dashboard() {
                           {cluster.gpu_type && <span className="ml-1">({cluster.gpu_type})</span>}
                           {cost && !cost.error && cost.total_cost != null && (
                             <span className="ml-1">
-                              · {cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency, maximumFractionDigits: 0 })}/mo
+                              · {cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency, maximumFractionDigits: 0 })}
                             </span>
                           )}
                         </p>

@@ -324,7 +324,7 @@ class ClusterService:
             self.db.add(cost_row)
         return cost_row
 
-    async def refresh_cluster_cost(self, cluster_id: str, executor=None) -> Optional[ClusterCost]:
+    async def refresh_cluster_cost(self, cluster_id: str) -> Optional[ClusterCost]:
         cluster = await self.get_cluster(cluster_id)
         if not cluster:
             return None
@@ -347,18 +347,11 @@ class ClusterService:
             return cost_row
 
         current_csv = reports[-1]["file_path"]
-        current_month = reports[-1]["billing_month"]
-        prior_month = billing_csv_service.prior_billing_month(current_month)
-        prior_csv = billing_csv_service.find_csv_for_month(prior_month) if prior_month else None
 
         try:
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                executor,
-                billing_csv_service.get_cluster_cost,
+            result = billing_csv_service.get_cluster_cost(
                 cluster.infra_id,
                 current_csv,
-                prior_csv,
             )
 
             no_match = (

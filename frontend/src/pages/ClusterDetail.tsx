@@ -819,32 +819,22 @@ export default function ClusterDetail() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-4 text-sm mb-4">
-                <div className="text-center p-3 bg-emerald-50 rounded-lg">
-                  <p className="text-2xl font-bold text-emerald-700">
+              <div className="text-sm mb-4">
+                <div className="text-center p-4 bg-emerald-50 rounded-lg">
+                  <p className="text-3xl font-bold text-emerald-700">
                     {cost?.total_cost != null
                       ? cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })
                       : '—'}
                   </p>
-                  <p className="text-xs text-gray-500">
-                    {cost?.billing_month ? `Month to date (${cost.billing_month})` : 'Month to date'}
-                  </p>
-                </div>
-                <div className="text-center p-3 bg-gray-50 rounded-lg">
-                  <p className="text-2xl font-bold text-gray-700">
-                    {cost?.prior_total_cost != null
-                      ? cost.prior_total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })
-                      : '—'}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    {cost?.prior_billing_month ? `Last month (${cost.prior_billing_month})` : 'Last month'}
+                  <p className="text-xs text-gray-500 mt-1">
+                    {cost?.billing_month ?? 'No data'}
                   </p>
                 </div>
               </div>
 
               {cost?.node_breakdown && cost.node_breakdown.length > 0 && (
                 <div className="space-y-2">
-                  <p className="text-xs font-medium text-gray-500 mb-2">Per-node cost (this month)</p>
+                  <p className="text-xs font-medium text-gray-500 mb-2">Per-node cost breakdown</p>
                   {cost.node_breakdown.map((n) => (
                     <div key={n.node} className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded">
                       <span className="font-mono text-xs text-gray-700 truncate">{n.node}</span>
