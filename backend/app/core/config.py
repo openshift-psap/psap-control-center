@@ -27,10 +27,13 @@ class Settings(BaseSettings):
     HEARTH_ENABLED: bool = True
     HEARTH_NAMESPACE: str = "hearth"
     HEARTH_KUBECONFIG_PATH: Optional[str] = None
-    
+
+    BILLING_CSV_STORAGE_PATH: str = "./billing_csvs"
+
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # e.g. LOG_LEVEL, which logger.py reads directly from os.environ
 
 
 settings = Settings()
@@ -47,3 +50,4 @@ if _missing:
     )
 
 os.makedirs(settings.KUBECONFIG_STORAGE_PATH, exist_ok=True)
+os.makedirs(settings.BILLING_CSV_STORAGE_PATH, exist_ok=True)

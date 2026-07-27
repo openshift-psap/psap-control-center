@@ -8,7 +8,8 @@ import type {
   Operator,
   WorkloadsResponse,
   GpuAllocationStatus,
-  Reservation, 
+  ClusterCost,
+  Reservation,
   ReservationListResponse,
   CalendarEvent,
   ClusterOccupancyResponse,
@@ -16,6 +17,7 @@ import type {
   HearthClusterListResponse,
   HearthStatus,
   HearthConnectResponse,
+  BillingReport,
 } from '../types'
 import { createLogger } from '../utils/logger'
 import { clearSession } from '../stores/authStore'
@@ -159,6 +161,16 @@ export const clusterApi = {
     total: number
   }> => {
     const { data } = await api.get(`/clusters/${id}/gpu-pod-history`, { params: { limit } })
+    return data
+  },
+
+  getCost: async (id: string): Promise<ClusterCost> => {
+    const { data } = await api.get(`/clusters/${id}/cost`)
+    return data
+  },
+
+  refreshCost: async (id: string): Promise<ClusterCost> => {
+    const { data } = await api.post(`/clusters/${id}/cost/refresh`)
     return data
   },
 
@@ -315,6 +327,26 @@ export const settingsApi = {
   testSlack: async (): Promise<{ status: string; message: string }> => {
     const { data } = await api.post('/settings/slack/test')
     return data
+  },
+}
+
+export const billingApi = {
+  upload: async (file: File): Promise<BillingReport> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const { data } = await api.post('/billing/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return data
+  },
+
+  listReports: async (): Promise<{ reports: BillingReport[] }> => {
+    const { data } = await api.get('/billing/reports')
+    return data
+  },
+
+  deleteReport: async (billingMonth: string): Promise<void> => {
+    await api.delete(`/billing/${billingMonth}`)
   },
 }
 

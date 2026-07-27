@@ -12,6 +12,7 @@ from app.schemas.cluster import (
     ClusterResponse,
     ClusterStatus,
     ClusterListResponse,
+    ClusterCostResponse,
     GpuAllocationStatus as GpuAllocationStatusSchema,
 )
 from app.utils.logger import create_logger
@@ -504,3 +505,41 @@ async def get_cluster_workloads(
         return workloads
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{cluster_id}/cost", response_model=ClusterCostResponse)
+async def get_cluster_cost(
+    cluster_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get the last cached cost snapshot for a cluster (no live IBM Cloud call)."""
+    service = ClusterService(db)
+    cluster = await service.get_cluster(cluster_id)
+
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    cost = await service.get_cluster_cost(cluster_id)
+    if not cost:
+        return ClusterCostResponse(error="Cost data not yet fetched for this cluster")
+
+    return ClusterCostResponse.model_validate(cost)
+
+
+@router.post("/{cluster_id}/cost/refresh", response_model=ClusterCostResponse)
+async def refresh_cluster_cost(
+    cluster_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Fetch fresh cost data for a cluster from IBM Cloud and update the cache."""
+    service = ClusterService(db)
+    cluster = await service.get_cluster(cluster_id)
+
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    cost = await service.refresh_cluster_cost(cluster_id)
+    if not cost:
+        raise HTTPException(status_code=500, detail="Failed to refresh cluster cost")
+
+    return ClusterCostResponse.model_validate(cost)

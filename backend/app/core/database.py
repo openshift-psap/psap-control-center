@@ -65,6 +65,8 @@ _MIGRATIONS = [
     ("reservations", "pending_modification", "TEXT"),
     ("reservations", "modification_requested_by", "VARCHAR(255)"),
     ("reservations", "modification_requested_at", "TIMESTAMP"),
+    ("clusters", "provider", "VARCHAR(20) NOT NULL DEFAULT 'ibm'"),
+    ("clusters", "infra_id", "VARCHAR(100)"),
 ]
 
 
@@ -116,6 +118,7 @@ async def init_db():
     from app.models.user import User  # noqa: F401
     from app.models.gpu_pod_history import GpuPodHistory  # noqa: F401
     from app.models.setting import Setting  # noqa: F401
+    from app.models.cluster_cost import ClusterCost  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

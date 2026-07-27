@@ -15,7 +15,7 @@ import { useReservations } from '../hooks/useReservations'
 import { useHearthClusters } from '../hooks/useHearth'
 import { clusterApi } from '../services/api'
 import { format } from 'date-fns'
-import type { HearthCluster, GpuAllocationStatus } from '../types'
+import type { HearthCluster, GpuAllocationStatus, ClusterCost } from '../types'
 import GpuDonutChart from '../components/GpuDonutChart'
 
 export default function Dashboard() {
@@ -57,6 +57,24 @@ export default function Dashboard() {
   )
   const gpuStatusLoading = gpuStatusQueries.some((q) => q.isLoading)
   const totalGpus = gpuTotals.total || clusters.reduce((sum, c) => sum + parseInt(c.gpu_count || '0'), 0)
+
+  const ibmClusterIds = clusters.filter((c) => c.provider === 'ibm').map((c) => c.id)
+  const costQueries = useQueries({
+    queries: ibmClusterIds.map((id) => ({
+      queryKey: ['clusterCost', id],
+      queryFn: () => clusterApi.getCost(id),
+      staleTime: 60_000,
+    })),
+  })
+  const costByCluster = ibmClusterIds.reduce<Record<string, ClusterCost | undefined>>((acc, id, i) => {
+    acc[id] = costQueries[i]?.data as ClusterCost | undefined
+    return acc
+  }, {})
+  const totalMonthCost = costQueries.reduce((sum, q) => {
+    const c = q.data as ClusterCost | undefined
+    return sum + (c && !c.error && c.total_cost != null ? c.total_cost : 0)
+  }, 0)
+  const costCurrency = (costQueries.find((q) => (q.data as ClusterCost | undefined)?.currency)?.data as ClusterCost | undefined)?.currency || 'USD'
 
   const stats = [
     {
@@ -158,6 +176,21 @@ export default function Dashboard() {
             </div>
           </div>
         </Link>
+        {ibmClusterIds.length > 0 && (
+          <Link to="/clusters" className="card p-6 hover:shadow-md transition-shadow">
+            <div className="flex items-center">
+              <div className="bg-emerald-500 rounded-lg p-3">
+                <ServerStackIcon className="h-6 w-6 text-white" />
+              </div>
+              <div className="ml-4">
+                <p className="text-sm font-medium text-gray-500">Cost This Month</p>
+                <p className="text-2xl font-semibold text-gray-900">
+                  {totalMonthCost.toLocaleString(undefined, { style: 'currency', currency: costCurrency, maximumFractionDigits: 0 })}
+                </p>
+              </div>
+            </div>
+          </Link>
+        )}
       </div>
 
       {/* GPU Reservation Summary */}
@@ -207,6 +240,7 @@ export default function Dashboard() {
                 )?.data as GpuAllocationStatus | undefined
                 const clusterTotal = gpuData?.total_gpus ?? parseInt(cluster.gpu_count || '0')
                 const clusterUsed = gpuData?.allocated_gpus ?? 0
+                const cost = costByCluster[cluster.id]
 
                 return (
                   <Link
@@ -229,6 +263,11 @@ export default function Dashboard() {
                         <p className="text-sm text-gray-500">
                           {cluster.node_count || '?'} nodes · {clusterUsed}/{clusterTotal} GPUs
                           {cluster.gpu_type && <span className="ml-1">({cluster.gpu_type})</span>}
+                          {cost && !cost.error && cost.total_cost != null && (
+                            <span className="ml-1">
+                              · {cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency, maximumFractionDigits: 0 })}/mo
+                            </span>
+                          )}
                         </p>
                       </div>
                     </div>

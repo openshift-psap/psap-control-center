@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import {
   ArrowLeftIcon,
@@ -18,6 +18,7 @@ import {
   LockClosedIcon,
   LockOpenIcon,
   ClockIcon,
+  CurrencyDollarIcon,
 } from '@heroicons/react/24/outline'
 import { useDropzone } from 'react-dropzone'
 import {
@@ -33,6 +34,7 @@ import {
 import { useCurrentClusterUser } from '../hooks/useReservations'
 import { useHearthCluster } from '../hooks/useHearth'
 import { useGpuStatus } from '../hooks/useGpuStatus'
+import { useClusterCost, useRefreshClusterCost } from '../hooks/useClusterCost'
 import { format } from 'date-fns'
 import clsx from 'clsx'
 import type { TopologyNode, PodInfo } from '../types'
@@ -498,9 +500,20 @@ export default function ClusterDetail() {
   const { data: ocpDetails, isLoading: ocpLoading } = useOcpDetails(id!)
   const { data: operatorsData, isLoading: operatorsLoading } = useClusterOperators(id!)
   const { data: workloads, isLoading: workloadsLoading } = useClusterWorkloads(id!)
-  
+  const { data: cost } = useClusterCost(id!)
+  const refreshCost = useRefreshClusterCost()
+
   const refreshStatus = useRefreshClusterStatus()
   const uploadKubeconfig = useUploadKubeconfig()
+
+  const costAutoRefreshed = useRef<string | null>(null)
+  useEffect(() => {
+    if (cluster && cluster.provider === 'ibm' && id && costAutoRefreshed.current !== id) {
+      costAutoRefreshed.current = id
+      refreshCost.mutate(id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cluster?.id, cluster?.provider, id])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: { 'application/x-yaml': ['.yaml', '.yml'], 'text/plain': ['.kubeconfig'] },
@@ -779,6 +792,79 @@ export default function ClusterDetail() {
             <div className="mt-2 text-xs text-gray-500">
               DRA {gpuStatus.dra_api_version} &middot; {gpuStatus.gpu_allocation_mode} mode
             </div>
+          )}
+        </div>
+      )}
+
+      {/* Cost Card */}
+      {cluster.provider === 'ibm' && (
+        <div className="card p-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+              <CurrencyDollarIcon className="h-5 w-5 text-emerald-600" />
+              Cost
+            </h3>
+            <div className="flex items-center gap-3">
+              {cost?.fetched_at && (
+                <span className="text-xs text-gray-400">
+                  Updated {format(new Date(cost.fetched_at), 'MMM d, HH:mm')}
+                </span>
+              )}
+              <button
+                onClick={() => refreshCost.mutate(id!)}
+                disabled={refreshCost.isPending}
+                className="btn-secondary text-sm py-1.5 px-3"
+              >
+                <ArrowPathIcon className={clsx('h-3.5 w-3.5 mr-1.5', refreshCost.isPending && 'animate-spin')} />
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          {cost?.error ? (
+            <div className="flex items-start gap-2 text-sm text-orange-600 bg-orange-50 p-3 rounded-lg">
+              <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              <span>{cost.error}</span>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                <div className="text-center p-3 bg-emerald-50 rounded-lg">
+                  <p className="text-2xl font-bold text-emerald-700">
+                    {cost?.total_cost != null
+                      ? cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })
+                      : '—'}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {cost?.billing_month ? `Month to date (${cost.billing_month})` : 'Month to date'}
+                  </p>
+                </div>
+                <div className="text-center p-3 bg-gray-50 rounded-lg">
+                  <p className="text-2xl font-bold text-gray-700">
+                    {cost?.prior_total_cost != null
+                      ? cost.prior_total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })
+                      : '—'}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {cost?.prior_billing_month ? `Last month (${cost.prior_billing_month})` : 'Last month'}
+                  </p>
+                </div>
+              </div>
+
+              {cost?.node_breakdown && cost.node_breakdown.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-gray-500 mb-2">Per-node cost (this month)</p>
+                  {cost.node_breakdown.map((n) => (
+                    <div key={n.node} className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded">
+                      <span className="font-mono text-xs text-gray-700 truncate">{n.node}</span>
+                      <span className="font-medium text-gray-900">
+                        {n.cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

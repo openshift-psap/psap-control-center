@@ -21,7 +21,7 @@ import { clusterApi } from '../services/api'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
-import type { GpuAllocationStatus } from '../types'
+import type { GpuAllocationStatus, ClusterCost } from '../types'
 import GpuDonutChart from '../components/GpuDonutChart'
 import { isAdmin } from '../stores/authStore'
 
@@ -183,6 +183,19 @@ export default function Clusters() {
   })
   const gpuHistoryByCluster = clusters.reduce<Record<string, Array<{ name: string; namespace: string; gpu_count: number; node?: string; finished_at: string }>>>((acc, c, i) => {
     acc[c.id] = (gpuHistoryQueries[i]?.data as { pods: typeof acc[string] } | undefined)?.pods || []
+    return acc
+  }, {})
+
+  const costQueries = useQueries({
+    queries: clusters.map((c) => ({
+      queryKey: ['clusterCost', c.id],
+      queryFn: () => clusterApi.getCost(c.id),
+      enabled: c.provider === 'ibm',
+      staleTime: 60_000,
+    })),
+  })
+  const costByCluster = clusters.reduce<Record<string, ClusterCost | undefined>>((acc, c, i) => {
+    acc[c.id] = costQueries[i]?.data as ClusterCost | undefined
     return acc
   }, {})
 
@@ -480,6 +493,25 @@ export default function Clusters() {
                           </p>
                         </div>
                       </div>
+                    </div>
+                  )
+                })()}
+
+                {(() => {
+                  const cost = costByCluster[cluster.id]
+                  if (!cost || cost.error || cost.total_cost == null) return null
+                  return (
+                    <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-sm">
+                      <span className="text-gray-500">
+                        This month <span className="font-semibold text-gray-900">
+                          {cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
+                        </span>
+                      </span>
+                      {cost.prior_total_cost != null && (
+                        <span className="text-gray-400">
+                          Last month {cost.prior_total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
+                        </span>
+                      )}
                     </div>
                   )
                 })()}

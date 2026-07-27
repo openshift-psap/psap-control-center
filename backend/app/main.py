@@ -155,9 +155,9 @@ async def lifespan(app: FastAPI):
 
     refresh_task = asyncio.create_task(cluster_refresh_task())
     logger.info("Cluster auto-refresh task started (every 10 min)")
-    
+
     yield
-    
+
     # Cleanup
     status_task.cancel()
     refresh_task.cancel()

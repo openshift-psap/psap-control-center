@@ -6,8 +6,10 @@ from datetime import datetime
 import os
 
 from app.models.cluster import Cluster, CLUSTER_COLORS
+from app.models.cluster_cost import ClusterCost
 from app.schemas.cluster import ClusterCreate, ClusterUpdate, ClusterStatus
 from app.services.kubernetes_service import KubernetesService
+from app.services import billing_csv_service
 from app.core.config import settings
 from app.utils.logger import create_logger
 
@@ -226,6 +228,15 @@ class ClusterService:
                 cluster.gpu_count = cluster_info.get("gpu_count")
                 cluster.gpu_type = cluster_info.get("gpu_type")
 
+            if not cluster.infra_id:
+                try:
+                    infra_id = await self._run_in_thread(k8s_service.get_infra_id, executor)
+                    if infra_id:
+                        cluster.infra_id = infra_id
+                        logger.info(f"Auto-detected infra_id for {cluster.name}: {infra_id}")
+                except Exception as e:
+                    logger.debug(f"Could not detect infra_id for {cluster.name}: {e}")
+
             await self.db.commit()
             await self.db.refresh(cluster)
 
@@ -300,5 +311,77 @@ class ClusterService:
         
         await self.refresh_cluster_status(cluster_id)
         await self.db.refresh(cluster)
-        
+
         return cluster
+
+    async def _get_or_create_cost_row(self, cluster_id: str) -> ClusterCost:
+        result = await self.db.execute(
+            select(ClusterCost).where(ClusterCost.cluster_id == cluster_id)
+        )
+        cost_row = result.scalar_one_or_none()
+        if not cost_row:
+            cost_row = ClusterCost(cluster_id=cluster_id)
+            self.db.add(cost_row)
+        return cost_row
+
+    async def refresh_cluster_cost(self, cluster_id: str, executor=None) -> Optional[ClusterCost]:
+        cluster = await self.get_cluster(cluster_id)
+        if not cluster:
+            return None
+
+        cost_row = await self._get_or_create_cost_row(cluster_id)
+
+        if not cluster.infra_id:
+            cost_row.error = "No infra_id detected — trigger a cluster status refresh first"
+            cost_row.fetched_at = datetime.utcnow()
+            await self.db.commit()
+            await self.db.refresh(cost_row)
+            return cost_row
+
+        reports = billing_csv_service.get_available_reports()
+        if not reports:
+            cost_row.error = "No billing CSVs uploaded — upload one via the billing API"
+            cost_row.fetched_at = datetime.utcnow()
+            await self.db.commit()
+            await self.db.refresh(cost_row)
+            return cost_row
+
+        current_csv = reports[-1]["file_path"]
+        current_month = reports[-1]["billing_month"]
+        prior_month = billing_csv_service.prior_billing_month(current_month)
+        prior_csv = billing_csv_service.find_csv_for_month(prior_month)
+
+        try:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                executor,
+                billing_csv_service.get_cluster_cost,
+                cluster.infra_id,
+                current_csv,
+                prior_csv,
+            )
+
+            cost_row.currency = result.currency
+            cost_row.billing_month = result.billing_month
+            cost_row.total_cost = result.total_cost
+            cost_row.node_breakdown = result.node_breakdown
+            cost_row.prior_billing_month = result.prior_billing_month
+            cost_row.prior_total_cost = result.prior_total_cost
+            cost_row.prior_node_breakdown = result.prior_node_breakdown
+            cost_row.unmatched_line_items = result.unmatched_line_items
+            cost_row.fetched_at = datetime.utcnow()
+            cost_row.error = None
+        except Exception as e:
+            logger.error(f"Cost extraction failed for cluster {cluster_id}: {e}")
+            cost_row.error = str(e)
+            cost_row.fetched_at = datetime.utcnow()
+
+        await self.db.commit()
+        await self.db.refresh(cost_row)
+        return cost_row
+
+    async def get_cluster_cost(self, cluster_id: str) -> Optional[ClusterCost]:
+        result = await self.db.execute(
+            select(ClusterCost).where(ClusterCost.cluster_id == cluster_id)
+        )
+        return result.scalar_one_or_none()

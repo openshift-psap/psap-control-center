@@ -1,0 +1,225 @@
+import csv
+import io
+import os
+from collections import defaultdict
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+from app.core.config import settings
+from app.utils.logger import create_logger
+
+logger = create_logger("BillingCsvService")
+
+HEADER_SKIP_LINES = 3
+
+
+class BillingCsvServiceError(Exception):
+    pass
+
+
+class ClusterCostResult:
+    def __init__(
+        self,
+        currency: str,
+        billing_month: str,
+        total_cost: float,
+        node_breakdown: List[Dict[str, Any]],
+        prior_billing_month: Optional[str],
+        prior_total_cost: Optional[float],
+        prior_node_breakdown: Optional[List[Dict[str, Any]]],
+        unmatched_line_items: List[Dict[str, Any]],
+    ):
+        self.currency = currency
+        self.billing_month = billing_month
+        self.total_cost = total_cost
+        self.node_breakdown = node_breakdown
+        self.prior_billing_month = prior_billing_month
+        self.prior_total_cost = prior_total_cost
+        self.prior_node_breakdown = prior_node_breakdown
+        self.unmatched_line_items = unmatched_line_items
+
+
+def parse_billing_csv(file_path: str) -> List[Dict[str, Any]]:
+    """Parse an IBM Cloud billing CSV export, skipping the 3-line metadata header."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    if len(lines) <= HEADER_SKIP_LINES:
+        return []
+
+    reader = csv.DictReader(io.StringIO("".join(lines[HEADER_SKIP_LINES:])))
+    return list(reader)
+
+
+def extract_billing_month(file_path: str) -> Optional[str]:
+    """Read the billing month from the CSV metadata header (line 2, column 3)."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = [f.readline() for _ in range(2)]
+
+    if len(lines) < 2:
+        return None
+
+    reader = csv.reader(io.StringIO(lines[1]))
+    row = next(reader, None)
+    if row and len(row) >= 3:
+        return row[2]
+    return None
+
+
+def _extract_billing_month_from_content(content: str) -> Optional[str]:
+    """Read the billing month from CSV content string."""
+    lines = content.split("\n", 2)
+    if len(lines) < 2:
+        return None
+    reader = csv.reader(io.StringIO(lines[1]))
+    row = next(reader, None)
+    if row and len(row) >= 3:
+        return row[2]
+    return None
+
+
+def get_cluster_cost_from_rows(
+    infra_id: str,
+    rows: List[Dict[str, Any]],
+    billing_month: str,
+) -> Tuple[float, List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Filter and aggregate costs for a cluster by infra_id prefix match on Instance Name.
+    Returns (total_cost, node_breakdown, unmatched_infra_items)."""
+    instance_costs: Dict[str, Dict[str, Any]] = {}
+
+    for row in rows:
+        instance_name = row.get("Instance Name") or ""
+        if infra_id not in instance_name:
+            continue
+
+        cost = float(row.get("Cost") or 0)
+        if cost == 0:
+            continue
+
+        service = row.get("Service Name") or ""
+        if instance_name not in instance_costs:
+            instance_costs[instance_name] = {
+                "instance_name": instance_name,
+                "service": service,
+                "cost": 0.0,
+            }
+        instance_costs[instance_name]["cost"] += cost
+
+    node_breakdown = []
+    unmatched = []
+    for entry in instance_costs.values():
+        name = entry["instance_name"]
+        is_node = any(
+            pattern in name
+            for pattern in ["master-", "worker-", "gpu-", "storage-"]
+        )
+        if is_node:
+            node_breakdown.append({
+                "node": name,
+                "instance_name": name,
+                "cost": round(entry["cost"], 2),
+                "service": entry["service"],
+            })
+        else:
+            unmatched.append({
+                "instance_name": name,
+                "cost": round(entry["cost"], 2),
+                "service": entry["service"],
+            })
+
+    total_cost = sum(e["cost"] for e in node_breakdown) + sum(e["cost"] for e in unmatched)
+    return round(total_cost, 2), node_breakdown, unmatched
+
+
+def get_cluster_cost(
+    infra_id: str,
+    current_csv_path: str,
+    prior_csv_path: Optional[str] = None,
+) -> ClusterCostResult:
+    """Extract cluster costs from billing CSV(s) by matching infra_id."""
+    current_rows = parse_billing_csv(current_csv_path)
+    billing_month = extract_billing_month(current_csv_path)
+    if not billing_month:
+        raise BillingCsvServiceError(f"Could not extract billing month from {current_csv_path}")
+
+    total_cost, node_breakdown, unmatched = get_cluster_cost_from_rows(
+        infra_id, current_rows, billing_month
+    )
+
+    prior_billing_month = None
+    prior_total_cost = None
+    prior_node_breakdown = None
+
+    if prior_csv_path and os.path.exists(prior_csv_path):
+        try:
+            prior_rows = parse_billing_csv(prior_csv_path)
+            prior_billing_month = extract_billing_month(prior_csv_path)
+            prior_total_cost, prior_node_breakdown, _ = get_cluster_cost_from_rows(
+                infra_id, prior_rows, prior_billing_month or ""
+            )
+        except Exception as e:
+            logger.warning(f"Prior month CSV parse failed: {e}")
+
+    return ClusterCostResult(
+        currency="USD",
+        billing_month=billing_month,
+        total_cost=total_cost,
+        node_breakdown=node_breakdown,
+        prior_billing_month=prior_billing_month,
+        prior_total_cost=prior_total_cost,
+        prior_node_breakdown=prior_node_breakdown,
+        unmatched_line_items=unmatched,
+    )
+
+
+def get_available_reports(storage_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List billing CSV files in the storage directory with metadata."""
+    path = storage_path or settings.BILLING_CSV_STORAGE_PATH
+    if not os.path.isdir(path):
+        return []
+
+    reports = []
+    for fname in sorted(os.listdir(path)):
+        if not fname.endswith(".csv"):
+            continue
+        fpath = os.path.join(path, fname)
+        stat = os.stat(fpath)
+        billing_month = extract_billing_month(fpath)
+        reports.append({
+            "billing_month": billing_month or "unknown",
+            "file_name": fname,
+            "file_path": fpath,
+            "file_size": stat.st_size,
+            "uploaded_at": datetime.fromtimestamp(stat.st_mtime),
+        })
+
+    return reports
+
+
+def find_csv_for_month(billing_month: str, storage_path: Optional[str] = None) -> Optional[str]:
+    """Find the billing CSV file for a given month (e.g. '2026-07')."""
+    reports = get_available_reports(storage_path)
+    for r in reports:
+        if r["billing_month"] == billing_month:
+            return r["file_path"]
+    return None
+
+
+def prior_billing_month(billing_month: str) -> str:
+    year, month = (int(part) for part in billing_month.split("-"))
+    if month == 1:
+        return f"{year - 1}-12"
+    return f"{year}-{month - 1:02d}"
+
+
+def detect_cluster_infra_ids(csv_path: str) -> List[str]:
+    """Extract unique cluster infra IDs from the CSV tag column names."""
+    rows = parse_billing_csv(csv_path)
+    if not rows:
+        return []
+
+    infra_ids = set()
+    for key in rows[0].keys():
+        if key and key.startswith("kubernetes-io-cluster-"):
+            infra_ids.add(key.replace("kubernetes-io-cluster-", ""))
+    return sorted(infra_ids)
