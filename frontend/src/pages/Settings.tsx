@@ -10,7 +10,7 @@ import {
   DocumentTextIcon,
 } from '@heroicons/react/24/outline'
 import { useSlackSettings, useUpdateSlackSettings, useTestSlack } from '../hooks/useSettings'
-import { useBillingReports, useUploadBillingCsv, useDeleteBillingReport } from '../hooks/useBilling'
+import { useBillingReports, useUploadBillingCsv, useDeleteBillingReport, useCostRefreshStatus } from '../hooks/useBilling'
 
 export default function Settings() {
   const { data: slackSettings, isLoading, isError, error } = useSlackSettings()
@@ -165,13 +165,15 @@ function BillingCsvCard() {
   const uploadMutation = useUploadBillingCsv()
   const deleteMutation = useDeleteBillingReport()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [autoRefresh, setAutoRefresh] = useState(true)
+  const { data: refreshStatus } = useCostRefreshStatus(autoRefresh)
 
   const reports = data?.reports ?? []
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
-      uploadMutation.mutate(file)
+      uploadMutation.mutate({ file, autoRefresh })
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
@@ -204,25 +206,49 @@ function BillingCsvCard() {
 
         <div className="mt-6 space-y-4">
           <div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv"
-              onChange={handleUpload}
-              className="hidden"
-              id="billing-csv-upload"
-            />
-            <label
-              htmlFor="billing-csv-upload"
-              className="btn-primary inline-flex items-center cursor-pointer"
-            >
-              <ArrowUpTrayIcon className="h-4 w-4 mr-1.5" />
-              {uploadMutation.isPending ? 'Uploading...' : 'Upload CSV'}
-            </label>
+            <div className="flex items-center gap-4">
+              <div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv"
+                  onChange={handleUpload}
+                  className="hidden"
+                  id="billing-csv-upload"
+                />
+                <label
+                  htmlFor="billing-csv-upload"
+                  className="btn-primary inline-flex items-center cursor-pointer"
+                >
+                  <ArrowUpTrayIcon className="h-4 w-4 mr-1.5" />
+                  {uploadMutation.isPending ? 'Uploading...' : 'Upload CSV'}
+                </label>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={autoRefresh}
+                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                Auto-refresh cluster costs
+              </label>
+            </div>
             <p className="mt-1.5 text-xs text-gray-500">
               Download the billing CSV from IBM Cloud Console &rarr; Billing &rarr; Usage &rarr; Export &rarr; Instances.
             </p>
           </div>
+
+          {refreshStatus?.in_progress && (
+            <div className="flex items-center gap-2 text-sm text-blue-700 bg-blue-50 border border-blue-200 p-3 rounded-lg">
+              <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Refreshing cluster costs... ({refreshStatus.completed}/{refreshStatus.total})
+              {refreshStatus.last_cluster && <span className="text-blue-500">— {refreshStatus.last_cluster}</span>}
+            </div>
+          )}
 
           {uploadMutation.isError && (
             <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-800">

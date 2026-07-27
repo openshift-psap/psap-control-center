@@ -14,10 +14,16 @@ export function useUploadBillingCsv() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (file: File) => billingApi.upload(file),
-    onSuccess: (data) => {
+    mutationFn: ({ file, autoRefresh }: { file: File; autoRefresh: boolean }) =>
+      billingApi.upload(file, autoRefresh),
+    onSuccess: (data, { autoRefresh }) => {
       queryClient.invalidateQueries({ queryKey: ['billing', 'reports'] })
-      toast.success(`Billing report uploaded: ${data.billing_month} (${data.cluster_count} clusters)`)
+      if (autoRefresh) {
+        queryClient.invalidateQueries({ queryKey: ['clusterCost'] })
+        toast.success(`Billing report uploaded: ${data.billing_month} — refreshing cluster costs...`)
+      } else {
+        toast.success(`Billing report uploaded: ${data.billing_month} (${data.cluster_count} clusters)`)
+      }
     },
     onError: (error: Error) => {
       toast.error(`Upload failed: ${error.message}`)
@@ -36,6 +42,24 @@ export function useDeleteBillingReport() {
     },
     onError: (error: Error) => {
       toast.error(`Delete failed: ${error.message}`)
+    },
+  })
+}
+
+export function useCostRefreshStatus(enabled: boolean) {
+  const queryClient = useQueryClient()
+
+  return useQuery({
+    queryKey: ['billing', 'cost-refresh-status'],
+    queryFn: billingApi.getCostRefreshStatus,
+    enabled,
+    refetchInterval: (query) => {
+      const data = query.state.data
+      if (data?.in_progress) return 2000
+      if (data && !data.in_progress && data.completed > 0) {
+        queryClient.invalidateQueries({ queryKey: ['clusterCost'] })
+      }
+      return false
     },
   })
 }

@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile, File
 from app.core.auth import require_admin
 from app.core.config import settings
+from app.core.database import AsyncSessionLocal
 from app.services import billing_csv_service
 from app.schemas.cluster import BillingReportInfo, BillingReportListResponse
 from app.utils.logger import create_logger
@@ -13,9 +14,41 @@ router = APIRouter()
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
+async def _refresh_all_cluster_costs():
+    from app.main import cost_refresh_state
+    from app.services.cluster_service import ClusterService
+
+    cost_refresh_state["in_progress"] = True
+    cost_refresh_state["completed"] = 0
+    cost_refresh_state["last_cluster"] = None
+
+    try:
+        async with AsyncSessionLocal() as session:
+            svc = ClusterService(session)
+            clusters, _ = await svc.get_clusters(0, 200, active_only=False)
+            eligible = [c for c in clusters if c.infra_id]
+            cost_refresh_state["total"] = len(eligible)
+
+            for cluster in eligible:
+                try:
+                    await svc.refresh_cluster_cost(cluster.id)
+                except Exception as e:
+                    logger.warning(f"Cost refresh failed for {cluster.name}: {e}")
+                cost_refresh_state["completed"] += 1
+                cost_refresh_state["last_cluster"] = cluster.name
+
+        logger.info(f"Batch cost refresh completed: {cost_refresh_state['completed']}/{cost_refresh_state['total']}")
+    except Exception as e:
+        logger.error(f"Batch cost refresh error: {e}")
+    finally:
+        cost_refresh_state["in_progress"] = False
+
+
 @router.post("/upload", response_model=BillingReportInfo)
 async def upload_billing_csv(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    auto_refresh: bool = Query(True),
     _user: dict = Depends(require_admin),
 ):
     """Upload an IBM Cloud billing CSV export."""
@@ -49,6 +82,9 @@ async def upload_billing_csv(
         f"{stat.st_size} bytes, {len(infra_ids)} clusters detected"
     )
 
+    if auto_refresh:
+        background_tasks.add_task(_refresh_all_cluster_costs)
+
     from datetime import datetime
     return BillingReportInfo(
         billing_month=billing_month,
@@ -57,6 +93,15 @@ async def upload_billing_csv(
         uploaded_at=datetime.fromtimestamp(stat.st_mtime),
         cluster_count=len(infra_ids),
     )
+
+
+@router.get("/cost-refresh-status")
+async def get_cost_refresh_status(
+    _user: dict = Depends(require_admin),
+):
+    """Return the current state of the batch cost refresh."""
+    from app.main import cost_refresh_state
+    return cost_refresh_state
 
 
 @router.get("/reports", response_model=BillingReportListResponse)

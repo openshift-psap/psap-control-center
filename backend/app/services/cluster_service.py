@@ -361,16 +361,24 @@ class ClusterService:
                 prior_csv,
             )
 
+            no_match = (
+                result.total_cost == 0
+                and not result.node_breakdown
+                and not result.unmatched_line_items
+            )
             cost_row.currency = result.currency
             cost_row.billing_month = result.billing_month
-            cost_row.total_cost = result.total_cost
+            cost_row.total_cost = None if no_match else result.total_cost
             cost_row.node_breakdown = result.node_breakdown
             cost_row.prior_billing_month = result.prior_billing_month
             cost_row.prior_total_cost = result.prior_total_cost
             cost_row.prior_node_breakdown = result.prior_node_breakdown
             cost_row.unmatched_line_items = result.unmatched_line_items
             cost_row.fetched_at = datetime.utcnow()
-            cost_row.error = None
+            cost_row.error = (
+                "No matching billing data found for this cluster's infrastructure ID"
+                if no_match else None
+            )
         except Exception as e:
             logger.error(f"Cost extraction failed for cluster {cluster_id}: {e}")
             cost_row.error = str(e)

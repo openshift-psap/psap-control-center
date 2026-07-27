@@ -1,8 +1,8 @@
 import axios from 'axios'
-import type { 
-  Cluster, 
-  ClusterStatus, 
-  ClusterListResponse, 
+import type {
+  Cluster,
+  ClusterStatus,
+  ClusterListResponse,
   ClusterTopology,
   OcpDetails,
   Operator,
@@ -18,6 +18,7 @@ import type {
   HearthStatus,
   HearthConnectResponse,
   BillingReport,
+  CostRefreshStatus,
 } from '../types'
 import { createLogger } from '../utils/logger'
 import { clearSession } from '../stores/authStore'
@@ -331,11 +332,12 @@ export const settingsApi = {
 }
 
 export const billingApi = {
-  upload: async (file: File): Promise<BillingReport> => {
+  upload: async (file: File, autoRefresh = true): Promise<BillingReport> => {
     const formData = new FormData()
     formData.append('file', file)
     const { data } = await api.post('/billing/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      params: { auto_refresh: autoRefresh },
     })
     return data
   },
@@ -347,6 +349,11 @@ export const billingApi = {
 
   deleteReport: async (billingMonth: string): Promise<void> => {
     await api.delete(`/billing/${billingMonth}`)
+  },
+
+  getCostRefreshStatus: async (): Promise<CostRefreshStatus> => {
+    const { data } = await api.get('/billing/cost-refresh-status')
+    return data
   },
 }
 

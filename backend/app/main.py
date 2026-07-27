@@ -27,6 +27,13 @@ cluster_refresh_state = {
     "completed": 0,
 }
 
+cost_refresh_state = {
+    "in_progress": False,
+    "total": 0,
+    "completed": 0,
+    "last_cluster": None,
+}
+
 
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler to prevent raw exception details from leaking to clients."""

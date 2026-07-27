@@ -499,7 +499,14 @@ export default function Clusters() {
 
                 {(() => {
                   const cost = costByCluster[cluster.id]
-                  if (!cost || cost.error || cost.total_cost == null) return null
+                  if (!cost) return null
+                  if (cost.error || cost.total_cost == null) {
+                    return (
+                      <div className="mt-4 pt-4 border-t border-gray-100 text-sm text-gray-400">
+                        No billing data
+                      </div>
+                    )
+                  }
                   return (
                     <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-sm">
                       <span className="text-gray-500">

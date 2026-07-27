@@ -177,6 +177,13 @@ export interface BillingReport {
   cluster_count: number
 }
 
+export interface CostRefreshStatus {
+  in_progress: boolean
+  total: number
+  completed: number
+  last_cluster: string | null
+}
+
 export interface ReservationListResponse {
   reservations: Reservation[]
   total: number
