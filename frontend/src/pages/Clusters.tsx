@@ -194,9 +194,9 @@ export default function Clusters() {
       staleTime: 60_000,
     })),
   })
-  const costByCluster = clusters.reduce<Record<string, ClusterCost | undefined>>((acc, c, i) => {
+  const costsByCluster = clusters.reduce<Record<string, ClusterCost[]>>((acc, c, i) => {
     const costs = costQueries[i]?.data as ClusterCost[] | undefined
-    acc[c.id] = costs?.[0]
+    acc[c.id] = costs || []
     return acc
   }, {})
 
@@ -499,9 +499,10 @@ export default function Clusters() {
                 })()}
 
                 {(() => {
-                  const cost = costByCluster[cluster.id]
-                  if (!cost) return null
-                  if (cost.error || cost.total_cost == null) {
+                  const costs = costsByCluster[cluster.id]
+                  if (!costs || costs.length === 0) return null
+                  const valid = costs.filter((c) => !c.error && c.total_cost != null)
+                  if (valid.length === 0) {
                     return (
                       <div className="mt-4 pt-4 border-t border-gray-100 text-sm text-gray-400">
                         No billing data
@@ -509,13 +510,15 @@ export default function Clusters() {
                     )
                   }
                   return (
-                    <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4 text-sm">
-                      <span className="text-gray-500">
-                        <span className="font-semibold text-gray-900">
-                          {cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
-                        </span>
-                        {cost.billing_month && <span className="ml-1 text-gray-400">({cost.billing_month})</span>}
-                      </span>
+                    <div className="mt-4 pt-4 border-t border-gray-100 space-y-1 text-sm">
+                      {valid.map((cost) => (
+                        <div key={cost.billing_month} className="flex items-center justify-between">
+                          <span className="text-gray-400">{cost.billing_month}</span>
+                          <span className="font-semibold text-gray-900">
+                            {cost.total_cost!.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   )
                 })()}
