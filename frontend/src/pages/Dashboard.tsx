@@ -8,6 +8,7 @@ import {
   FireIcon,
   LockClosedIcon,
   ExclamationTriangleIcon,
+  CurrencyDollarIcon,
 } from '@heroicons/react/24/outline'
 import { useQueries } from '@tanstack/react-query'
 import { useClusters } from '../hooks/useClusters'
@@ -15,6 +16,7 @@ import { useReservations } from '../hooks/useReservations'
 import { useHearthClusters } from '../hooks/useHearth'
 import { clusterApi } from '../services/api'
 import { format } from 'date-fns'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import type { HearthCluster, GpuAllocationStatus, ClusterCost } from '../types'
 import GpuDonutChart from '../components/GpuDonutChart'
 
@@ -71,17 +73,27 @@ export default function Dashboard() {
     acc[id] = costs?.[0]
     return acc
   }, {})
-  const totalMonthCost = costQueries.reduce((sum, q) => {
-    const costs = q.data as ClusterCost[] | undefined
-    const c = costs?.[0]
-    return sum + (c && !c.error && c.total_cost != null ? c.total_cost : 0)
-  }, 0)
   const costCurrency = (() => {
     for (const q of costQueries) {
       const costs = q.data as ClusterCost[] | undefined
       if (costs?.[0]?.currency) return costs[0].currency
     }
     return 'USD'
+  })()
+
+  const monthlyCostData = (() => {
+    const byMonth: Record<string, number> = {}
+    for (const q of costQueries) {
+      const costs = q.data as ClusterCost[] | undefined
+      if (!costs) continue
+      for (const c of costs) {
+        if (c.error || c.total_cost == null || !c.billing_month) continue
+        byMonth[c.billing_month] = (byMonth[c.billing_month] || 0) + c.total_cost
+      }
+    }
+    return Object.entries(byMonth)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, cost]) => ({ month, cost: Math.round(cost) }))
   })()
 
   const stats = [
@@ -184,20 +196,45 @@ export default function Dashboard() {
             </div>
           </div>
         </Link>
-        {ibmClusterIds.length > 0 && (
-          <Link to="/clusters" className="card p-6 hover:shadow-md transition-shadow">
-            <div className="flex items-center">
-              <div className="bg-emerald-500 rounded-lg p-3">
-                <ServerStackIcon className="h-6 w-6 text-white" />
-              </div>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-500">Total Cost</p>
-                <p className="text-2xl font-semibold text-gray-900">
-                  {totalMonthCost.toLocaleString(undefined, { style: 'currency', currency: costCurrency, maximumFractionDigits: 0 })}
-                </p>
-              </div>
+        {ibmClusterIds.length > 0 && monthlyCostData.length > 0 && (
+          <div className="card p-6 lg:col-span-2">
+            <div className="flex items-center gap-2 mb-3">
+              <CurrencyDollarIcon className="h-5 w-5 text-emerald-600" />
+              <p className="text-sm font-medium text-gray-500">Monthly Cost</p>
             </div>
-          </Link>
+            <ResponsiveContainer width="100%" height={80}>
+              <LineChart data={monthlyCostData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
+                <XAxis
+                  dataKey="month"
+                  tick={{ fontSize: 11, fill: '#9ca3af' }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={{ fontSize: 11, fill: '#9ca3af' }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                  width={45}
+                />
+                <Tooltip
+                  formatter={(value) => [
+                    Number(value).toLocaleString(undefined, { style: 'currency', currency: costCurrency, maximumFractionDigits: 0 }),
+                    'Total',
+                  ]}
+                  contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e5e7eb' }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="cost"
+                  stroke="#059669"
+                  strokeWidth={2}
+                  dot={{ r: 4, fill: '#059669' }}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         )}
       </div>
 
