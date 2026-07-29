@@ -500,7 +500,7 @@ export default function ClusterDetail() {
   const { data: ocpDetails, isLoading: ocpLoading } = useOcpDetails(id!)
   const { data: operatorsData, isLoading: operatorsLoading } = useClusterOperators(id!)
   const { data: workloads, isLoading: workloadsLoading } = useClusterWorkloads(id!)
-  const { data: costs } = useClusterCosts(id!)
+  const { data: costs, isLoading: costsLoading } = useClusterCosts(id!)
   const refreshCost = useRefreshClusterCost()
 
   const refreshStatus = useRefreshClusterStatus()
@@ -812,7 +812,9 @@ export default function ClusterDetail() {
             </div>
           </div>
 
-          {(!costs || costs.length === 0) ? (
+          {costsLoading ? (
+            <div className="text-sm text-gray-400">Loading...</div>
+          ) : (!costs || costs.length === 0) ? (
             <div className="flex items-start gap-2 text-sm text-orange-600 bg-orange-50 p-3 rounded-lg">
               <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
               <span>No billing data available</span>

@@ -214,7 +214,10 @@ export default function Dashboard() {
                   tick={{ fontSize: 11, fill: '#9ca3af' }}
                   axisLine={false}
                   tickLine={false}
-                  tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+                  tickFormatter={(v) => {
+                    const symbol = (0).toLocaleString(undefined, { style: 'currency', currency: costCurrency }).replace(/[\d.,\s]/g, '')
+                    return `${symbol}${(v / 1000).toFixed(0)}k`
+                  }}
                   width={45}
                 />
                 <Tooltip

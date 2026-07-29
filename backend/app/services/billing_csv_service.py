@@ -85,7 +85,11 @@ def get_cluster_cost_from_rows(
 
     for row in rows:
         instance_name = row.get("Instance Name") or ""
-        if infra_id not in instance_name:
+        idx = instance_name.find(infra_id)
+        if idx == -1:
+            continue
+        end = idx + len(infra_id)
+        if end < len(instance_name) and instance_name[end] not in ("-", "_"):
             continue
 
         try:

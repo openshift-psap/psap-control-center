@@ -115,9 +115,13 @@ async def _migrate_cluster_costs_multi_month(conn, is_pg: bool):
     if not has_old_schema:
         return
     logger.info("Migration: recreating cluster_costs for multi-month support")
-    await conn.execute(text("DROP TABLE IF EXISTS cluster_costs"))
-    from app.models.cluster_cost import ClusterCost
-    await conn.run_sync(lambda sync_conn: ClusterCost.__table__.create(sync_conn, checkfirst=True))
+    try:
+        await conn.execute(text("DROP TABLE IF EXISTS cluster_costs"))
+        from app.models.cluster_cost import ClusterCost
+        await conn.run_sync(lambda sync_conn: ClusterCost.__table__.create(sync_conn, checkfirst=True))
+    except Exception as e:
+        logger.error(f"cluster_costs multi-month migration failed: {e}")
+        raise
 
 
 async def _normalize_status_values(conn):
