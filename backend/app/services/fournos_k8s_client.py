@@ -11,6 +11,7 @@ import os
 import re
 import threading
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -329,14 +330,16 @@ def _phase_from_conditions(conditions: list) -> str:
     cond_status = cond.get("status", "")
     if reason == "Succeeded" and cond_status == "True":
         return "Succeeded"
-    if reason == "Failed" or cond_status == "False":
-        return "Failed"
-    if reason in ("Running", "Started"):
-        return "Running"
+    # Cancellation/skipping are also represented by a False condition, so
+    # classify their specific reasons before the generic failure fallback.
     if reason == "TaskRunCancelled":
         return "Cancelled"
     if reason == "SkippingNoMatch":
         return "Skipped"
+    if reason == "Failed" or cond_status == "False":
+        return "Failed"
+    if reason in ("Running", "Started"):
+        return "Running"
     return "Pending"
 
 
@@ -365,16 +368,16 @@ def get_current_step_for_job(
 
 
 def extract_pipeline_stages(pipelinerun: dict) -> list:
-    status = pipelinerun.get("status", {})
-    child_refs = status.get("childReferences", [])
-    pipeline_spec = status.get("pipelineSpec", {})
+    status = pipelinerun.get("status") or {}
+    child_refs = status.get("childReferences") or []
+    skipped_tasks = status.get("skippedTasks") or []
+    pipeline_spec = status.get("pipelineSpec") or {}
 
     finally_task_names = set()
     for task in pipeline_spec.get("finally", []):
         finally_task_names.add(task.get("name", ""))
 
-    stages = []
-    for ref in child_refs:
+    def _fetch_one(ref: dict) -> dict:
         task_name = ref.get(
             "pipelineTaskName", ref.get("name", "unknown")
         )
@@ -392,14 +395,48 @@ def extract_pipeline_stages(pipelinerun: dict) -> list:
                 tr_status.get("conditions", [])
             )
 
-        stages.append({
+        return {
             "name": task_name,
             "displayName": task_name.replace("-", " ").title(),
             "status": task_phase,
             "startTime": start_time,
             "completionTime": completion_time,
             "finally": task_name in finally_task_names,
+        }
+
+    # Each of these is its own blocking K8s API round-trip — a pipeline
+    # with, say, 8 tasks used to mean 8 sequential HTTP calls (and this
+    # function itself used to get called *twice* per job-detail page load,
+    # once directly and once again inside the now-removed
+    # get_current_step_for_job — see api/fournos.py's get_job route).
+    # Fanning them out across a small thread pool cuts this stage's wall
+    # time from ~N round-trips down to ~1.
+    if not child_refs:
+        stages = []
+    elif len(child_refs) == 1:
+        stages = [_fetch_one(child_refs[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=min(8, len(child_refs))) as pool:
+            stages = list(pool.map(_fetch_one, child_refs))
+
+    # Tekton does not create a TaskRun/childReference for a task whose `when`
+    # expression evaluates false. Those tasks are reported separately in
+    # PipelineRun.status.skippedTasks; include them so the merged timeline does
+    # not mislabel a completed conditional task as still queued.
+    existing_names = {stage["name"] for stage in stages}
+    for skipped in skipped_tasks:
+        task_name = skipped.get("name", "") if isinstance(skipped, dict) else ""
+        if not task_name or task_name in existing_names:
+            continue
+        stages.append({
+            "name": task_name,
+            "displayName": task_name.replace("-", " ").title(),
+            "status": "Skipped",
+            "startTime": None,
+            "completionTime": None,
+            "finally": task_name in finally_task_names,
         })
+        existing_names.add(task_name)
 
     stages.sort(
         key=lambda s: (s["finally"], s.get("startTime") or "9999")

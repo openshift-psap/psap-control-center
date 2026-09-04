@@ -25,6 +25,7 @@ from app.schemas.fournos import (
     CreateClusterLockRequest,
     FournosJobSummary,
     GitHubPR,
+    GithubSyncStatusResponse,
     HoldSlotRequest,
     JobEventResponse,
     JobListResponse,
@@ -37,6 +38,7 @@ from app.schemas.fournos import (
     SubmitMatrixRequest,
     SubmitMatrixResponse,
 )
+from app.services import github_sync_service
 from app.services import slot_hold_service as slot_holds
 from app.schemas.ui_schema import ProjectUiSchemaResponse
 from app.services import fournos_db_service as db_svc
@@ -239,40 +241,9 @@ async def _get_live_jobs() -> list:
     return await asyncio.to_thread(_get_live_jobs_sync)
 
 
-def _merge_pipeline_stages(pipeline_def: Optional[dict], actual_stages: list) -> list:
-    """Overlay real per-task status (from whatever TaskRuns Tekton has
-    created so far) onto a pipeline's full, predefined task order — so the
-    Pipeline Timeline shows every step a job *will* run, not just the ones
-    that happen to have started already. Falls back to `actual_stages`
-    as-is if the pipeline isn't one we have a definition for.
-    """
-    if not pipeline_def:
-        return actual_stages
-
-    actual_by_name = {s["name"]: s for s in actual_stages}
-
-    def _pending(name: str, is_finally: bool) -> dict:
-        return {
-            "name": name,
-            "displayName": name.replace("-", " ").title(),
-            "status": "Pending",
-            "startTime": None,
-            "completionTime": None,
-            "finally": is_finally,
-        }
-
-    merged = [
-        actual_by_name.get(name) or _pending(name, False)
-        for name in pipeline_def.get("tasks", [])
-    ]
-    merged += [
-        actual_by_name.get(name) or _pending(name, True)
-        for name in pipeline_def.get("finally", [])
-    ]
-
-    known = set(pipeline_def.get("tasks", [])) | set(pipeline_def.get("finally", []))
-    merged += [s for s in actual_stages if s["name"] not in known]
-    return merged
+# _merge_pipeline_stages moved to pipeline_definitions.merge_pipeline_stages
+# — shared with fournos_watcher.py, which snapshots the merged stage list
+# into the DB when a job finishes so History can show it too.
 
 
 def _parse_iso_utc(value: Optional[str]) -> Optional[datetime]:
@@ -389,7 +360,27 @@ async def get_job(job_name: str):
     current_step = None
 
     if job:
-        pods_raw = await asyncio.to_thread(k8s.list_pods_for_job, job_name)
+        pr_name = job.get("status", {}).get("pipelineRun", "")
+
+        # Pods and the PipelineRun are independent of each other — fetch
+        # them concurrently instead of one-after-another. (Each of these
+        # is itself a single blocking K8s API call, dispatched to a worker
+        # thread via asyncio.to_thread so the event loop isn't blocked.)
+        pods_task = asyncio.to_thread(k8s.list_pods_for_job, job_name)
+        if pr_name:
+            pr_task = asyncio.to_thread(k8s.get_pipelinerun, pr_name)
+        else:
+            pr_task = asyncio.to_thread(k8s.list_pipelineruns_for_job, job_name)
+        pods_raw, pr_result = await asyncio.gather(pods_task, pr_task)
+
+        # Preserve the previous label-based fallback for stale/missing
+        # status.pipelineRun references without adding calls to the happy path.
+        if pr_name and not pr_result:
+            prs = await asyncio.to_thread(
+                k8s.list_pipelineruns_for_job, job_name
+            )
+            pr_result = prs[0] if prs else None
+
         pods = [
             {
                 "name": p["name"],
@@ -405,16 +396,12 @@ async def get_job(job_name: str):
             for p in pods_raw
         ]
 
-        pr_name = job.get("status", {}).get("pipelineRun", "")
-        pr = None
-        if pr_name:
-            pr = await asyncio.to_thread(k8s.get_pipelinerun, pr_name)
-        if not pr:
-            prs = await asyncio.to_thread(
-                k8s.list_pipelineruns_for_job, job_name
-            )
-            pr = prs[0] if prs else None
+        pr = pr_result if pr_name else (pr_result[0] if pr_result else None)
         if pr:
+            # extract_pipeline_stages itself fans out one K8s call per
+            # TaskRun concurrently (see fournos_k8s_client.py) rather than
+            # one after another, so this one to_thread call is the only
+            # slow leg left in the chain.
             stages = await asyncio.to_thread(
                 k8s.extract_pipeline_stages, pr
             )
@@ -422,12 +409,22 @@ async def get_job(job_name: str):
         pipeline_name = job.get("spec", {}).get("pipeline", "")
         if pipeline_name:
             pipeline_def = await pipeline_definitions.get_definition(pipeline_name)
-            stages = _merge_pipeline_stages(pipeline_def, stages)
+            stages = pipeline_definitions.merge_pipeline_stages(pipeline_def, stages)
 
-        step = await asyncio.to_thread(
-            k8s.get_current_step_for_job, job_name
+        # Derived straight from the stages we already fetched above —
+        # no need for get_current_step_for_job's own separate PipelineRun
+        # list + a second, redundant round of per-TaskRun fetches for the
+        # exact same data extract_pipeline_stages just retrieved.
+        running_stage = next((s for s in stages if s.get("status") == "Running"), None)
+        current_step = (
+            {
+                "name": running_stage["name"],
+                "displayName": running_stage.get("displayName", running_stage["name"]),
+                "startTime": running_stage.get("startTime"),
+            }
+            if running_stage
+            else None
         )
-        current_step = step
 
         forge_info = _extract_forge_info(job)
         task_progress = _parse_task_progress(
@@ -461,12 +458,28 @@ async def get_job(job_name: str):
     task_progress = _parse_task_progress(
         fjob.get("status", {}).get("message", "")
     )
+    stages = db_job.stages or []
+    # A terminal job has no live "current" step. For a failed job, retain the
+    # useful pointer to the concrete TaskRun that failed, but never promote a
+    # queued/not-run placeholder to current work.
+    failed_stage = next(
+        (s for s in stages if s.get("status") == "Failed"), None
+    ) if db_job.status == "Failed" else None
+    current_step = (
+        {
+            "name": failed_stage["name"],
+            "displayName": failed_stage.get("displayName", failed_stage["name"]),
+            "startTime": failed_stage.get("startTime"),
+        }
+        if failed_stage
+        else None
+    )
 
     return {
         "job": fjob,
         "pods": [],
-        "stages": [],
-        "current_step": None,
+        "stages": stages,
+        "current_step": current_step,
         "forge_info": forge_info,
         "task_progress": task_progress,
     }
@@ -872,8 +885,15 @@ async def project_ui_schema_api(project_name: str):
 
 @router.post("/projects/{project_name}/ui-schema/refresh")
 async def project_ui_schema_refresh(project_name: str, _=Depends(require_auth)):
-    """Force-refresh the cached ui/submit.yaml for a project from GitHub."""
-    schema = await project_ui_schema.refresh_schema(project_name)
+    """Refresh GitHub caches through the shared deployment-wide cooldown."""
+    try:
+        await github_sync_service.refresh_now()
+    except github_sync_service.GithubSyncError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub sync failed: {}".format("; ".join(exc.errors)),
+        )
+    schema = await project_ui_schema.get_schema(project_name)
     return {"status": "ok", "found": schema is not None}
 
 
@@ -898,9 +918,13 @@ def _fetch_github_open_prs_sync() -> list:
         "https://api.github.com/repos/{}/pulls"
         "?state=open&per_page=100"
     ).format(settings.FORGE_GITHUB_REPO)
-    req = urllib.request.Request(
-        url, headers={"Accept": "application/vnd.github+json"}
-    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "psap-control-center",
+    }
+    if settings.GITHUB_TOKEN:
+        headers["Authorization"] = "Bearer {}".format(settings.GITHUB_TOKEN)
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=10) as resp:
         prs = json.loads(resp.read())
 
@@ -915,6 +939,13 @@ def _fetch_github_open_prs_sync() -> list:
         }
         for pr in prs
     ]
+
+
+async def refresh_open_prs() -> list:
+    """Public entry point for github_sync_service's periodic/manual refresh
+    — same coalesced fetch the GET/refresh routes below use.
+    """
+    return await _fetch_open_prs_coalesced()
 
 
 async def _fetch_open_prs_coalesced() -> list:
@@ -964,10 +995,58 @@ async def github_open_prs_refresh(_=Depends(require_auth)):
     so the UI's Refresh action gives honest feedback.
     """
     try:
-        return await _fetch_open_prs_coalesced()
+        await github_sync_service.refresh_now()
+        return _open_prs_cache or []
+    except github_sync_service.GithubSyncError as exc:
+        logger.error("Failed to refresh GitHub caches: %s", exc)
+        raise HTTPException(502, "GitHub sync failed: {}".format(exc))
     except Exception as exc:
         logger.error("Failed to refresh open PRs from GitHub: %s", exc)
         raise HTTPException(502, "GitHub API error: {}".format(exc))
+
+
+# ─── routes: GitHub sync status/refresh ─────────────────────────────────
+#
+# Manual counterpart to github_sync_service's configurable periodic refresh
+# refresh — lets a user force an immediate update (e.g. right after
+# merging a new preset) instead of waiting out the interval, subject to
+# the same server-side cooldown (so it can't be spammed into exhausting
+# GitHub's rate limit). Goes through the exact same coalesced
+# refresh_now(), so simultaneous button presses from multiple people
+# collapse into a single round of GitHub calls, and a failed refresh
+# comes back as a real error (502) instead of a false "ok".
+
+@router.get("/github/sync-status", response_model=GithubSyncStatusResponse)
+async def github_sync_status():
+    status = github_sync_service.get_status()
+    last_synced = status.get("last_synced_at")
+    return {
+        "in_progress": status.get("in_progress", False),
+        "last_synced_at": last_synced.isoformat() if last_synced else None,
+        "last_error": status.get("last_error"),
+        "project_count": status.get("project_count", 0),
+    }
+
+
+@router.post("/github/sync", response_model=GithubSyncStatusResponse)
+async def github_sync_refresh(_=Depends(require_auth)):
+    try:
+        status = await github_sync_service.refresh_now()
+    except github_sync_service.GithubSyncError as exc:
+        # Surface this as a real failure (not a 200) so the frontend
+        # mutation's onError — not onSuccess — fires, and the UI doesn't
+        # claim data was just synced when it wasn't.
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub sync failed: {}".format("; ".join(exc.errors)),
+        )
+    last_synced = status.get("last_synced_at")
+    return {
+        "in_progress": status.get("in_progress", False),
+        "last_synced_at": last_synced.isoformat() if last_synced else None,
+        "last_error": status.get("last_error"),
+        "project_count": status.get("project_count", 0),
+    }
 
 
 # ─── routes: recurring jobs ──────────────────────────────────────────────
