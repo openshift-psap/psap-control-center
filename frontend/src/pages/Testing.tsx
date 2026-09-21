@@ -34,6 +34,7 @@ import WizardSteps from '../components/WizardSteps'
 import ReviewRow, { ReviewSection } from '../components/ReviewRow'
 import YamlPreview from '../components/YamlPreview'
 import SearchableSelect from '../components/SearchableSelect'
+import { getForgeProjectUiSettings } from '../projects/rhaiis'
 import { buildSingleJobPreview, toYamlPreview, withVersionOverride } from '../utils/fournosJobPreview'
 import {
   useFournosJobs,
@@ -50,6 +51,7 @@ import {
   useDeleteClusterLock,
   useCreateClusterLock,
   useGithubPRs,
+  useGithubReleases,
   useGithubSyncStatus,
   useRefreshGithubSync,
   useProjectUiSchema,
@@ -375,6 +377,7 @@ const VERSION_PROJECTS = ['mcp_gateway']
 
 function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   const { data: projects } = useForgeProjects()
+  const { data: registeredClusters } = useClusters()
   const { data: pipelines } = usePipelines()
   const { data: githubPRs } = useGithubPRs()
   const { data: githubSyncStatus } = useGithubSyncStatus()
@@ -394,6 +397,8 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   const [exclusive, setExclusive] = useState(false)
   const [configRaw, setConfigRaw] = useState('')
   const [pullSha, setPullSha] = useState('')
+  const [buildSourceInput, setBuildSourceInput] = useState('')
+  const [useLatestMain, setUseLatestMain] = useState(false)
   const [prSearch, setPrSearch] = useState('')
   const [prDropdownOpen, setPrDropdownOpen] = useState(false)
   // step 1 = "what do you want to do" (Lock / Forge Job / Custom Job).
@@ -418,10 +423,10 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   const autoPromptedClusterRef = useRef<string | null>(null)
   useEffect(() => {
     setClusterActivityModalOpen(false)
-    if (!cluster) autoPromptedClusterRef.current = null
+    if (!cluster.trim()) autoPromptedClusterRef.current = null
   }, [cluster])
   useEffect(() => {
-    if (!cluster || !clusterOverview) return
+    if (!cluster.trim() || !clusterOverview) return
     if (autoPromptedClusterRef.current === cluster) return
     autoPromptedClusterRef.current = cluster
     if (hasUpcomingClusterActivity(clusterOverview, 4)) setClusterActivityModalOpen(true)
@@ -431,14 +436,19 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
     () => projects?.find((p: ForgeProject) => p.name === project),
     [projects, project]
   )
+  const selectedCluster = useMemo(
+    () => registeredClusters?.clusters.find((item: Cluster) => item.name === cluster),
+    [registeredClusters, cluster]
+  )
 
   // Any project that publishes a projects/<name>/ui/submit.yaml in Forge
-  // gets a fully dynamic form for free — see docs/ui-schema-spec.md. This
-  // is the same mechanism for every project, RHAIIS included; there is no
-  // project-specific form or backend code path.
+  // gets a fully dynamic form for free — see docs/ui-schema-spec.md.
   const { data: uiSchemaResp, isFetching: isFetchingUiSchema } = useProjectUiSchema(project || undefined)
   const dynamicSchema = uiSchemaResp?.found ? uiSchemaResp.ui_schema : null
   const refreshUiSchema = useRefreshProjectUiSchema()
+  const projectUiSettings = getForgeProjectUiSettings(project)
+  const { data: githubReleases } = useGithubReleases(projectUiSettings.loadsPublishedReleases)
+  const buildSourceValid = !projectUiSettings.requiresBuildSource || useLatestMain || !!pullSha.trim()
 
   useEffect(() => {
     if (jobType === 'forge') setStep(2)
@@ -460,8 +470,12 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
 
   const handleProjectChange = (name: string) => {
     setProject(name)
+    setPipeline(getForgeProjectUiSettings(name).defaultPipeline)
     setPreset('')
     setVersion('')
+    setPullSha('')
+    setBuildSourceInput('')
+    setUseLatestMain(false)
     const proj = projects?.find((p: ForgeProject) => p.name === name)
     if (proj?.cluster) setCluster(proj.cluster)
   }
@@ -470,9 +484,12 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
     if (pr) {
       setPrSearch(`#${pr.number} — ${pr.title} (${pr.author})`)
       setPullSha(pr.head_sha)
+      setBuildSourceInput('')
+      setUseLatestMain(false)
     } else {
       setPrSearch('')
       setPullSha('')
+      setBuildSourceInput('')
     }
     setPrDropdownOpen(false)
   }
@@ -504,6 +521,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
         exclusive,
         config_overrides: overrides,
         pull_sha: pullSha,
+        use_latest_main: useLatestMain,
         schedule: scheduling.mode === 'recurring' ? scheduling.scheduleUtc : '',
         scheduled_start_time: scheduling.mode === 'defer' ? scheduling.scheduledStartTimeUtc : null,
       })
@@ -616,10 +634,13 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
 
             <div className="grid grid-cols-1 gap-5 px-5 py-5 sm:grid-cols-3">
               <div>
-                <label className="block text-sm font-medium text-gray-900">Cluster</label>
+                <label className="block text-sm font-medium text-gray-900">
+                  Cluster<span className="ml-0.5 text-red-500">*</span>
+                </label>
                 <ClusterCombobox
                   value={lockCluster}
                   onChange={setLockCluster}
+                  required
                   inputClassName="mt-1.5 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
                 />
               </div>
@@ -735,7 +756,9 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700">Cluster</label>
+              <label className="block text-sm font-medium text-gray-700">
+                Cluster<span className="text-red-500 ml-0.5">*</span>
+              </label>
               <ClusterCombobox
                 value={cluster}
                 onChange={setCluster}
@@ -808,7 +831,11 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
           {/* Pull Request picker */}
           <div className="relative">
             <div className="flex items-center justify-between">
-              <label className="block text-sm font-medium text-gray-700">Pull Request (optional)</label>
+              <label className="block text-sm font-medium text-gray-700">
+                {projectUiSettings.buildSourceLabel}
+                {projectUiSettings.requiresBuildSource && <span className="text-red-500 ml-0.5">*</span>}
+                {!projectUiSettings.requiresBuildSource && <span className="text-gray-400 font-normal ml-1">(optional)</span>}
+              </label>
               <div className="flex items-center gap-2">
                 {githubSyncStatus?.last_synced_at && (
                   <span
@@ -833,9 +860,10 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
             <input
               type="text"
               value={prSearch}
-              onChange={(e) => { setPrSearch(e.target.value); setPrDropdownOpen(true); setPullSha('') }}
+              onChange={(e) => { setPrSearch(e.target.value); setPrDropdownOpen(true); setPullSha(''); setBuildSourceInput('') }}
               onFocus={() => setPrDropdownOpen(true)}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+              disabled={projectUiSettings.requiresBuildSource && useLatestMain}
+              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm disabled:bg-gray-100 disabled:text-gray-400"
               placeholder="Search PRs by number, title, or author..."
             />
             {pullSha && (
@@ -843,11 +871,79 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
                 HEAD SHA: <code className="text-indigo-600 font-mono">{pullSha}</code>
               </p>
             )}
-            {!pullSha && (
+            {!pullSha && !projectUiSettings.requiresBuildSource && (
               <p className="mt-1 text-xs text-gray-400">
                 {githubPRs ? `${githubPRs.length} open PR(s) loaded from Forge repo.` : 'Loading PRs...'}
                 {' '}Forge will build from this commit instead of the default image.
               </p>
+            )}
+            {projectUiSettings.requiresBuildSource && (
+              <>
+                <div className="mt-3">
+                  <label className="block text-sm font-medium text-gray-700">Commit SHA or Release Tag</label>
+                  <input
+                    type="text"
+                    value={buildSourceInput}
+                    onChange={(e) => {
+                      setBuildSourceInput(e.target.value)
+                      setPullSha(e.target.value.trim())
+                      setPrSearch('')
+                      setUseLatestMain(false)
+                    }}
+                    disabled={useLatestMain}
+                    required={!useLatestMain && !pullSha}
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm disabled:bg-gray-100 disabled:text-gray-400"
+                    placeholder="e.g. 711b5b24... or v0.24.0"
+                  />
+                  <p className="mt-1 text-xs text-gray-400">Pin a commit, PR HEAD SHA, or published Forge release for reproducible runs.</p>
+                </div>
+                <div className="mt-3">
+                  <label className="block text-sm font-medium text-gray-700">Published Forge releases</label>
+                  <select
+                    value={buildSourceInput}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setBuildSourceInput(value)
+                      setPullSha(value)
+                      setPrSearch('')
+                      setUseLatestMain(false)
+                    }}
+                    disabled={useLatestMain}
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm disabled:bg-gray-100 disabled:text-gray-400"
+                  >
+                    <option value="">Select a release tag (optional)</option>
+                    {(githubReleases || []).map((release) => (
+                      <option key={release.tag_name} value={release.tag_name}>
+                        {release.name || release.tag_name}{release.prerelease ? ' (pre-release)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="mt-3">
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={useLatestMain}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        setUseLatestMain(checked)
+                        if (checked) {
+                          setPullSha('')
+                          setBuildSourceInput('')
+                          setPrSearch('')
+                        }
+                      }}
+                      className="rounded border-gray-300 text-indigo-600"
+                    />
+                    Use latest <code>main</code>
+                  </label>
+                  {useLatestMain && (
+                    <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                      <strong>Warning:</strong> <code>main</code> changes frequently and may contain untested code or configuration changes. It can be incompatible with this pipeline and makes failures harder to reproduce. Use a pinned commit or release tag for stable runs.
+                    </div>
+                  )}
+                </div>
+              </>
             )}
             {prDropdownOpen && filteredPRs.length > 0 && (
               <div className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded-md bg-white shadow-lg border border-gray-200">
@@ -881,9 +977,9 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
             </button>
             <button
               type="button"
-              disabled={!project || !cluster || !owner.trim()}
+              disabled={!project || !cluster.trim() || !owner.trim() || !buildSourceValid}
               onClick={() => setStep(3)}
-              title={!owner.trim() ? 'Owner is required' : undefined}
+              title={!owner.trim() ? 'Owner is required' : !buildSourceValid ? `${projectUiSettings.buildSourceLabel} is required` : undefined}
               className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50"
             >
               Next: Project Details
@@ -911,7 +1007,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
         <DynamicSubmitForm
           project={project}
           schema={dynamicSchema}
-          basics={{ cluster, pipeline, owner, priority, exclusive, pullSha, prLabel: prSearch || pullSha, scheduling }}
+          basics={{ cluster, clusterGpuType: selectedCluster?.gpu_type || '', pipeline, owner, priority, exclusive, pullSha, useLatestMain, prLabel: prSearch || pullSha, scheduling }}
           step={step - 1}
           onBack={() => setStep(step - 1)}
           onNext={() => setStep(step + 1)}
@@ -976,12 +1072,13 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
           <div className="space-y-4 min-w-0">
             <ReviewSection title="Basics">
               <ReviewRow label="Project" value={project} missing={!project} />
-              <ReviewRow label="Cluster" value={cluster} missing={!cluster} />
+              <ReviewRow label="Cluster" value={cluster} missing={!cluster.trim()} />
               <ReviewRow label="Pipeline" value={pipeline} />
               {owner && <ReviewRow label="Owner" value={owner} />}
               <ReviewRow label="Priority" value={priority} />
               {exclusive && <ReviewRow label="Exclusive" value="Yes" />}
-              {pullSha && <ReviewRow label="Pull Request" value={prSearch || pullSha} mono={!prSearch} />}
+              {projectUiSettings.requiresBuildSource && useLatestMain && <ReviewRow label={projectUiSettings.buildSourceLabel} value="Latest main (un-pinned)" />}
+              {pullSha && <ReviewRow label={projectUiSettings.buildSourceLabel} value={prSearch || pullSha} mono={!prSearch} />}
               <ReviewRow
                 label="Schedule"
                 value={
@@ -1020,14 +1117,14 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
                 <button
                   type="button"
                   onClick={() => setScheduleModalOpen(true)}
-                  disabled={!cluster}
+                  disabled={!cluster.trim()}
                   className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                  title={!cluster ? 'Pick a cluster first' : undefined}
+                  title={!cluster.trim() ? 'Pick a cluster first' : undefined}
                 >
                   <ClockIcon className="h-4 w-4" />
                   Defer / Set Recurring…
                 </button>
-                <button type="submit" disabled={submitJob.isPending || !project || !cluster || !owner.trim()} className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50">
+                <button type="submit" disabled={submitJob.isPending || !project || !cluster.trim() || !owner.trim() || !buildSourceValid} className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50">
                   {submitJob.isPending ? <ArrowPathIcon className="h-4 w-4 animate-spin" /> : <PlayIcon className="h-4 w-4" />}
                   Submit Job
                 </button>
@@ -1045,7 +1142,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
                   owner,
                   priority,
                   exclusive,
-                  pullSha,
+                  pullSha: useLatestMain ? 'main' : pullSha,
                   args: preset ? [preset] : [],
                   configOverrides: withVersionOverride(project, showVersion ? version : '', configOverrides),
                   schedule: scheduling.mode === 'recurring' ? scheduling.scheduleUtc : '',

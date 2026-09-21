@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeftIcon, ArrowPathIcon, ClockIcon, PlayIcon } from '@heroicons/react/24/outline'
 import clsx from 'clsx'
 import ReviewRow, { ReviewSection } from './ReviewRow'
 import YamlPreview from './YamlPreview'
+import { getProjectSubmitAdapter } from './rhaiis/rhaiisSubmitAdapter'
 import { useSubmitJob, useSubmitMatrix } from '../hooks/useFournos'
 import { buildMatrixJobPreviews, buildSingleJobPreview, toYamlPreview } from '../utils/fournosJobPreview'
 import type { JobScheduling, ProjectUiSchema, UiField, UiMode, UiOption, UiPipeline, UiQuickPreset, UiVisibleIf } from '../types'
@@ -28,11 +29,13 @@ import type { JobScheduling, ProjectUiSchema, UiField, UiMode, UiOption, UiPipel
 
 export interface SubmitBasics {
   cluster: string
+  clusterGpuType?: string
   pipeline: string
   owner: string
   priority: string
   exclusive: boolean
   pullSha: string
+  useLatestMain: boolean
   /** Human-readable label for the review step, e.g. "#123 — title (author)". */
   prLabel: string
   /** When this job (or recurring template) should run — see ClusterScheduleModal. */
@@ -59,7 +62,9 @@ function fieldsOf(mode: UiMode): UiField[] {
 
 function matchesCondition(cond: UiVisibleIf, values: Record<string, unknown>): boolean {
   const current = values[cond.field]
-  if (cond.equals !== undefined) return current === cond.equals
+  // Pydantic serializes an omitted optional `equals` as null. Treat that as
+  // absent so a condition such as `{one_of: [...]}` is evaluated correctly.
+  if (cond.equals !== undefined && cond.equals !== null) return current === cond.equals
   if (cond.one_of) return cond.one_of.includes(current)
   return true
 }
@@ -141,6 +146,14 @@ function formatFieldValueForReview(field: UiField, value: unknown): string | nul
   return String(value)
 }
 
+function rawOptionValue(field: UiField, value: unknown): unknown {
+  const option = field.options.find((item) => item.value === value)
+  if (option && field.maps_to && Object.prototype.hasOwnProperty.call(option.overrides, field.maps_to)) {
+    return option.overrides[field.maps_to]
+  }
+  return value
+}
+
 export default function DynamicSubmitForm({
   project,
   schema,
@@ -177,9 +190,21 @@ export default function DynamicSubmitForm({
     [allModes, activeModeId]
   )
   const isMatrix = activeMode?.kind === 'matrix'
+  const projectAdapter = useMemo(() => getProjectSubmitAdapter(project), [project])
 
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [quickPresetKey, setQuickPresetKey] = useState('')
+  const activeFields = useMemo(() => (activeMode ? fieldsOf(activeMode) : []), [activeMode])
+  const modelField = activeFields.find((field) => field.key === 'model')
+  const workloadField = activeFields.find((field) => field.key === 'workload')
+  const engineField = activeFields.find((field) => field.key === 'engine')
+  const derived = projectAdapter?.getDerivedState(basics, activeFields, values) || {
+    gpuType: basics.clusterGpuType || '',
+    selectedModelTp: 1,
+    tpSize: 1,
+    gpuCount: 1,
+  }
+  const autoEngineVersionRef = useRef('')
 
   // Matrix-mode-only selection state
   const [pipelineKey, setPipelineKey] = useState('')
@@ -196,10 +221,11 @@ export default function DynamicSubmitForm({
     for (const field of fieldsOf(activeMode)) {
       initial[field.key] = defaultValueFor(field)
     }
+    Object.assign(initial, projectAdapter?.getInitialValues(activeMode) || {})
     setValues(initial)
     setQuickPresetKey('')
     setPipelineKey(activeMode.pipelines[0]?.key || '')
-  }, [activeMode])
+  }, [activeMode, projectAdapter])
 
   useEffect(() => {
     if (!selectedPipeline) {
@@ -213,6 +239,26 @@ export default function DynamicSubmitForm({
 
   const setFieldValue = (key: string, value: unknown) => {
     setValues((prev) => ({ ...prev, [key]: value }))
+  }
+
+  const handleFieldChange = (field: UiField, value: unknown) => {
+    setFieldValue(field.key, value)
+    if (projectAdapter) {
+      const result = projectAdapter.handleFieldChange({
+        field,
+        value,
+        values,
+        modelField,
+        engineField,
+        autoEngineVersion: autoEngineVersionRef.current,
+      })
+      if (result.autoEngineVersion !== undefined) {
+        autoEngineVersionRef.current = result.autoEngineVersion
+      }
+      if (Object.keys(result.updates).length > 0) {
+        setValues((prev) => ({ ...prev, ...result.updates }))
+      }
+    }
   }
 
   // If a `restrict_if` rule now excludes a field's currently-selected
@@ -234,7 +280,6 @@ export default function DynamicSubmitForm({
         setFieldValue(field.key, '')
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeMode, values])
 
   const applyQuickPreset = (qp: UiQuickPreset) => {
@@ -249,7 +294,10 @@ export default function DynamicSubmitForm({
         if (!field) continue
         if (field.type === 'multiselect') {
           const arr = Array.isArray(next[fieldKey]) ? [...(next[fieldKey] as string[])] : []
-          if (typeof fillValue === 'string' && !arr.includes(fillValue)) arr.push(fillValue)
+          const incoming = Array.isArray(fillValue) ? fillValue : [fillValue]
+          for (const item of incoming) {
+            if (typeof item === 'string' && !arr.includes(item)) arr.push(item)
+          }
           next[fieldKey] = arr
         } else {
           next[fieldKey] = fillValue
@@ -275,21 +323,37 @@ export default function DynamicSubmitForm({
       }
     }
 
+    projectAdapter?.appendBasicsArgs(args, basics)
+
     for (const field of fieldsOf(activeMode)) {
       if (!isFieldVisible(field, values)) continue
       const value = values[field.key]
+
+      if (projectAdapter?.skipField(field)) continue
 
       if (field.maps_to) {
         if (value === undefined || value === '' || value === null) continue
         const key = resolveMapsTo(field.maps_to, values)
         if (!key) continue
-        overrides[key] = stringifyValue(value)
+        overrides[key] = stringifyValue(
+          field.type === 'multiselect' && Array.isArray(value)
+            ? value.map((item) => rawOptionValue(field, item))
+            : rawOptionValue(field, value)
+        )
       } else if (field.type === 'select' || field.type === 'radio') {
         if (typeof value === 'string' && value) args.push(value)
       } else if (field.type === 'multiselect' && Array.isArray(value)) {
         for (const v of value) if (typeof v === 'string' && v) args.push(v)
       }
     }
+
+    projectAdapter?.augmentSubmission({
+      values,
+      modelField,
+      workloadField,
+      derived,
+      overrides,
+    })
 
     return { args, overrides }
   }
@@ -314,7 +378,7 @@ export default function DynamicSubmitForm({
             return {
               key,
               overrides: m?.overrides || {},
-              gpu_count: m?.tp ?? null,
+              gpu_count: m?.tp ?? derived.gpuCount,
             }
           }),
           workloads: selectedWorkloads,
@@ -322,7 +386,8 @@ export default function DynamicSubmitForm({
           priority: basics.priority,
           exclusive: basics.exclusive,
           pull_sha: basics.pullSha,
-          gpu_type: '',
+          use_latest_main: basics.useLatestMain,
+          gpu_type: derived.gpuType,
           ...schedulingRequestFields(basics.scheduling),
         })
         onSubmitted?.(result.jobs?.[0]?.job_name || '')
@@ -345,7 +410,10 @@ export default function DynamicSubmitForm({
         exclusive: basics.exclusive,
         config_overrides: configOverrides,
         pull_sha: basics.pullSha,
+        use_latest_main: basics.useLatestMain,
         priority: basics.priority,
+        gpu_type: derived.gpuType,
+        gpu_count: derived.gpuCount,
         ...schedulingRequestFields(basics.scheduling),
       })
       onSubmitted?.(result.job_name)
@@ -362,9 +430,20 @@ export default function DynamicSubmitForm({
 
   if (step !== 2 && step !== 3) return null
 
+  const buildSourceValid = !projectAdapter?.requiresBuildSource || basics.useLatestMain || !!basics.pullSha.trim()
+  const requiredFieldsValid = activeFields
+    .filter((field) => field.required && isFieldVisible(field, values))
+    .every((field) => {
+      const value = values[field.key]
+      return field.type === 'multiselect'
+        ? Array.isArray(value) && value.length > 0
+        : value !== undefined && value !== null && value !== ''
+    })
+  const projectFieldsValid = projectAdapter?.validate(activeMode, values, derived) ?? true
+  const formValid = requiredFieldsValid && projectFieldsValid
   const canSubmit = isMatrix
-    ? !submitMatrix.isPending && !!basics.cluster && !!basics.owner.trim() && !!selectedPipeline && selectedModels.length > 0 && selectedWorkloads.length > 0
-    : !submitJob.isPending && !!basics.cluster && !!basics.owner.trim()
+    ? !submitMatrix.isPending && !!basics.cluster.trim() && !!basics.owner.trim() && buildSourceValid && formValid && !!selectedPipeline && selectedModels.length > 0 && selectedWorkloads.length > 0
+    : !submitJob.isPending && !!basics.cluster.trim() && !!basics.owner.trim() && buildSourceValid && formValid
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -414,33 +493,64 @@ export default function DynamicSubmitForm({
             </div>
           )}
 
-          {activeMode.sections.map((section) => (
+              {activeMode.sections.map((section) => (
             <div key={section.id} className="rounded-lg border border-gray-200 p-4 space-y-4">
               {section.label && (
-                <h3 className="text-sm font-semibold text-gray-900">{section.label}</h3>
+                <h3 className="text-sm font-semibold text-gray-900">
+                  {projectAdapter?.sectionLabel(section) || section.label}
+                </h3>
               )}
               <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
                 {section.fields.map((field) => {
-                  if (field.type === 'hidden' || !isFieldVisible(field, values)) return null
+                  const presentation = projectAdapter?.fieldPresentation(field, values, activeMode) || {
+                    hidden: false,
+                    label: field.label || field.key,
+                    disabled: false,
+                  }
+                  if (field.type === 'hidden' || presentation.hidden || !isFieldVisible(field, values)) return null
                   return (
-                    <div key={field.key} className={field.type === 'textarea' ? 'sm:col-span-2' : ''}>
-                      <label className="block text-sm font-medium text-gray-700">
-                        {field.label || field.key}
+                    <div key={field.key} className={clsx(field.type === 'textarea' ? 'sm:col-span-2' : '', field.key === 'model' || field.key === 'workload' ? 'sm:col-span-2' : '')}>
+                      <label
+                        className="block text-sm font-medium text-gray-700"
+                        title={field.help || undefined}
+                      >
+                        {presentation.label}
                         {field.required && <span className="text-red-500 ml-0.5">*</span>}
                       </label>
                       <FieldControl
                         field={field}
                         value={values[field.key]}
-                        onChange={(v) => setFieldValue(field.key, v)}
+                        onChange={(v) => handleFieldChange(field, v)}
                         options={visibleOptions(field, values)}
+                        disabled={presentation.disabled}
                       />
                       {field.help && <p className="mt-1 text-xs text-gray-400">{field.help}</p>}
+                      {projectAdapter?.renderFieldExtras({
+                        field,
+                        values,
+                        derived,
+                        setFieldValue,
+                        setValues,
+                      })}
                     </div>
                   )
+                })}
+                {projectAdapter?.renderSectionExtras(section, {
+                  values,
+                  derived,
+                  setFieldValue,
+                  setValues,
                 })}
               </div>
             </div>
           ))}
+
+          {projectAdapter?.renderAdditionalConfig({
+            values,
+            derived,
+            setFieldValue,
+            setValues,
+          })}
 
           {isMatrix && (
             <div className="space-y-4 rounded-lg border border-gray-200 p-4">
@@ -559,7 +669,9 @@ export default function DynamicSubmitForm({
             <button
               type="button"
               onClick={onNext}
-              className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
+              disabled={!formValid}
+              title={!formValid ? 'Complete the required project fields before continuing' : undefined}
+              className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50"
             >
               Next: Review
             </button>
@@ -576,7 +688,9 @@ export default function DynamicSubmitForm({
           owner: basics.owner,
           priority: basics.priority,
           exclusive: basics.exclusive,
-          pullSha: basics.pullSha,
+          pullSha: basics.useLatestMain ? 'main' : basics.pullSha,
+          gpuType: derived.gpuType,
+          gpuCount: derived.gpuCount,
           args,
           configOverrides: overrides,
           schedule: basics.scheduling.mode === 'recurring' ? basics.scheduling.scheduleUtc : '',
@@ -592,7 +706,7 @@ export default function DynamicSubmitForm({
                     return {
                       key,
                       overrides: stringifyOverrides(m?.overrides || {}),
-                      gpuCount: m?.tp ?? null,
+                      gpuCount: m?.tp ?? derived.gpuCount,
                     }
                   }),
                   workloads: selectedWorkloads,
@@ -606,13 +720,17 @@ export default function DynamicSubmitForm({
             <div className="space-y-4 min-w-0">
               <ReviewSection title="Basics">
                 <ReviewRow label="Project" value={project} />
-                <ReviewRow label="Cluster" value={basics.cluster} missing={!basics.cluster} />
+                <ReviewRow label="Cluster" value={basics.cluster} missing={!basics.cluster.trim()} />
                 <ReviewRow label="Pipeline" value={basics.pipeline} />
+                {projectAdapter?.renderReviewBasics(derived)}
                 {basics.owner && <ReviewRow label="Owner" value={basics.owner} />}
                 <ReviewRow label="Priority" value={basics.priority} />
                 {basics.exclusive && <ReviewRow label="Exclusive" value="Yes" />}
+                {projectAdapter?.requiresBuildSource && basics.useLatestMain && (
+                  <ReviewRow label={projectAdapter.buildSourceLabel} value="Latest main (un-pinned)" />
+                )}
                 {basics.pullSha && (
-                  <ReviewRow label="Pull Request" value={basics.prLabel} mono={!basics.prLabel || basics.prLabel === basics.pullSha} />
+                  <ReviewRow label={projectAdapter?.buildSourceLabel || 'Pull Request'} value={basics.prLabel} mono={!basics.prLabel || basics.prLabel === basics.pullSha} />
                 )}
                 <ReviewRow
                   label="Schedule"
@@ -664,6 +782,8 @@ export default function DynamicSubmitForm({
                 )
               })}
 
+              {projectAdapter?.renderAdditionalReview(values, derived)}
+
               {isMatrix && (
                 <ReviewSection title="Matrix Selection">
                   <ReviewRow
@@ -704,9 +824,9 @@ export default function DynamicSubmitForm({
                   <button
                     type="button"
                     onClick={onOpenScheduleModal}
-                    disabled={!basics.cluster}
+                    disabled={!basics.cluster.trim()}
                     className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                    title={!basics.cluster ? 'Pick a cluster first' : undefined}
+                    title={!basics.cluster.trim() ? 'Pick a cluster first' : undefined}
                   >
                     <ClockIcon className="h-4 w-4" />
                     Defer / Set Recurring…
@@ -744,12 +864,14 @@ function FieldControl({
   value,
   onChange,
   options,
+  disabled = false,
 }: {
   field: UiField
   value: unknown
   onChange: (value: unknown) => void
   /** Defaults to `field.options` — pass a `visibleOptions(field, values)` result to apply `restrict_if`. */
   options?: UiOption[]
+  disabled?: boolean
 }) {
   const opts = options ?? field.options
   switch (field.type) {
@@ -761,6 +883,7 @@ function FieldControl({
               type="checkbox"
               checked={!!value}
               onChange={(e) => onChange(e.target.checked)}
+              disabled={disabled}
               className="rounded border-gray-300 text-indigo-600"
             />
             {field.placeholder || 'Enabled'}
@@ -776,6 +899,7 @@ function FieldControl({
           min={field.min ?? undefined}
           max={field.max ?? undefined}
           onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
+          disabled={disabled}
           className="input mt-1"
           placeholder={field.placeholder}
         />
@@ -786,6 +910,7 @@ function FieldControl({
         <textarea
           value={(value as string) || ''}
           onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
           rows={3}
           className="input mt-1 font-mono"
           placeholder={field.placeholder}
@@ -797,6 +922,7 @@ function FieldControl({
         <select
           value={(value as string) || ''}
           onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
           className="input mt-1"
         >
           <option value="">{field.required ? 'Select...' : 'None'}</option>
@@ -816,6 +942,7 @@ function FieldControl({
               key={opt.value}
               type="button"
               title={formatOverridesTooltip(opt.overrides)}
+              disabled={disabled}
               onClick={() => onChange(value === opt.value ? '' : opt.value)}
               className={clsx(
                 'px-3 py-1.5 rounded-md text-xs font-medium border transition-colors',
@@ -853,6 +980,7 @@ function FieldControl({
                 className="h-3 w-3 rounded border-gray-300 text-indigo-600"
                 checked={selected.includes(opt.value)}
                 onChange={() => toggle(opt.value)}
+                disabled={disabled}
               />
               {opt.label || opt.value}
             </label>
@@ -869,6 +997,7 @@ function FieldControl({
           type="text"
           value={(value as string) || ''}
           onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
           className="input mt-1"
           placeholder={field.placeholder}
         />
