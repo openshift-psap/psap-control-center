@@ -169,11 +169,32 @@ def test_google_callback_creates_user_session(monkeypatch):
     monkeypatch.setattr(auth_api.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
     monkeypatch.setattr(auth_api, "_verify_google_id_token", fake_verify)
 
+    class FakeResult:
+        @staticmethod
+        def scalar_one_or_none():
+            return None
+
+    class FakeDb:
+        def __init__(self):
+            self.added = None
+
+        async def execute(self, _query):
+            return FakeResult()
+
+        def add(self, user):
+            self.added = user
+
+        async def commit(self):
+            return None
+
+    db = FakeDb()
+
     request = _request(cookie=f"{auth_api.OAUTH_STATE_COOKIE}={state_token}")
     response = asyncio.run(
         auth_api.google_callback(
             request,
             auth_api.GoogleCallbackRequest(code="code", state=state),
+            db,
         )
     )
     payload = json.loads(response.body)
@@ -188,3 +209,5 @@ def test_google_callback_creates_user_session(monkeypatch):
     cookies = response.headers.getlist("set-cookie")
     assert any(cookie.startswith("session=") and "HttpOnly" in cookie for cookie in cookies)
     assert any(cookie.startswith(f"{auth_api.OAUTH_STATE_COOKIE}=") for cookie in cookies)
+    assert db.added.email == "admin@example.com"
+    assert db.added.is_admin is True

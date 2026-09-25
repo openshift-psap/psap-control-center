@@ -337,7 +337,28 @@ export interface SlackSettings {
   enabled: boolean
 }
 
+export interface ManagedUser {
+  id: string
+  username: string
+  email: string
+  full_name: string | null
+  role: 'admin' | 'user'
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
 export const settingsApi = {
+  getUsers: async (): Promise<ManagedUser[]> => {
+    const { data } = await api.get('/settings/users')
+    return data
+  },
+
+  updateUserRole: async (userId: string, role: 'admin' | 'user'): Promise<ManagedUser> => {
+    const { data } = await api.patch(`/settings/users/${userId}/role`, { role })
+    return data
+  },
+
   getSlack: async (): Promise<SlackSettings> => {
     const { data } = await api.get('/settings/slack')
     return data

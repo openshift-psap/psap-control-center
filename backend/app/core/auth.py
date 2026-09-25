@@ -2,10 +2,14 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError, jwt
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.database import get_db
+from app.models.user import User
 from app.utils.logger import create_logger
 
 logger = create_logger("Auth")
@@ -108,7 +112,10 @@ def get_current_user(request: Request) -> Optional[dict]:
     return decode_session_token(token)
 
 
-def require_auth(request: Request) -> dict:
+async def require_auth(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Dependency: any authenticated user (admin or user)."""
     user = get_current_user(request)
     if user is None:
@@ -116,12 +123,28 @@ def require_auth(request: Request) -> dict:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
+
+    # Google identities are persisted after their first successful sign-in.
+    # Resolve their current role on every request so an administrator's role
+    # change takes effect without waiting for the existing session to expire.
+    if user.get("auth_provider") == "google" and user.get("email"):
+        result = await db.execute(
+            select(User).where(User.email == user["email"].lower())
+        )
+        persisted_user = result.scalar_one_or_none()
+        if persisted_user is not None:
+            if not persisted_user.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User account is disabled",
+                )
+            user["role"] = "admin" if persisted_user.is_admin else "user"
+            user["name"] = persisted_user.full_name or user["name"]
     return user
 
 
-def require_admin(request: Request) -> dict:
+async def require_admin(user: dict = Depends(require_auth)) -> dict:
     """Dependency: admin role only."""
-    user = require_auth(request)
     if user["role"] != "admin":
         logger.warn(
             "Forbidden: user '%s' (role=%s) attempted admin action",

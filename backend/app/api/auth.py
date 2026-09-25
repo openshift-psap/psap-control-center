@@ -6,21 +6,25 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from google.auth import exceptions as google_auth_exceptions
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import (
     validate_credentials,
     create_session_token,
-    get_current_user,
+    require_auth,
     COOKIE_NAME,
 )
 from app.core.config import settings
+from app.core.database import get_db
+from app.models.user import User
 from app.utils.logger import create_logger
 
 router = APIRouter()
@@ -209,6 +213,7 @@ async def _verify_google_id_token(id_token: str, expected_nonce: str) -> dict:
 async def google_callback(
     request: Request,
     body: GoogleCallbackRequest,
+    db: AsyncSession = Depends(get_db),
 ):
     if not settings.GOOGLE_OAUTH_ENABLED:
         raise HTTPException(status_code=404, detail="Google login is disabled")
@@ -260,13 +265,35 @@ async def google_callback(
         for item in settings.GOOGLE_ADMIN_EMAILS.split(",")
         if item.strip()
     }
+    result = await db.execute(select(User).where(User.email == email))
+    persisted_user = result.scalar_one_or_none()
+    if persisted_user is None:
+        persisted_user = User(
+            username=email,
+            email=email,
+            full_name=claims.get("name") or email,
+            is_active=True,
+            is_admin=email in admin_emails,
+        )
+        db.add(persisted_user)
+    else:
+        # The database role is authoritative after the first sign-in. This
+        # lets admins manage access without editing deployment configuration.
+        persisted_user.username = email
+        persisted_user.full_name = claims.get("name") or persisted_user.full_name
+    await db.commit()
+
+    if not persisted_user.is_active:
+        logger.warn("Google callback rejected: user account is disabled")
+        raise HTTPException(403, "User account is disabled")
+
     user = {
         "subject": f"google:{claims['sub']}",
         "username": email,
         "email": email,
         "name": claims.get("name") or email,
         "auth_provider": "google",
-        "role": "admin" if email in admin_emails else "user",
+        "role": "admin" if persisted_user.is_admin else "user",
     }
     response = _session_response(user, request)
     response.delete_cookie(key=OAUTH_STATE_COOKIE, path="/")
@@ -286,13 +313,7 @@ async def logout():
 
 
 @router.get("/me")
-async def me(request: Request):
-    user = get_current_user(request)
-    if user is None:
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Not authenticated"},
-        )
+async def me(user: dict = Depends(require_auth)):
     return {
         key: user.get(key)
         for key in ("username", "email", "name", "auth_provider", "role")
