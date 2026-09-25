@@ -6,6 +6,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 from app.api import fournos, reservations
+from app.schemas.fournos import CreateClusterLockRequest
 from app.schemas.reservation import ModificationRequestCreate, ReservationUpdate
 
 
@@ -107,3 +108,58 @@ def test_public_job_metadata_removes_requester_identity_without_mutation():
 
     assert public_metadata["annotations"] == {"example.com/safe": "retained"}
     assert fournos.REQUESTER_EMAIL_ANNOTATION in metadata["annotations"]
+
+
+def test_public_job_spec_hides_owner_without_mutation():
+    spec = {"cluster": "test-cluster", "owner": "Example Person"}
+
+    public_spec = fournos._public_job_spec(spec, include_owner=False)
+
+    assert public_spec == {"cluster": "test-cluster"}
+    assert spec["owner"] == "Example Person"
+    assert (
+        fournos._public_job_spec(spec, include_owner=True)["owner"]
+        == "Example Person"
+    )
+
+
+def test_testing_owner_prefers_verified_display_name():
+    user = {
+        "subject": "google:12345",
+        "username": "person@example.com",
+        "email": "person@example.com",
+        "name": "Example Person",
+        "auth_provider": "google",
+        "role": "user",
+    }
+
+    assert fournos._verified_owner(user) == "Example Person"
+    assert fournos._verified_owner({**user, "name": ""}) == "person@example.com"
+
+
+def test_cluster_lock_ignores_client_supplied_owner(monkeypatch):
+    captured = {}
+
+    def create_fournos_job(body):
+        captured["body"] = body
+        return body
+
+    monkeypatch.setattr(fournos.k8s, "create_fournos_job", create_fournos_job)
+    user = {
+        "subject": "google:12345",
+        "username": "person@example.com",
+        "email": "person@example.com",
+        "name": "Example Person",
+        "auth_provider": "google",
+        "role": "user",
+    }
+    request = CreateClusterLockRequest(
+        cluster="test-cluster",
+        owner="Spoofed Owner",
+        reason="Maintenance",
+    )
+
+    response = asyncio.run(fournos.create_cluster_lock(request, user=user))
+
+    assert captured["body"]["spec"]["owner"] == "Example Person"
+    assert response["owner"] == "Example Person"
