@@ -40,6 +40,7 @@ from app.schemas.fournos import (
     HoldSlotRequest,
     JobEventResponse,
     JobListResponse,
+    PullRequestSelection,
     ProjectInfoResponse,
     RecurringJobResponse,
     ScheduleChildJobResponse,
@@ -56,6 +57,7 @@ from app.services import fournos_db_service as db_svc
 from app.services import fournos_k8s_client as k8s
 from app.services import pipeline_definitions
 from app.services import project_ui_schema
+from app.services.source_provenance import extract_source_request_fields
 from app.services.forge_discovery import discover_projects, get_project
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,73 @@ _REQUESTER_ANNOTATIONS = {
 }
 
 _VERSION_KEYS = {"mcp_gateway": "infrastructure.mcp_gateway_version"}
+
+
+async def _resolve_source_request(
+    selection: Optional[PullRequestSelection],
+    legacy_pull_sha: str,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Validate a structured PR selection and build its Fournos/DB record.
+
+    Control Center records the exact server-side PR snapshot the user chose.
+    It never silently replaces a stale selection with a newer PR head.
+    """
+    if selection is None:
+        sha = legacy_pull_sha.strip()
+        env = {"PULL_PULL_SHA": sha} if sha else {}
+        return env, extract_source_request_fields({"env": env})
+
+    repository = selection.repository.strip()
+    if repository != settings.FORGE_GITHUB_REPO:
+        raise HTTPException(
+            400,
+            "Pull request repository must match the configured Forge repository",
+        )
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", selection.requested_sha.strip()):
+        raise HTTPException(400, "Pull request SHA must be a full 40-character commit SHA")
+
+    prs = _open_prs_cache
+    if prs is None:
+        try:
+            prs = await _fetch_open_prs_coalesced()
+        except Exception as exc:
+            raise HTTPException(
+                502, "Unable to validate pull request selection"
+            ) from exc
+    current = next(
+        (pr for pr in prs if pr.get("number") == selection.number), None
+    )
+    if current is None:
+        raise HTTPException(
+            409,
+            "The selected pull request is no longer in the current Forge PR snapshot; refresh and select it again",
+        )
+
+    expected_url = current["url"]
+    requested_sha = selection.requested_sha.strip().lower()
+    if (
+        current["repository"] != repository
+        or current["head_sha"].lower() != requested_sha
+        or current["branch"] != selection.head_branch
+        or expected_url != selection.url
+    ):
+        raise HTTPException(
+            409,
+            "The selected pull request changed; refresh and select it again",
+        )
+
+    repo_owner, repo_name = repository.split("/", 1)
+    env = {
+        "REPO_OWNER": repo_owner,
+        "REPO_NAME": repo_name,
+        "PULL_NUMBER": str(current["number"]),
+        "PULL_TITLE": current["title"],
+        "PULL_HEAD_REF": current["branch"],
+        "PULL_PULL_SHA": current["head_sha"],
+        "CONTROL_CENTER_REQUESTED_SHA": selection.requested_sha.strip(),
+        "CONTROL_CENTER_PR_URL": expected_url,
+    }
+    return env, extract_source_request_fields({"env": env})
 
 
 # ─── helper functions ────────────────────────────────────────────────────
@@ -174,11 +243,15 @@ def _extract_forge_info(job: dict) -> dict:
     pr_title = env.get("PULL_TITLE", "")
     repo_owner = env.get("REPO_OWNER", "")
     repo_name = env.get("REPO_NAME", "")
-    pr_url = ""
-    if pr_number:
+    repository = "/".join(
+        part for part in (repo_owner, repo_name) if part
+    )
+    pr_url = env.get("CONTROL_CENTER_PR_URL", "")
+    if not pr_url and pr_number:
         pr_url = "https://github.com/{}/{}/pull/{}".format(
             repo_owner, repo_name, pr_number
         )
+    resolved_sha = env.get("PULL_PULL_SHA", "")
     return {
         "project": forge.get("project", ""),
         "args": forge.get("args", []),
@@ -186,6 +259,12 @@ def _extract_forge_info(job: dict) -> dict:
         "pr_number": pr_number,
         "pr_title": pr_title,
         "pr_url": pr_url,
+        "repository": repository,
+        "head_branch": env.get("PULL_HEAD_REF", ""),
+        "requested_sha": env.get(
+            "CONTROL_CENTER_REQUESTED_SHA", resolved_sha
+        ),
+        "resolved_sha": resolved_sha,
     }
 
 
@@ -241,6 +320,7 @@ def _live_job_to_summary(job: dict, *, include_owner: bool = True) -> dict:
         "triggered_by_schedule": schedule_parent or None,
         "scheduled_start_time": spec.get("scheduledStartTime"),
         "source": "live",
+        **extract_source_request_fields(spec),
     }
 
 
@@ -263,6 +343,12 @@ def _db_job_to_summary(job, *, include_owner: bool = True) -> dict:
         "trigger_type": job.trigger_type or "manual",
         "triggered_by_schedule": job.triggered_by_schedule,
         "source": "history",
+        "source_repository": job.source_repository or "",
+        "source_pr_number": job.source_pr_number,
+        "source_pr_url": job.source_pr_url or "",
+        "source_head_branch": job.source_head_branch or "",
+        "source_requested_sha": job.source_requested_sha or "",
+        "source_resolved_sha": job.source_resolved_sha or "",
     }
 
 
@@ -283,6 +369,23 @@ def _db_job_to_fjob_dict(job) -> dict:
     spec.setdefault("pipeline", job.pipeline)
     spec.setdefault("owner", job.owner)
     spec.setdefault("displayName", "{} {}".format(job.project, job.preset).strip())
+    if job.source_resolved_sha:
+        env = spec.setdefault("env", {})
+        if job.source_repository and "/" in job.source_repository:
+            repo_owner, repo_name = job.source_repository.split("/", 1)
+            env.setdefault("REPO_OWNER", repo_owner)
+            env.setdefault("REPO_NAME", repo_name)
+        if job.source_pr_number:
+            env.setdefault("PULL_NUMBER", str(job.source_pr_number))
+        if job.source_head_branch:
+            env.setdefault("PULL_HEAD_REF", job.source_head_branch)
+        if job.source_requested_sha:
+            env.setdefault(
+                "CONTROL_CENTER_REQUESTED_SHA", job.source_requested_sha
+            )
+        if job.source_pr_url:
+            env.setdefault("CONTROL_CENTER_PR_URL", job.source_pr_url)
+        env.setdefault("PULL_PULL_SHA", job.source_resolved_sha)
 
     status.setdefault("phase", job.status)
     status.setdefault("message", job.message)
@@ -732,6 +835,40 @@ async def rerun_job(job_name: str, user=Depends(require_admin)):
         "spec": spec,
     }
 
+    source_fields = extract_source_request_fields(spec)
+    initial_status = (
+        "Recurring" if spec.get("schedule")
+        else "Scheduled" if spec.get("scheduledStartTime")
+        else "Pending"
+    )
+    try:
+        async with AsyncSessionLocal() as session, session.begin():
+            await db_svc.upsert_job(
+                session,
+                name=new_name,
+                project=project,
+                preset=" ".join(forge.get("args", [])),
+                cluster=spec.get("cluster", ""),
+                pipeline=spec.get("pipeline", ""),
+                owner=spec.get("owner", ""),
+                requester_subject=user.get("subject", ""),
+                requester_email=user.get("email", ""),
+                requester_name=user.get("name", ""),
+                auth_provider=user.get("auth_provider", ""),
+                status=initial_status,
+                config_overrides=forge.get("configOverrides", {}),
+                fjob_spec=spec,
+                trigger_type=(
+                    "recurring-parent" if spec.get("schedule")
+                    else "deferred" if spec.get("scheduledStartTime")
+                    else "manual"
+                ),
+                **source_fields,
+            )
+    except Exception as exc:
+        logger.error("Could not persist rerun intent for %s: %s", new_name, exc)
+        raise HTTPException(500, "Failed to persist job rerun") from exc
+
     try:
         created = await asyncio.to_thread(k8s.create_fournos_job, body)
         created_name = created.get("metadata", {}).get("name", new_name)
@@ -741,6 +878,15 @@ async def rerun_job(job_name: str, user=Depends(require_admin)):
             "redirect": "/testing/jobs/{}".format(created_name),
         }
     except Exception as exc:
+        try:
+            async with AsyncSessionLocal() as session, session.begin():
+                await db_svc.delete_job_by_name(session, new_name)
+        except Exception as cleanup_exc:
+            logger.error(
+                "Failed to remove provisional rerun %s: %s",
+                new_name,
+                cleanup_exc,
+            )
         raise HTTPException(500, str(exc))
 
 
@@ -813,6 +959,9 @@ def _apply_scheduling(spec: dict, schedule: str, scheduled_start_time: Optional[
 async def submit_job(req: SubmitJobRequest, user=Depends(require_auth)):
     config_overrides = dict(req.config_overrides)
     owner = _verified_owner(user)
+    env, source_fields = await _resolve_source_request(
+        req.pull_request, req.pull_sha
+    )
 
     if req.version:
         version_key = _VERSION_KEYS.get(
@@ -832,10 +981,6 @@ async def submit_job(req: SubmitJobRequest, user=Depends(require_auth)):
     else:
         args = [req.preset] if req.preset else []
         job_name = k8s.sanitize_job_name("forge-{}".format(req.project))
-
-    env = {}
-    if req.pull_sha.strip():
-        env["PULL_PULL_SHA"] = req.pull_sha.strip()
 
     spec: dict[str, Any] = {
         "cluster": req.cluster,
@@ -876,21 +1021,20 @@ async def submit_job(req: SubmitJobRequest, user=Depends(require_auth)):
     if env:
         body["spec"]["env"] = env
 
-    try:
-        created = await asyncio.to_thread(k8s.create_fournos_job, body)
-    except Exception as exc:
-        raise HTTPException(500, "Failed to create FournosJob: {}".format(exc))
-
-    created_name = created.get("metadata", {}).get("name", job_name)
     initial_status = (
-        "Recurring" if req.schedule else "Scheduled" if req.scheduled_start_time else "Pending"
+        "Recurring" if req.schedule
+        else "Scheduled" if req.scheduled_start_time
+        else "Pending"
     )
 
+    # The request record must exist before the execution resource can start.
+    # If Kubernetes rejects the submission, remove the provisional row so it
+    # cannot appear as a run that actually executed.
     try:
         async with AsyncSessionLocal() as session, session.begin():
             await db_svc.upsert_job(
                 session,
-                name=created_name,
+                name=job_name,
                 project=req.project,
                 preset=req.preset or " ".join(req.args),
                 cluster=req.cluster,
@@ -908,13 +1052,27 @@ async def submit_job(req: SubmitJobRequest, user=Depends(require_auth)):
                     else "deferred" if req.scheduled_start_time
                     else "manual"
                 ),
+                **source_fields,
             )
     except Exception as exc:
-        logger.error(
-            "DB upsert failed for %s (job was created in K8s): %s",
-            created_name,
-            exc,
-        )
+        logger.error("Could not persist submission intent for %s: %s", job_name, exc)
+        raise HTTPException(500, "Failed to persist job submission") from exc
+
+    try:
+        created = await asyncio.to_thread(k8s.create_fournos_job, body)
+    except Exception as exc:
+        try:
+            async with AsyncSessionLocal() as session, session.begin():
+                await db_svc.delete_job_by_name(session, job_name)
+        except Exception as cleanup_exc:
+            logger.error(
+                "Failed to remove provisional job %s: %s",
+                job_name,
+                cleanup_exc,
+            )
+        raise HTTPException(500, "Failed to create FournosJob: {}".format(exc))
+
+    created_name = created.get("metadata", {}).get("name", job_name)
 
     return {
         "status": "ok",
@@ -937,21 +1095,35 @@ async def submit_matrix(req: SubmitMatrixRequest, user=Depends(require_auth)):
         raise HTTPException(400, "models and workloads are required")
 
     owner = _verified_owner(user)
+    source_env, source_fields = await _resolve_source_request(
+        req.pull_request, req.pull_sha
+    )
+    model_prefixes = [
+        re.sub(
+            r"[^a-z0-9-]",
+            "-",
+            "{}-{}".format(req.project, model_item.key).lower(),
+        )
+        for model_item in req.models
+    ]
+    job_names = [k8s.sanitize_job_name(prefix) for prefix in model_prefixes]
+    if (
+        len(set(model_prefixes)) != len(model_prefixes)
+        or len(set(job_names)) != len(job_names)
+    ):
+        raise HTTPException(
+            400, "models must produce unique Kubernetes job names"
+        )
+
     results = []
-    for model_item in req.models:
+    for model_item, job_name in zip(req.models, job_names):
         args = list(req.args) + [model_item.key] + list(req.workloads)
 
         job_overrides: dict[str, Any] = dict(req.config_overrides)
         job_overrides.update({k: v for k, v in model_item.overrides.items()})
 
         display_name = "{}-{}-{}".format(req.project, model_item.key, req.cluster)
-        generate_name = re.sub(
-            r"[^a-z0-9-]", "-", "{}-{}-".format(req.project, model_item.key).lower()
-        )
-
-        env: dict[str, str] = {}
-        if req.pull_sha.strip():
-            env["PULL_PULL_SHA"] = req.pull_sha.strip()
+        env = dict(source_env)
 
         spec: dict[str, Any] = {
             "cluster": req.cluster,
@@ -981,7 +1153,7 @@ async def submit_matrix(req: SubmitMatrixRequest, user=Depends(require_auth)):
             ),
             "kind": "FournosJob",
             "metadata": {
-                "generateName": generate_name,
+                "name": job_name,
                 "namespace": settings.FOURNOS_NAMESPACE,
                 "annotations": requester_annotations(user),
             },
@@ -990,47 +1162,66 @@ async def submit_matrix(req: SubmitMatrixRequest, user=Depends(require_auth)):
         if env:
             body["spec"]["env"] = env
 
+        initial_status = (
+            "Recurring" if req.schedule
+            else "Scheduled" if req.scheduled_start_time
+            else "Pending"
+        )
+        try:
+            async with AsyncSessionLocal() as session, session.begin():
+                await db_svc.upsert_job(
+                    session,
+                    name=job_name,
+                    project=req.project,
+                    preset="{} {}".format(model_item.key, " ".join(req.workloads)),
+                    cluster=req.cluster,
+                    pipeline=req.pipeline,
+                    owner=owner,
+                    requester_subject=user.get("subject", ""),
+                    requester_email=user.get("email", ""),
+                    requester_name=user.get("name", ""),
+                    auth_provider=user.get("auth_provider", ""),
+                    status=initial_status,
+                    config_overrides=job_overrides,
+                    fjob_spec=body.get("spec", {}),
+                    trigger_type=(
+                        "recurring-parent" if req.schedule
+                        else "deferred" if req.scheduled_start_time
+                        else "manual"
+                    ),
+                    **source_fields,
+                )
+        except Exception as exc:
+            logger.error(
+                "Could not persist matrix submission intent for %s: %s",
+                job_name,
+                exc,
+            )
+            results.append({
+                "model": model_item.key,
+                "status": "failed",
+                "error": "Failed to persist job submission",
+            })
+            continue
+
         try:
             created = await asyncio.to_thread(k8s.create_fournos_job, body)
-            created_name = created.get("metadata", {}).get("name", generate_name)
+            created_name = created.get("metadata", {}).get("name", job_name)
             results.append({
                 "model": model_item.key,
                 "job_name": created_name,
                 "status": "created",
             })
-
+        except Exception as exc:
             try:
                 async with AsyncSessionLocal() as session, session.begin():
-                    await db_svc.upsert_job(
-                        session,
-                        name=created_name,
-                        project=req.project,
-                        preset="{} {}".format(model_item.key, " ".join(req.workloads)),
-                        cluster=req.cluster,
-                        pipeline=req.pipeline,
-                        owner=owner,
-                        requester_subject=user.get("subject", ""),
-                        requester_email=user.get("email", ""),
-                        requester_name=user.get("name", ""),
-                        auth_provider=user.get("auth_provider", ""),
-                        status=(
-                            "Recurring" if req.schedule
-                            else "Scheduled" if req.scheduled_start_time
-                            else "Pending"
-                        ),
-                        config_overrides=job_overrides,
-                        fjob_spec=body.get("spec", {}),
-                        trigger_type=(
-                            "recurring-parent" if req.schedule
-                            else "deferred" if req.scheduled_start_time
-                            else "manual"
-                        ),
-                    )
-            except Exception as exc:
+                    await db_svc.delete_job_by_name(session, job_name)
+            except Exception as cleanup_exc:
                 logger.error(
-                    "DB upsert failed for matrix job %s: %s", created_name, exc
+                    "Failed to remove provisional matrix job %s: %s",
+                    job_name,
+                    cleanup_exc,
                 )
-        except Exception as exc:
             results.append({
                 "model": model_item.key,
                 "status": "failed",
@@ -1138,6 +1329,10 @@ def _fetch_github_open_prs_sync() -> list:
             "author": pr["user"]["login"],
             "head_sha": pr["head"]["sha"],
             "branch": pr["head"]["ref"],
+            "repository": settings.FORGE_GITHUB_REPO,
+            "url": pr.get("html_url") or "https://github.com/{}/pull/{}".format(
+                settings.FORGE_GITHUB_REPO, pr["number"]
+            ),
             "draft": pr["draft"],
         }
         for pr in prs

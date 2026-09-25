@@ -5,9 +5,38 @@ from unittest.mock import AsyncMock, MagicMock
 
 from app.services import fournos_k8s_client as k8s
 from app.services import fournos_watcher as watcher
+from app.services.source_provenance import extract_source_request_fields
 from app.api import fournos as fournos_api
 from app.core import database as database_core
 from app.services import fournos_db_service as db_service
+from app.schemas.fournos import (
+    PullRequestSelection,
+    SubmitJobRequest,
+    SubmitMatrixModelInput,
+    SubmitMatrixRequest,
+)
+
+
+class _AsyncContext:
+    def __init__(self, value=None):
+        self.value = value
+
+    async def __aenter__(self):
+        return self.value
+
+    async def __aexit__(self, _exc_type, _exc, _traceback):
+        return False
+
+
+class _FakeSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, _exc_type, _exc, _traceback):
+        return False
+
+    def begin(self):
+        return _AsyncContext()
 
 
 def test_log_stream_terminal_sentinel_displaces_oldest_item_when_full():
@@ -246,4 +275,292 @@ def test_history_effective_date_index_is_created_for_existing_databases():
 
     assert indexes["ix_fournos_jobs_effective_date"] == (
         "COALESCE(completed_at, created_at)"
+    )
+
+
+def test_structured_pr_selection_is_validated_against_server_snapshot(monkeypatch):
+    sha = "a" * 40
+    repository = "openshift-psap/forge"
+    monkeypatch.setattr(
+        fournos_api.settings, "FORGE_GITHUB_REPO", repository
+    )
+    monkeypatch.setattr(
+        fournos_api,
+        "_open_prs_cache",
+        [{
+            "number": 123,
+            "title": "Exercise a selected revision",
+            "author": "engineer",
+            "head_sha": sha,
+            "branch": "feature/request-provenance",
+            "repository": repository,
+            "url": "https://github.com/openshift-psap/forge/pull/123",
+            "draft": False,
+        }],
+    )
+    selection = PullRequestSelection(
+        repository=repository,
+        number=123,
+        url="https://github.com/openshift-psap/forge/pull/123",
+        head_branch="feature/request-provenance",
+        requested_sha=sha,
+    )
+
+    env, fields = asyncio.run(
+        fournos_api._resolve_source_request(selection, "")
+    )
+
+    assert env == {
+        "REPO_OWNER": "openshift-psap",
+        "REPO_NAME": "forge",
+        "PULL_NUMBER": "123",
+        "PULL_TITLE": "Exercise a selected revision",
+        "PULL_HEAD_REF": "feature/request-provenance",
+        "PULL_PULL_SHA": sha,
+        "CONTROL_CENTER_REQUESTED_SHA": sha,
+        "CONTROL_CENTER_PR_URL": (
+            "https://github.com/openshift-psap/forge/pull/123"
+        ),
+    }
+    assert fields["source_repository"] == repository
+    assert fields["source_pr_number"] == 123
+    assert fields["source_requested_sha"] == sha
+    assert fields["source_resolved_sha"] == sha
+
+
+def test_watcher_archives_pr_request_provenance_from_job_spec():
+    sha = "b" * 40
+    fields = extract_source_request_fields({
+        "env": {
+            "REPO_OWNER": "openshift-psap",
+            "REPO_NAME": "forge",
+            "PULL_NUMBER": "456",
+            "PULL_HEAD_REF": "feature/test",
+            "PULL_PULL_SHA": sha,
+            "CONTROL_CENTER_REQUESTED_SHA": sha,
+            "CONTROL_CENTER_PR_URL": (
+                "https://github.com/openshift-psap/forge/pull/456"
+            ),
+        }
+    })
+
+    assert fields == {
+        "source_repository": "openshift-psap/forge",
+        "source_pr_number": 456,
+        "source_pr_url": (
+            "https://github.com/openshift-psap/forge/pull/456"
+        ),
+        "source_head_branch": "feature/test",
+        "source_requested_sha": sha,
+        "source_resolved_sha": sha,
+    }
+
+
+def test_legacy_sha_only_submission_remains_supported():
+    sha = "d" * 40
+
+    env, fields = asyncio.run(
+        fournos_api._resolve_source_request(None, sha)
+    )
+
+    assert env == {"PULL_PULL_SHA": sha}
+    assert fields["source_repository"] == ""
+    assert fields["source_pr_number"] is None
+    assert fields["source_requested_sha"] == sha
+    assert fields["source_resolved_sha"] == sha
+
+
+def test_submission_persists_pr_provenance_before_kubernetes_create(monkeypatch):
+    sha = "c" * 40
+    repository = "openshift-psap/forge"
+    events = []
+    persisted = {}
+    created_body = {}
+
+    monkeypatch.setattr(
+        fournos_api.settings, "FORGE_GITHUB_REPO", repository
+    )
+    monkeypatch.setattr(
+        fournos_api,
+        "_open_prs_cache",
+        [{
+            "number": 789,
+            "title": "Record the selected request",
+            "author": "engineer",
+            "head_sha": sha,
+            "branch": "feature/record-request",
+            "repository": repository,
+            "url": "https://github.com/openshift-psap/forge/pull/789",
+            "draft": False,
+        }],
+    )
+    monkeypatch.setattr(
+        fournos_api, "AsyncSessionLocal", lambda: _FakeSession()
+    )
+
+    async def upsert_job(_session, **kwargs):
+        events.append("persist")
+        persisted.update(kwargs)
+
+    def create_fournos_job(body):
+        events.append("create")
+        created_body.update(body)
+        return body
+
+    monkeypatch.setattr(fournos_api.db_svc, "upsert_job", upsert_job)
+    monkeypatch.setattr(
+        fournos_api.k8s, "create_fournos_job", create_fournos_job
+    )
+
+    request = SubmitJobRequest(
+        project="example",
+        cluster="cluster-a",
+        pull_request=PullRequestSelection(
+            repository=repository,
+            number=789,
+            url="https://github.com/openshift-psap/forge/pull/789",
+            head_branch="feature/record-request",
+            requested_sha=sha,
+        ),
+    )
+    user = {
+        "subject": "google:12345",
+        "username": "person@example.com",
+        "email": "person@example.com",
+        "name": "Example Person",
+        "auth_provider": "google",
+        "role": "user",
+    }
+
+    asyncio.run(fournos_api.submit_job(request, user=user))
+
+    assert events == ["persist", "create"]
+    assert persisted["source_repository"] == repository
+    assert persisted["source_pr_number"] == 789
+    assert persisted["source_requested_sha"] == sha
+    assert persisted["source_resolved_sha"] == sha
+    assert created_body["spec"]["env"]["PULL_PULL_SHA"] == sha
+    assert persisted["fjob_spec"]["env"] == created_body["spec"]["env"]
+
+
+def test_matrix_recurring_submission_preserves_pr_provenance(monkeypatch):
+    sha = "e" * 40
+    repository = "openshift-psap/forge"
+    persisted = []
+    created = []
+
+    monkeypatch.setattr(
+        fournos_api.settings, "FORGE_GITHUB_REPO", repository
+    )
+    monkeypatch.setattr(
+        fournos_api,
+        "_open_prs_cache",
+        [{
+            "number": 321,
+            "title": "Recurring matrix source",
+            "author": "engineer",
+            "head_sha": sha,
+            "branch": "feature/matrix-source",
+            "repository": repository,
+            "url": "https://github.com/openshift-psap/forge/pull/321",
+            "draft": False,
+        }],
+    )
+    monkeypatch.setattr(
+        fournos_api, "AsyncSessionLocal", lambda: _FakeSession()
+    )
+
+    async def upsert_job(_session, **kwargs):
+        persisted.append(kwargs)
+
+    def create_fournos_job(body):
+        created.append(body)
+        return body
+
+    monkeypatch.setattr(fournos_api.db_svc, "upsert_job", upsert_job)
+    monkeypatch.setattr(
+        fournos_api.k8s, "create_fournos_job", create_fournos_job
+    )
+
+    request = SubmitMatrixRequest(
+        project="example",
+        cluster="cluster-a",
+        models=[SubmitMatrixModelInput(key="model-a")],
+        workloads=["workload-a"],
+        schedule="0 2 * * *",
+        pull_request=PullRequestSelection(
+            repository=repository,
+            number=321,
+            url="https://github.com/openshift-psap/forge/pull/321",
+            head_branch="feature/matrix-source",
+            requested_sha=sha,
+        ),
+    )
+    user = {
+        "subject": "google:12345",
+        "username": "person@example.com",
+        "email": "person@example.com",
+        "name": "Example Person",
+        "auth_provider": "google",
+        "role": "user",
+    }
+
+    response = asyncio.run(fournos_api.submit_matrix(request, user=user))
+
+    assert response["status"] == "ok"
+    assert len(created) == len(persisted) == 1
+    assert created[0]["spec"]["schedule"] == "0 2 * * *"
+    assert created[0]["spec"]["env"]["PULL_PULL_SHA"] == sha
+    assert persisted[0]["trigger_type"] == "recurring-parent"
+    assert persisted[0]["source_pr_number"] == 321
+    assert persisted[0]["fjob_spec"]["env"] == created[0]["spec"]["env"]
+
+
+def test_job_detail_exposes_recorded_pr_association_and_selected_commit():
+    sha = "f" * 40
+    info = fournos_api._extract_forge_info({
+        "spec": {
+            "executionEngine": {
+                "forge": {"project": "example", "args": ["preset"]}
+            },
+            "env": {
+                "REPO_OWNER": "openshift-psap",
+                "REPO_NAME": "forge",
+                "PULL_NUMBER": "654",
+                "PULL_TITLE": "Expose provenance",
+                "PULL_HEAD_REF": "feature/expose-provenance",
+                "PULL_PULL_SHA": sha,
+                "CONTROL_CENTER_REQUESTED_SHA": sha,
+                "CONTROL_CENTER_PR_URL": (
+                    "https://github.com/openshift-psap/forge/pull/654"
+                ),
+            },
+        }
+    })
+
+    assert info["repository"] == "openshift-psap/forge"
+    assert info["pr_number"] == "654"
+    assert info["head_branch"] == "feature/expose-provenance"
+    assert info["requested_sha"] == sha
+    assert info["resolved_sha"] == sha
+
+
+def test_pr_provenance_schema_migrations_and_indexes_are_registered():
+    migrations = {
+        (table, column): col_type
+        for table, column, col_type in database_core._MIGRATIONS
+    }
+    indexes = {name: columns for name, _table, columns in database_core._INDEXES}
+
+    for column in (
+        "source_repository",
+        "source_pr_number",
+        "source_pr_url",
+        "source_head_branch",
+        "source_requested_sha",
+        "source_resolved_sha",
+    ):
+        assert ("fournos_jobs", column) in migrations
+    assert indexes["ix_fournos_jobs_source_pr"] == (
+        "source_repository, source_pr_number"
     )

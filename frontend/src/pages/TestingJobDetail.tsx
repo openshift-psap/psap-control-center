@@ -407,12 +407,43 @@ export default function TestingJobDetail() {
 
       {/* Forge info & MLflow */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {forge_info.pr_url && (
+        {(forge_info.pr_url || forge_info.repository || forge_info.requested_sha) && (
           <div className="card p-4">
             <p className="text-xs text-gray-500 mb-1">Pull Request</p>
-            <a href={forge_info.pr_url} target="_blank" rel="noopener noreferrer" className="text-sm text-indigo-600 hover:text-indigo-800 hover:underline">
-              #{forge_info.pr_number}: {forge_info.pr_title}
-            </a>
+            {forge_info.pr_url ? (
+              <a href={forge_info.pr_url} target="_blank" rel="noopener noreferrer" className="text-sm text-indigo-600 hover:text-indigo-800 hover:underline">
+                #{forge_info.pr_number}: {forge_info.pr_title}
+              </a>
+            ) : (
+              <p className="text-sm text-gray-700">Recorded source revision</p>
+            )}
+            {forge_info.repository && (
+              <p className="mt-2 text-xs text-gray-500">
+                Repository: <span className="font-medium text-gray-700">{forge_info.repository}</span>
+              </p>
+            )}
+            {forge_info.head_branch && (
+              <p className="mt-1 text-xs text-gray-500">
+                Branch: <code className="text-gray-700">{forge_info.head_branch}</code>
+              </p>
+            )}
+            {forge_info.requested_sha && (
+              <p className="mt-1 text-xs text-gray-500">
+                Selected commit:{' '}
+                {forge_info.repository ? (
+                  <a
+                    href={`https://github.com/${forge_info.repository}/commit/${forge_info.requested_sha}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-indigo-600 hover:text-indigo-800 hover:underline"
+                  >
+                    {forge_info.requested_sha.slice(0, 12)}
+                  </a>
+                ) : (
+                  <code className="text-gray-700">{forge_info.requested_sha.slice(0, 12)}</code>
+                )}
+              </p>
+            )}
           </div>
         )}
         <div className="card p-4">

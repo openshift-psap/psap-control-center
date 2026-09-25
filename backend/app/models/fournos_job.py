@@ -29,6 +29,12 @@ class FournosJob(Base):
     requester_email = Column(String(255), default="", index=True)
     requester_name = Column(String(255), default="")
     auth_provider = Column(String(50), default="")
+    source_repository = Column(String(255), default="", index=True)
+    source_pr_number = Column(Integer, nullable=True, index=True)
+    source_pr_url = Column(String(1024), default="")
+    source_head_branch = Column(String(255), default="")
+    source_requested_sha = Column(String(64), default="", index=True)
+    source_resolved_sha = Column(String(64), default="", index=True)
     status = Column(String(50), default="Pending", index=True)
     message = Column(Text, default="")
     created_at = Column(
@@ -85,6 +91,10 @@ class FournosJob(Base):
             func.coalesce(completed_at, created_at),
         ),
         Index("ix_fournos_jobs_trigger_type", "trigger_type"),
+        Index(
+            "ix_fournos_jobs_source_pr",
+            "source_repository", "source_pr_number",
+        ),
         # Composite index matching the History query's WHERE + ORDER BY
         # shape (status IN (...) AND is_lock = false AND trigger_type != ...
         # ORDER BY completed_at DESC) so it can be satisfied with an index

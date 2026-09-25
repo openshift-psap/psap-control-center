@@ -64,6 +64,8 @@ import type {
   Cluster,
   JobScheduling,
   ClusterOverview,
+  GitHubPR,
+  PullRequestSelection,
 } from '../types'
 
 const RUNNING_JOB_STATUSES = new Set(['Running', 'Pending', 'Admitted', 'Resolving'])
@@ -394,6 +396,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   const [exclusive, setExclusive] = useState(false)
   const [configRaw, setConfigRaw] = useState('')
   const [pullSha, setPullSha] = useState('')
+  const [selectedPR, setSelectedPR] = useState<GitHubPR | null>(null)
   const [prSearch, setPrSearch] = useState('')
   const [prDropdownOpen, setPrDropdownOpen] = useState(false)
   // step 1 = "what do you want to do" (Lock / Forge Job / Custom Job).
@@ -474,16 +477,26 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
     if (proj?.cluster) setCluster(proj.cluster)
   }
 
-  const selectPR = (pr: { number: number; title: string; author: string; head_sha: string; draft: boolean } | null) => {
+  const selectPR = (pr: GitHubPR | null) => {
     if (pr) {
       setPrSearch(`#${pr.number} — ${pr.title} (${pr.author})`)
       setPullSha(pr.head_sha)
+      setSelectedPR(pr)
     } else {
       setPrSearch('')
       setPullSha('')
+      setSelectedPR(null)
     }
     setPrDropdownOpen(false)
   }
+
+  const pullRequest: PullRequestSelection | null = selectedPR ? {
+    repository: selectedPR.repository,
+    number: selectedPR.number,
+    url: selectedPR.url,
+    head_branch: selectedPR.branch,
+    requested_sha: selectedPR.head_sha,
+  } : null
 
   const configOverrides = useMemo(() => {
     const overrides: Record<string, string> = {}
@@ -511,6 +524,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
         priority,
         exclusive,
         config_overrides: overrides,
+        pull_request: pullRequest,
         pull_sha: pullSha,
         schedule: scheduling.mode === 'recurring' ? scheduling.scheduleUtc : '',
         scheduled_start_time: scheduling.mode === 'defer' ? scheduling.scheduledStartTimeUtc : null,
@@ -841,7 +855,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
             <input
               type="text"
               value={prSearch}
-              onChange={(e) => { setPrSearch(e.target.value); setPrDropdownOpen(true); setPullSha('') }}
+              onChange={(e) => { setPrSearch(e.target.value); setPrDropdownOpen(true); setPullSha(''); setSelectedPR(null) }}
               onFocus={() => setPrDropdownOpen(true)}
               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
               placeholder="Search PRs by number, title, or author..."
@@ -919,7 +933,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
         <DynamicSubmitForm
           project={project}
           schema={dynamicSchema}
-          basics={{ cluster, pipeline, owner, priority, exclusive, pullSha, prLabel: prSearch || pullSha, scheduling }}
+          basics={{ cluster, pipeline, owner, priority, exclusive, pullSha, pullRequest, prLabel: prSearch || pullSha, scheduling }}
           step={step - 1}
           onBack={() => setStep(step - 1)}
           onNext={() => setStep(step + 1)}
@@ -1054,6 +1068,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
                   priority,
                   exclusive,
                   pullSha,
+                  pullRequest,
                   args: preset ? [preset] : [],
                   configOverrides: withVersionOverride(project, showVersion ? version : '', configOverrides),
                   schedule: scheduling.mode === 'recurring' ? scheduling.scheduleUtc : '',
