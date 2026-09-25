@@ -5,7 +5,7 @@ import ReviewRow, { ReviewSection } from './ReviewRow'
 import YamlPreview from './YamlPreview'
 import { useSubmitJob, useSubmitMatrix } from '../hooks/useFournos'
 import { buildMatrixJobPreviews, buildSingleJobPreview, toYamlPreview } from '../utils/fournosJobPreview'
-import type { JobScheduling, ProjectUiSchema, UiField, UiMode, UiOption, UiPipeline, UiQuickPreset, UiVisibleIf } from '../types'
+import type { JobScheduling, ProjectUiSchema, PullRequestSelection, UiField, UiMode, UiOption, UiPipeline, UiQuickPreset, UiVisibleIf } from '../types'
 
 // ─── Generic, schema-driven submit form ────────────────────────────────
 //
@@ -33,6 +33,7 @@ export interface SubmitBasics {
   priority: string
   exclusive: boolean
   pullSha: string
+  pullRequest: PullRequestSelection | null
   /** Human-readable label for the review step, e.g. "#123 — title (author)". */
   prLabel: string
   /** When this job (or recurring template) should run — see ClusterScheduleModal. */
@@ -320,6 +321,7 @@ export default function DynamicSubmitForm({
           owner: basics.owner,
           priority: basics.priority,
           exclusive: basics.exclusive,
+          pull_request: basics.pullRequest,
           pull_sha: basics.pullSha,
           gpu_type: '',
           ...schedulingRequestFields(basics.scheduling),
@@ -343,6 +345,7 @@ export default function DynamicSubmitForm({
         owner: basics.owner,
         exclusive: basics.exclusive,
         config_overrides: configOverrides,
+        pull_request: basics.pullRequest,
         pull_sha: basics.pullSha,
         priority: basics.priority,
         ...schedulingRequestFields(basics.scheduling),
@@ -576,6 +579,7 @@ export default function DynamicSubmitForm({
           priority: basics.priority,
           exclusive: basics.exclusive,
           pullSha: basics.pullSha,
+          pullRequest: basics.pullRequest,
           args,
           configOverrides: overrides,
           schedule: basics.scheduling.mode === 'recurring' ? basics.scheduling.scheduleUtc : '',

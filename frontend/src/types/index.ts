@@ -451,6 +451,12 @@ export interface FournosJobSummary {
    * created_at (when the CR was created). Powers the scheduling calendar. */
   scheduled_start_time: string | null
   source: 'live' | 'history'
+  source_repository: string
+  source_pr_number: number | null
+  source_pr_url: string
+  source_head_branch: string
+  source_requested_sha: string
+  source_resolved_sha: string
 }
 
 export interface FournosJobListResponse {
@@ -503,6 +509,10 @@ export interface ForgeInfo {
   pr_number: string
   pr_title: string
   pr_url: string
+  repository: string
+  head_branch: string
+  requested_sha: string
+  resolved_sha: string
 }
 
 export interface FournosJobDetailResponse {
@@ -620,7 +630,17 @@ export interface GitHubPR {
   author: string
   head_sha: string
   branch: string
+  repository: string
+  url: string
   draft: boolean
+}
+
+export interface PullRequestSelection {
+  repository: string
+  number: number
+  url: string
+  head_branch: string
+  requested_sha: string
 }
 
 export interface GithubSyncStatus {
@@ -641,6 +661,7 @@ export interface SubmitJobRequest {
   owner: string
   exclusive: boolean
   config_overrides: Record<string, string>
+  pull_request?: PullRequestSelection | null
   pull_sha: string
   priority?: string
   gpu_type?: string
@@ -679,6 +700,7 @@ export interface SubmitMatrixRequest {
   owner: string
   priority: string
   exclusive: boolean
+  pull_request?: PullRequestSelection | null
   pull_sha: string
   gpu_type: string
   scheduled_start_time?: string | null

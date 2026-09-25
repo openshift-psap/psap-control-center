@@ -22,6 +22,7 @@ from app.core.auth import (
 from app.services import fournos_k8s_client as k8s_client
 from app.services import fournos_db_service as db_svc
 from app.services import pipeline_definitions
+from app.services.source_provenance import extract_source_request_fields
 from app.models.fournos_job import FournosJob
 
 logger = logging.getLogger(__name__)
@@ -197,6 +198,7 @@ def _extract_forge_fields(job: dict) -> dict:
         "requester_email": annotations.get(REQUESTER_EMAIL_ANNOTATION, ""),
         "requester_name": annotations.get(REQUESTER_NAME_ANNOTATION, ""),
         "auth_provider": annotations.get(REQUESTER_PROVIDER_ANNOTATION, ""),
+        **extract_source_request_fields(spec),
         "status": phase,
         "message": status.get("message", ""),
         "created_at": created_at,

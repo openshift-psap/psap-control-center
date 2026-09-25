@@ -30,6 +30,12 @@ class FournosJobSummary(BaseModel):
     # created. Powers the cluster calendar's day view.
     scheduled_start_time: Optional[str] = None
     source: str = "live"
+    source_repository: str = ""
+    source_pr_number: Optional[int] = None
+    source_pr_url: str = ""
+    source_head_branch: str = ""
+    source_requested_sha: str = ""
+    source_resolved_sha: str = ""
 
     class Config:
         from_attributes = True
@@ -91,6 +97,10 @@ class ForgeInfo(BaseModel):
     pr_number: str = ""
     pr_title: str = ""
     pr_url: str = ""
+    repository: str = ""
+    head_branch: str = ""
+    requested_sha: str = ""
+    resolved_sha: str = ""
 
 
 # -- Job event schemas --
@@ -116,6 +126,15 @@ class JobListResponse(BaseModel):
 
 # -- Submit job --
 
+class PullRequestSelection(BaseModel):
+    """Immutable PR snapshot selected by the user in Control Center."""
+
+    repository: str
+    number: int = Field(..., ge=1)
+    url: str
+    head_branch: str
+    requested_sha: str
+
 class SubmitJobRequest(BaseModel):
     project: str
     cluster: str
@@ -133,6 +152,7 @@ class SubmitJobRequest(BaseModel):
     owner: str = ""
     exclusive: bool = False
     config_overrides: Dict[str, str] = Field(default_factory=dict)
+    pull_request: Optional[PullRequestSelection] = None
     pull_sha: str = ""
     priority: str = "manual"
     gpu_type: str = ""
@@ -177,6 +197,7 @@ class SubmitMatrixRequest(BaseModel):
     owner: str = "fournos-dashboard"
     priority: str = "manual"
     exclusive: bool = False
+    pull_request: Optional[PullRequestSelection] = None
     pull_sha: str = ""
     gpu_type: str = ""
     scheduled_start_time: Optional[str] = None
@@ -305,6 +326,8 @@ class GitHubPR(BaseModel):
     author: str
     head_sha: str
     branch: str
+    repository: str
+    url: str
     draft: bool = False
 
 
