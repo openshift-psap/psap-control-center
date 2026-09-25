@@ -14,6 +14,7 @@ import Settings from './pages/Settings'
 import CostExplorer from './pages/CostExplorer'
 import { isAdmin, setSession } from './stores/authStore'
 import { authApi } from './services/api'
+import toast from 'react-hot-toast'
 
 function NotFound() {
   return (
@@ -37,13 +38,43 @@ function App() {
   }, [syncAuth])
 
   useEffect(() => {
-    authApi.me()
-      .then((session) => {
-        setSession(session)
-      })
-      .catch(() => {
-        // No valid session cookie — anonymous viewing is fine
-      })
+    const bootstrapAuth = async () => {
+      const params = new URLSearchParams(window.location.search)
+      const code = params.get('code')
+      const state = params.get('state')
+      const oauthError = params.get('error')
+
+      try {
+        if (code && state) {
+          const session = await authApi.completeGoogleLogin(code, state)
+          setSession(session)
+          toast.success(`Welcome, ${session.name || session.email || session.username}`)
+        } else if (oauthError) {
+          toast.error('Google sign-in was cancelled or denied')
+        } else {
+          const session = await authApi.me()
+          setSession(session)
+        }
+      } catch (error) {
+        if (code || oauthError) {
+          toast.error(error instanceof Error ? error.message : 'Google sign-in failed')
+        }
+        // No valid session cookie is expected for anonymous visitors.
+      } finally {
+        if (code || state || oauthError) {
+          for (const key of ['code', 'state', 'scope', 'authuser', 'hd', 'prompt', 'error', 'error_description']) {
+            params.delete(key)
+          }
+          const query = params.toString()
+          window.history.replaceState(
+            {},
+            '',
+            `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`,
+          )
+        }
+      }
+    }
+    bootstrapAuth()
   }, [])
 
   return (

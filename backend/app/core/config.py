@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     USER_USERNAME: str = ""
     USER_PASSWORD: str = ""
 
+    # Control Center sign-in. Local accounts remain available as a
+    # development/emergency fallback while Google Workspace SSO is trialled.
+    LOCAL_LOGIN_ENABLED: bool = True
+    GOOGLE_OAUTH_ENABLED: bool = False
+    GOOGLE_CLIENT_ID: Optional[str] = None
+    GOOGLE_CLIENT_SECRET: Optional[str] = None
+    GOOGLE_REDIRECT_URI: Optional[str] = None
+    GOOGLE_ALLOWED_DOMAIN: Optional[str] = None
+    GOOGLE_ADMIN_EMAILS: str = ""
+
     HEARTH_ENABLED: bool = True
     HEARTH_NAMESPACE: str = "hearth"
     HEARTH_KUBECONFIG_PATH: Optional[str] = None
@@ -64,13 +74,23 @@ class Settings(BaseSettings):
 settings = Settings()
 
 _missing = []
-if not settings.ADMIN_USERNAME or not settings.ADMIN_PASSWORD:
-    _missing.append("ADMIN_USERNAME / ADMIN_PASSWORD")
-if not settings.USER_USERNAME or not settings.USER_PASSWORD:
-    _missing.append("USER_USERNAME / USER_PASSWORD")
+if settings.LOCAL_LOGIN_ENABLED:
+    if not settings.ADMIN_USERNAME or not settings.ADMIN_PASSWORD:
+        _missing.append("ADMIN_USERNAME / ADMIN_PASSWORD")
+    if not settings.USER_USERNAME or not settings.USER_PASSWORD:
+        _missing.append("USER_USERNAME / USER_PASSWORD")
+if settings.GOOGLE_OAUTH_ENABLED:
+    for field_name in (
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "GOOGLE_REDIRECT_URI",
+        "GOOGLE_ALLOWED_DOMAIN",
+    ):
+        if not getattr(settings, field_name):
+            _missing.append(field_name)
 if _missing:
     raise RuntimeError(
-        f"Required credentials not set via environment variables: {', '.join(_missing)}. "
+        f"Required authentication settings not set via environment variables: {', '.join(_missing)}. "
         "Set them in your .env file or environment."
     )
 

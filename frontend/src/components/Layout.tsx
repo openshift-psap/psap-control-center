@@ -18,7 +18,7 @@ import {
 import clsx from 'clsx'
 import LoginModal from './LoginModal'
 import HearthConnectModal from './HearthConnectModal'
-import { isAuthenticated, isAdmin, getSession, clearSession } from '../stores/authStore'
+import { isAuthenticated, isAdmin, getDisplayName, clearSession } from '../stores/authStore'
 import { authApi } from '../services/api'
 import { useHearthStatus, useDisconnectHearth } from '../hooks/useHearth'
 import { useReservations } from '../hooks/useReservations'
@@ -342,7 +342,7 @@ export default function Layout() {
                 <div className="flex items-center gap-3">
                   <span className="flex items-center gap-1.5 text-sm text-gray-300">
                     <LockClosedIcon className="h-4 w-4 text-green-400" />
-                    <span className="hidden sm:inline font-medium">{getSession()?.username}</span>
+                    <span className="hidden sm:inline font-medium">{getDisplayName()}</span>
                   </span>
                   <button
                     onClick={handleLogout}

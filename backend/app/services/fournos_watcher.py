@@ -13,6 +13,12 @@ from dateutil.parser import parse as parse_dt
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
+from app.core.auth import (
+    REQUESTER_EMAIL_ANNOTATION,
+    REQUESTER_NAME_ANNOTATION,
+    REQUESTER_PROVIDER_ANNOTATION,
+    REQUESTER_SUBJECT_ANNOTATION,
+)
 from app.services import fournos_k8s_client as k8s_client
 from app.services import fournos_db_service as db_svc
 from app.services import pipeline_definitions
@@ -161,6 +167,7 @@ def _extract_forge_fields(job: dict) -> dict:
         duration_seconds = (completed_at - created_at).total_seconds()
 
     labels = meta.get("labels", {})
+    annotations = meta.get("annotations", {})
     # Native Fournos recurring-job label (fournos.dev/recurring-parent) —
     # set by the operator itself on every child it stamps out from a
     # recurring template (see fournos/fournos/handlers/lifecycle.py). A job
@@ -186,6 +193,10 @@ def _extract_forge_fields(job: dict) -> dict:
         "cluster": spec.get("cluster", ""),
         "pipeline": spec.get("pipeline", ""),
         "owner": spec.get("owner", ""),
+        "requester_subject": annotations.get(REQUESTER_SUBJECT_ANNOTATION, ""),
+        "requester_email": annotations.get(REQUESTER_EMAIL_ANNOTATION, ""),
+        "requester_name": annotations.get(REQUESTER_NAME_ANNOTATION, ""),
+        "auth_provider": annotations.get(REQUESTER_PROVIDER_ANNOTATION, ""),
         "status": phase,
         "message": status.get("message", ""),
         "created_at": created_at,

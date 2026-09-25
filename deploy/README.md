@@ -111,6 +111,28 @@ oc create secret generic psap-control-center-config \
   --from-literal=LOG_LEVEL='INFO'
 ```
 
+For Google Workspace SSO, create a separate secret from the downloaded web
+client credentials. Do not commit the JSON file or client secret:
+
+```bash
+oc create secret generic psap-control-center-google-oauth \
+  --from-literal=GOOGLE_OAUTH_ENABLED=true \
+  --from-literal=GOOGLE_CLIENT_ID='<web-client-id>' \
+  --from-literal=GOOGLE_CLIENT_SECRET='<web-client-secret>' \
+  --from-literal=GOOGLE_REDIRECT_URI='https://control-center.example.com' \
+  --from-literal=GOOGLE_ALLOWED_DOMAIN='example.com' \
+  --from-literal=GOOGLE_ADMIN_EMAILS='admin1@example.com,admin2@example.com'
+
+oc set env deployment/psap-control-center-backend \
+  --from=secret/psap-control-center-google-oauth
+```
+
+The redirect URI must exactly match one of the web client's authorized
+redirect URIs in Google Cloud Console. During rollout, keep
+`LOCAL_LOGIN_ENABLED=true` so the existing administrator account remains an
+emergency fallback. Google users default to the normal user role unless their
+verified email appears in `GOOGLE_ADMIN_EMAILS`.
+
 ### 5. Create persistent volume claims
 
 ```bash

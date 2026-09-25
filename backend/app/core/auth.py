@@ -11,6 +11,26 @@ from app.utils.logger import create_logger
 logger = create_logger("Auth")
 
 COOKIE_NAME = "session"
+REQUESTER_SUBJECT_ANNOTATION = "control-center.psap.redhat.com/requester-subject"
+REQUESTER_EMAIL_ANNOTATION = "control-center.psap.redhat.com/requester-email"
+REQUESTER_NAME_ANNOTATION = "control-center.psap.redhat.com/requester-name"
+REQUESTER_PROVIDER_ANNOTATION = "control-center.psap.redhat.com/auth-provider"
+
+
+def actor_label(user: dict) -> str:
+    """Human-readable, verified actor label for activity messages."""
+    return user.get("email") or user.get("name") or user["username"]
+
+
+def requester_annotations(user: dict) -> dict[str, str]:
+    """Durable actor identity attached to resources created by the UI."""
+    values = {
+        REQUESTER_SUBJECT_ANNOTATION: user.get("subject", ""),
+        REQUESTER_EMAIL_ANNOTATION: user.get("email", ""),
+        REQUESTER_NAME_ANNOTATION: user.get("name", ""),
+        REQUESTER_PROVIDER_ANNOTATION: user.get("auth_provider", "local"),
+    }
+    return {key: str(value) for key, value in values.items() if value}
 
 
 def validate_credentials(username: str, password: str) -> Optional[dict]:
@@ -28,11 +48,27 @@ def validate_credentials(username: str, password: str) -> Optional[dict]:
     return None
 
 
-def create_session_token(username: str, role: str) -> str:
+def create_session_token(
+    username: str,
+    role: str,
+    *,
+    subject: Optional[str] = None,
+    email: Optional[str] = None,
+    name: Optional[str] = None,
+    auth_provider: str = "local",
+) -> str:
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
-    payload = {"sub": username, "role": role, "exp": expire}
+    payload = {
+        "sub": subject or f"local:{username}",
+        "username": username,
+        "email": email,
+        "name": name or username,
+        "auth_provider": auth_provider,
+        "role": role,
+        "exp": expire,
+    }
     return jwt.encode(
         payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM
     )
@@ -44,11 +80,22 @@ def decode_session_token(token: str) -> Optional[dict]:
             token, settings.SECRET_KEY,
             algorithms=[settings.ALGORITHM],
         )
-        username: Optional[str] = payload.get("sub")
+        # Tokens issued before Google SSO used ``sub`` as the username.
+        # Keep accepting those during the rollout so existing sessions do
+        # not fail abruptly when the dev deployment updates.
+        subject: Optional[str] = payload.get("sub")
+        username: Optional[str] = payload.get("username") or subject
         role: Optional[str] = payload.get("role")
-        if username is None or role is None:
+        if subject is None or username is None or role is None:
             return None
-        return {"username": username, "role": role}
+        return {
+            "subject": subject,
+            "username": username,
+            "email": payload.get("email"),
+            "name": payload.get("name") or username,
+            "auth_provider": payload.get("auth_provider") or "local",
+            "role": role,
+        }
     except JWTError:
         return None
 

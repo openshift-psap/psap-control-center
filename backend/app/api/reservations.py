@@ -5,7 +5,7 @@ from typing import Optional, List
 from datetime import datetime
 
 from app.core.database import get_db
-from app.core.auth import require_auth, require_admin
+from app.core.auth import actor_label, require_auth, require_admin
 from app.services.reservation_service import ReservationService
 from app.services.slack_notifier import (
     send_new_reservation_notification,
@@ -114,7 +114,7 @@ async def create_reservation(
     service = ReservationService(db)
 
     try:
-        reservation = await service.create_reservation(reservation_data)
+        reservation = await service.create_reservation(reservation_data, actor=_user)
         background_tasks.add_task(send_new_reservation_notification, reservation)
         return _to_response(reservation)
     except ValueError as e:
@@ -233,7 +233,9 @@ async def cancel_reservation(
     existing = await service.get_reservation(reservation_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Reservation not found")
-    is_owner = existing.user_name == _user["username"]
+    is_owner = existing.user_name in {
+        _user["username"], _user.get("email"), _user.get("name")
+    }
     if _user["role"] != "admin" and not is_owner:
         raise HTTPException(
             status_code=403,
@@ -241,7 +243,7 @@ async def cancel_reservation(
         )
 
     reservation = await service.cancel_reservation(
-        reservation_id, cancelled_by=_user["username"]
+        reservation_id, cancelled_by=actor_label(_user)
     )
 
     if not reservation:
@@ -263,7 +265,7 @@ async def approve_reservation(
     service = ReservationService(db)
     try:
         reservation = await service.approve_reservation(
-            reservation_id, approved_by=_user["username"]
+            reservation_id, approved_by=actor_label(_user)
         )
         if not reservation:
             raise HTTPException(
@@ -287,7 +289,7 @@ async def deny_reservation(
     try:
         reservation = await service.deny_reservation(
             reservation_id,
-            denied_by=_user["username"],
+            denied_by=actor_label(_user),
             reason=body.reason,
         )
         if not reservation:
@@ -317,7 +319,7 @@ async def request_modification(
 
     try:
         reservation = await service.request_modification(
-            reservation_id, changes, requested_by=_user["username"]
+            reservation_id, changes, requested_by=actor_label(_user)
         )
         if not reservation:
             raise HTTPException(status_code=404, detail="Reservation not found")
@@ -341,7 +343,7 @@ async def approve_modification(
     service = ReservationService(db)
     try:
         reservation = await service.approve_modification(
-            reservation_id, approved_by=_user["username"]
+            reservation_id, approved_by=actor_label(_user)
         )
         if not reservation:
             raise HTTPException(status_code=404, detail="Reservation not found")
@@ -364,7 +366,7 @@ async def deny_modification(
     try:
         reservation = await service.deny_modification(
             reservation_id,
-            denied_by=_user["username"],
+            denied_by=actor_label(_user),
             reason=body.reason,
         )
         if not reservation:

@@ -25,6 +25,10 @@ class FournosJob(Base):
     cluster = Column(String(255), nullable=False, index=True)
     pipeline = Column(String(255), default="")
     owner = Column(String(255), default="", index=True)
+    requester_subject = Column(String(255), default="", index=True)
+    requester_email = Column(String(255), default="", index=True)
+    requester_name = Column(String(255), default="")
+    auth_provider = Column(String(50), default="")
     status = Column(String(50), default="Pending", index=True)
     message = Column(Text, default="")
     created_at = Column(

@@ -16,7 +16,15 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from app.core.auth import require_admin, require_auth
+from app.core.auth import (
+    REQUESTER_EMAIL_ANNOTATION,
+    REQUESTER_NAME_ANNOTATION,
+    REQUESTER_PROVIDER_ANNOTATION,
+    REQUESTER_SUBJECT_ANNOTATION,
+    requester_annotations,
+    require_admin,
+    require_auth,
+)
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.schemas.fournos import (
@@ -187,6 +195,14 @@ def _db_job_to_fjob_dict(job) -> dict:
                 job.created_at.isoformat() if job.created_at else ""
             ),
             "uid": job.id,
+            "annotations": {
+                key: value for key, value in {
+                    REQUESTER_SUBJECT_ANNOTATION: job.requester_subject,
+                    REQUESTER_EMAIL_ANNOTATION: job.requester_email,
+                    REQUESTER_NAME_ANNOTATION: job.requester_name,
+                    REQUESTER_PROVIDER_ANNOTATION: job.auth_provider,
+                }.items() if value
+            },
         },
         "spec": spec,
         "status": status,
@@ -534,7 +550,7 @@ async def cancel_job(job_name: str, _=Depends(require_admin)):
 
 
 @router.post("/jobs/{job_name}/rerun")
-async def rerun_job(job_name: str, _=Depends(require_admin)):
+async def rerun_job(job_name: str, user=Depends(require_admin)):
     job = await asyncio.to_thread(k8s.get_fournos_job, job_name)
     if not job:
         async with AsyncSessionLocal() as session:
@@ -559,6 +575,7 @@ async def rerun_job(job_name: str, _=Depends(require_admin)):
         "metadata": {
             "name": new_name,
             "namespace": settings.FOURNOS_NAMESPACE,
+            "annotations": requester_annotations(user),
         },
         "spec": spec,
     }
@@ -640,7 +657,7 @@ def _apply_scheduling(spec: dict, schedule: str, scheduled_start_time: Optional[
 
 
 @router.post("/submit", response_model=SubmitJobResponse)
-async def submit_job(req: SubmitJobRequest, _=Depends(require_auth)):
+async def submit_job(req: SubmitJobRequest, user=Depends(require_auth)):
     config_overrides = dict(req.config_overrides)
 
     if req.version:
@@ -698,6 +715,7 @@ async def submit_job(req: SubmitJobRequest, _=Depends(require_auth)):
         "metadata": {
             "name": job_name,
             "namespace": settings.FOURNOS_NAMESPACE,
+            "annotations": requester_annotations(user),
         },
         "spec": spec,
     }
@@ -724,6 +742,10 @@ async def submit_job(req: SubmitJobRequest, _=Depends(require_auth)):
                 cluster=req.cluster,
                 pipeline=req.pipeline,
                 owner=req.owner or "fournos-dashboard",
+                requester_subject=user.get("subject", ""),
+                requester_email=user.get("email", ""),
+                requester_name=user.get("name", ""),
+                auth_provider=user.get("auth_provider", ""),
                 status=initial_status,
                 config_overrides=config_overrides,
                 fjob_spec=body.get("spec", {}),
@@ -753,7 +775,7 @@ async def submit_job(req: SubmitJobRequest, _=Depends(require_auth)):
 # ui/submit.yaml (see app/schemas/ui_schema.py) — no project-specific code.
 
 @router.post("/submit-matrix", response_model=SubmitMatrixResponse)
-async def submit_matrix(req: SubmitMatrixRequest, _=Depends(require_auth)):
+async def submit_matrix(req: SubmitMatrixRequest, user=Depends(require_auth)):
     """Submit a matrix pipeline — creates one FournosJob per model, each
     carrying all of the selected workloads plus the shared args/overrides.
     """
@@ -806,6 +828,7 @@ async def submit_matrix(req: SubmitMatrixRequest, _=Depends(require_auth)):
             "metadata": {
                 "generateName": generate_name,
                 "namespace": settings.FOURNOS_NAMESPACE,
+                "annotations": requester_annotations(user),
             },
             "spec": spec,
         }
@@ -831,6 +854,10 @@ async def submit_matrix(req: SubmitMatrixRequest, _=Depends(require_auth)):
                         cluster=req.cluster,
                         pipeline=req.pipeline,
                         owner=req.owner,
+                        requester_subject=user.get("subject", ""),
+                        requester_email=user.get("email", ""),
+                        requester_name=user.get("name", ""),
+                        auth_provider=user.get("auth_provider", ""),
                         status=(
                             "Recurring" if req.schedule
                             else "Scheduled" if req.scheduled_start_time
@@ -1192,7 +1219,7 @@ async def list_cluster_locks(cluster: str = Query("")):
 
 @router.post("/cluster-locks", response_model=ClusterLockResponse)
 async def create_cluster_lock(
-    req: CreateClusterLockRequest, _=Depends(require_auth)
+    req: CreateClusterLockRequest, user=Depends(require_auth)
 ):
     spec: dict[str, Any] = {
         "cluster": req.cluster,
@@ -1212,7 +1239,11 @@ async def create_cluster_lock(
             settings.FOURNOS_API_GROUP, settings.FOURNOS_API_VERSION
         ),
         "kind": "FournosJob",
-        "metadata": {"name": job_name, "namespace": settings.FOURNOS_NAMESPACE},
+        "metadata": {
+            "name": job_name,
+            "namespace": settings.FOURNOS_NAMESPACE,
+            "annotations": requester_annotations(user),
+        },
         "spec": spec,
     }
     try:

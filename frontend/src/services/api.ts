@@ -303,8 +303,22 @@ export const hearthApi = {
 }
 
 export const authApi = {
+  config: async (): Promise<{ google_enabled: boolean; local_login_enabled: boolean }> => {
+    const { data } = await api.get('/auth/config')
+    return data
+  },
+
   login: async (username: string, password: string): Promise<AuthSession> => {
     const { data } = await api.post('/auth/login', { username, password })
+    return data
+  },
+
+  loginWithGoogle: (): void => {
+    window.location.assign('/api/v1/auth/google/login')
+  },
+
+  completeGoogleLogin: async (code: string, state: string): Promise<AuthSession> => {
+    const { data } = await api.get('/auth/google/callback', { params: { code, state } })
     return data
   },
 
