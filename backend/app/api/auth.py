@@ -1,12 +1,16 @@
 import secrets
 import base64
 import hashlib
+import asyncio
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from google.auth import exceptions as google_auth_exceptions
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 
@@ -173,34 +177,16 @@ async def google_login(request: Request):
 
 async def _verify_google_id_token(id_token: str, expected_nonce: str) -> dict:
     try:
-        header = jwt.get_unverified_header(id_token)
-    except JWTError as exc:
-        logger.warn("Google callback rejected: invalid ID-token header")
-        raise HTTPException(401, "Google returned an invalid ID token") from exc
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        jwks_response = await client.get("https://www.googleapis.com/oauth2/v3/certs")
-    if jwks_response.status_code != 200:
-        logger.warn("Google callback failed: signing keys unavailable")
-        raise HTTPException(502, "Unable to validate Google identity")
-
-    key = next(
-        (item for item in jwks_response.json().get("keys", []) if item.get("kid") == header.get("kid")),
-        None,
-    )
-    if key is None:
-        logger.warn("Google callback rejected: signing key not found")
-        raise HTTPException(401, "Google signing key was not found")
-
-    try:
-        claims = jwt.decode(
+        claims = await asyncio.to_thread(
+            google_id_token.verify_oauth2_token,
             id_token,
-            key,
-            algorithms=["RS256"],
-            audience=settings.GOOGLE_CLIENT_ID,
-            options={"verify_iss": False},
+            google_requests.Request(),
+            settings.GOOGLE_CLIENT_ID,
         )
-    except JWTError as exc:
+    except google_auth_exceptions.TransportError as exc:
+        logger.warn("Google callback failed: signing keys unavailable")
+        raise HTTPException(502, "Unable to validate Google identity") from exc
+    except (ValueError, google_auth_exceptions.GoogleAuthError) as exc:
         logger.warn("Google callback rejected: ID-token verification failed")
         raise HTTPException(401, "Google identity verification failed") from exc
 

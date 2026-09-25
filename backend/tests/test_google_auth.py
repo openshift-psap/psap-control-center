@@ -85,6 +85,33 @@ def test_google_login_uses_configured_redirect_and_domain(monkeypatch):
     assert "Secure" in response.headers["set-cookie"]
 
 
+def test_google_id_token_uses_official_verifier(monkeypatch):
+    monkeypatch.setattr(auth_api.settings, "GOOGLE_CLIENT_ID", "client-id")
+    monkeypatch.setattr(auth_api.settings, "GOOGLE_ALLOWED_DOMAIN", "example.com")
+
+    def fake_verify(token, _request, audience):
+        assert token == "signed-id-token"
+        assert audience == "client-id"
+        return {
+            "iss": "https://accounts.google.com",
+            "aud": "client-id",
+            "sub": "12345",
+            "nonce": "expected-nonce",
+            "email": "person@example.com",
+            "email_verified": True,
+            "hd": "example.com",
+        }
+
+    monkeypatch.setattr(auth_api.google_id_token, "verify_oauth2_token", fake_verify)
+
+    claims = asyncio.run(
+        auth_api._verify_google_id_token("signed-id-token", "expected-nonce")
+    )
+
+    assert claims["sub"] == "12345"
+    assert claims["email"] == "person@example.com"
+
+
 def test_google_callback_creates_user_session(monkeypatch):
     state = "expected-state"
     nonce = "expected-nonce"
