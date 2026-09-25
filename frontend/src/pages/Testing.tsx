@@ -1365,6 +1365,8 @@ export default function Testing() {
   const [filterProject, setFilterProject] = useState('')
   const [filterCluster, setFilterCluster] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
+  const [requesterScope, setRequesterScope] = useState<'all' | 'mine'>('all')
+  const authenticated = isAuthenticated()
   // History-only date + local time-of-day range filter. Empty historyDate
   // means "no time filter" — from/to only matter once a date is picked.
   const [historyDate, setHistoryDate] = useState('')
@@ -1383,6 +1385,10 @@ export default function Testing() {
     setPage(1)
   }
   const tz = browserTimezone()
+
+  useEffect(() => {
+    if (!authenticated && requesterScope === 'mine') setRequesterScope('all')
+  }, [authenticated, requesterScope])
 
   const { data: clustersData } = useClusters()
   const { data: forgeProjects } = useForgeProjects()
@@ -1416,6 +1422,7 @@ export default function Testing() {
     project: filterProject || undefined,
     cluster: filterCluster || undefined,
     status: filterStatus || undefined,
+    requester_scope: requesterScope,
     start_time: historyStartUtc,
     end_time: historyEndUtc,
     sort_by: activeSort.by || undefined,
@@ -1484,6 +1491,26 @@ export default function Testing() {
             placeholder="All projects"
             className="w-44"
           />
+          {authenticated && (
+            <div className="inline-flex rounded-md border border-gray-300 bg-white p-0.5" role="group" aria-label="Requester filter">
+              {(['all', 'mine'] as const).map((scope) => (
+                <button
+                  key={scope}
+                  type="button"
+                  onClick={() => { setRequesterScope(scope); setPage(1) }}
+                  aria-pressed={requesterScope === scope}
+                  className={clsx(
+                    'rounded px-2.5 py-1 text-xs font-medium transition-colors',
+                    requesterScope === scope
+                      ? 'bg-indigo-50 text-indigo-700'
+                      : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
+                  )}
+                >
+                  {scope === 'all' ? 'All jobs' : 'My jobs'}
+                </button>
+              ))}
+            </div>
+          )}
           <SearchableSelect
             value={filterCluster}
             onChange={(v) => { setFilterCluster(v); setPage(1) }}
@@ -1541,11 +1568,12 @@ export default function Testing() {
               )}
             </>
           )}
-          {(filterProject || filterCluster || filterStatus || historyDate) && (
+          {(filterProject || filterCluster || filterStatus || historyDate || requesterScope === 'mine') && (
             <button
               onClick={() => {
                 setFilterProject(''); setFilterCluster(''); setFilterStatus('')
                 setHistoryDate(''); setHistoryFromTime('00:00'); setHistoryToTime('23:59')
+                setRequesterScope('all')
               }}
               className="inline-flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-gray-600"
               title="Clear filters"

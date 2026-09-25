@@ -1,5 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 from app.services import fournos_k8s_client as k8s
 from app.services import fournos_watcher as watcher
@@ -173,6 +175,70 @@ def test_unknown_live_sort_key_falls_back_to_latest_age():
 
 def test_history_date_sort_falls_back_to_created_at():
     assert "coalesce" in str(db_service._SORT_COLUMNS["date"]).lower()
+
+
+def test_history_requester_filter_uses_immutable_subject(monkeypatch):
+    monkeypatch.setattr(db_service.settings, "DATABASE_URL", "sqlite://")
+    jobs_result = MagicMock()
+    jobs_result.scalars.return_value.all.return_value = []
+    count_result = MagicMock()
+    count_result.scalar.return_value = 0
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=[jobs_result, count_result])
+
+    asyncio.run(
+        db_service.list_jobs(
+            session,
+            requester_subject="google:12345",
+        )
+    )
+
+    statement = session.execute.await_args_list[0].args[0]
+    compiled = statement.compile()
+    assert "requester_subject" in str(compiled)
+    assert "google:12345" in compiled.params.values()
+
+
+def test_recurring_child_inherits_archived_parent_requester():
+    fields = {
+        "requester_subject": "",
+        "requester_email": "",
+        "requester_name": "",
+        "auth_provider": "",
+    }
+    parent = SimpleNamespace(
+        requester_subject="google:12345",
+        requester_email="person@example.com",
+        requester_name="Example Person",
+        auth_provider="google",
+    )
+
+    watcher._inherit_requester_fields(fields, parent)
+
+    assert fields == {
+        "requester_subject": "google:12345",
+        "requester_email": "person@example.com",
+        "requester_name": "Example Person",
+        "auth_provider": "google",
+    }
+
+
+def test_archived_parent_requester_lookup_omits_unattributed_jobs():
+    result = MagicMock()
+    result.all.return_value = [
+        ("owned-parent", "google:12345"),
+        ("legacy-parent", ""),
+    ]
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=result)
+
+    subjects = asyncio.run(
+        db_service.get_requester_subjects_by_names(
+            session, ["owned-parent", "legacy-parent"]
+        )
+    )
+
+    assert subjects == {"owned-parent": "google:12345"}
 
 
 def test_history_effective_date_index_is_created_for_existing_databases():

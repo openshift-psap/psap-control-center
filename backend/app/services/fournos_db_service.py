@@ -81,6 +81,24 @@ async def get_job_by_name(
     return result.scalar_one_or_none()
 
 
+async def get_requester_subjects_by_names(
+    session: AsyncSession,
+    names: Sequence[str],
+) -> dict[str, str]:
+    if not names:
+        return {}
+    result = await session.execute(
+        select(FournosJob.name, FournosJob.requester_subject).where(
+            FournosJob.name.in_(names)
+        )
+    )
+    return {
+        name: subject
+        for name, subject in result.all()
+        if subject
+    }
+
+
 async def list_jobs(
     session: AsyncSession,
     *,
@@ -88,6 +106,7 @@ async def list_jobs(
     cluster: Optional[str] = None,
     status: Optional[str] = None,
     owner: Optional[str] = None,
+    requester_subject: Optional[str] = None,
     created_after: Optional[datetime] = None,
     created_before: Optional[datetime] = None,
     sort_by: Optional[str] = None,
@@ -108,6 +127,8 @@ async def list_jobs(
         filters.append(FournosJob.status == status)
     if owner:
         filters.append(FournosJob.owner == owner)
+    if requester_subject:
+        filters.append(FournosJob.requester_subject == requester_subject)
     if created_after:
         filters.append(FournosJob.created_at >= created_after)
     if created_before:
