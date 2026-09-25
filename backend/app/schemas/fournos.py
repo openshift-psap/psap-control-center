@@ -128,6 +128,8 @@ class SubmitJobRequest(BaseModel):
     # `preset` when non-empty.
     args: List[str] = Field(default_factory=list)
     version: str = ""
+    # Accepted for backward-compatible clients; the API replaces this with
+    # the authenticated requester's verified display name.
     owner: str = ""
     exclusive: bool = False
     config_overrides: Dict[str, str] = Field(default_factory=dict)
@@ -171,6 +173,7 @@ class SubmitMatrixRequest(BaseModel):
     config_overrides: Dict[str, str] = Field(default_factory=dict)
     models: List[SubmitMatrixModelInput]
     workloads: List[str]
+    # Accepted for backward-compatible clients; ignored by the API.
     owner: str = "fournos-dashboard"
     priority: str = "manual"
     exclusive: bool = False
@@ -245,6 +248,7 @@ class ClusterLockResponse(BaseModel):
 
 class CreateClusterLockRequest(BaseModel):
     cluster: str
+    # Accepted for backward-compatible clients; ignored by the API.
     owner: str = ""
     reason: str = ""
     lock_until: Optional[str] = None  # ISO 8601 UTC; omit = held indefinitely

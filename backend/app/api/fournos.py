@@ -14,7 +14,7 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.core.auth import (
@@ -22,6 +22,8 @@ from app.core.auth import (
     REQUESTER_NAME_ANNOTATION,
     REQUESTER_PROVIDER_ANNOTATION,
     REQUESTER_SUBJECT_ANNOTATION,
+    actor_label,
+    get_current_user,
     requester_annotations,
     require_admin,
     require_auth,
@@ -109,6 +111,20 @@ def _public_job_metadata(metadata: dict) -> dict:
     }
     return public_metadata
 
+
+def _public_job_spec(spec: dict, *, include_owner: bool) -> dict:
+    """Return a copy of a job spec with identity hidden from public callers."""
+    public_spec = dict(spec or {})
+    if not include_owner:
+        public_spec.pop("owner", None)
+    return public_spec
+
+
+def _verified_owner(user: dict) -> str:
+    """Visible Fournos owner derived only from the authenticated identity."""
+    return str(user.get("name") or actor_label(user))
+
+
 def _extract_forge_info(job: dict) -> dict:
     forge = job.get("spec", {}).get("executionEngine", {}).get("forge", {})
     env = job.get("spec", {}).get("env", {})
@@ -159,7 +175,7 @@ def _trigger_type_for_live_job(meta: dict, spec: dict, schedule_parent: str) -> 
     return "manual"
 
 
-def _live_job_to_summary(job: dict) -> dict:
+def _live_job_to_summary(job: dict, *, include_owner: bool = True) -> dict:
     meta = job.get("metadata", {})
     spec = job.get("spec", {})
     status = job.get("status", {})
@@ -172,7 +188,7 @@ def _live_job_to_summary(job: dict) -> dict:
         "preset": " ".join(forge.get("args", [])),
         "cluster": spec.get("cluster", ""),
         "pipeline": spec.get("pipeline", ""),
-        "owner": spec.get("owner", ""),
+        "owner": spec.get("owner", "") if include_owner else "",
         "status": status.get("phase", "Pending"),
         "message": status.get("message", ""),
         "created_at": meta.get("creationTimestamp", ""),
@@ -186,14 +202,14 @@ def _live_job_to_summary(job: dict) -> dict:
     }
 
 
-def _db_job_to_summary(job) -> dict:
+def _db_job_to_summary(job, *, include_owner: bool = True) -> dict:
     return {
         "name": job.name,
         "project": job.project,
         "preset": job.preset,
         "cluster": job.cluster,
         "pipeline": job.pipeline,
-        "owner": job.owner,
+        "owner": job.owner if include_owner else "",
         "status": job.status,
         "message": job.message,
         "created_at": job.created_at.isoformat() if job.created_at else "",
@@ -364,6 +380,7 @@ def _sort_latest(items: List[dict], *date_fields: str) -> List[dict]:
 @router.get("/runs", response_model=JobListResponse)
 @router.get("/runs/", response_model=JobListResponse, include_in_schema=False)
 async def list_jobs(
+    request: Request,
     tab: str = Query("live", regex="^(live|history)$"),
     project: str = Query(""),
     cluster: str = Query(""),
@@ -376,6 +393,7 @@ async def list_jobs(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
 ):
+    include_owner = get_current_user(request) is not None
     if tab == "live":
         jobs = await _get_live_jobs()
         if project:
@@ -393,12 +411,14 @@ async def list_jobs(
                 j for j in jobs
                 if j.get("status", {}).get("phase") == status
             ]
-        if owner:
+        if owner and include_owner:
             jobs = [
                 j for j in jobs
                 if j.get("spec", {}).get("owner") == owner
             ]
-        summaries = [_live_job_to_summary(j) for j in jobs]
+        summaries = [
+            _live_job_to_summary(j, include_owner=include_owner) for j in jobs
+        ]
         key_fn = _live_sort_key(sort_by)
         summaries.sort(key=key_fn, reverse=(sort_dir == "desc"))
         total = len(summaries)
@@ -413,7 +433,7 @@ async def list_jobs(
                 project=project or None,
                 cluster=cluster or None,
                 status=status or None,
-                owner=owner or None,
+                owner=(owner or None) if include_owner else None,
                 created_after=created_after,
                 created_before=created_before,
                 sort_by=sort_by or None,
@@ -421,7 +441,9 @@ async def list_jobs(
                 limit=per_page,
                 offset=(page - 1) * per_page,
             )
-        summaries = [_db_job_to_summary(j) for j in db_jobs]
+        summaries = [
+            _db_job_to_summary(j, include_owner=include_owner) for j in db_jobs
+        ]
 
     return {
         "jobs": summaries,
@@ -432,7 +454,8 @@ async def list_jobs(
 
 
 @router.get("/jobs/{job_name}")
-async def get_job(job_name: str):
+async def get_job(job_name: str, request: Request):
+    include_owner = get_current_user(request) is not None
     job = await asyncio.to_thread(k8s.get_fournos_job, job_name)
 
     pods = []
@@ -514,7 +537,9 @@ async def get_job(job_name: str):
         return {
             "job": {
                 "metadata": _public_job_metadata(job.get("metadata", {})),
-                "spec": job.get("spec", {}),
+                "spec": _public_job_spec(
+                    job.get("spec", {}), include_owner=include_owner
+                ),
                 "status": job.get("status", {}),
                 "source": "live",
                 "duration_seconds": None,
@@ -559,6 +584,9 @@ async def get_job(job_name: str):
         "job": {
             **fjob,
             "metadata": _public_job_metadata(fjob.get("metadata", {})),
+            "spec": _public_job_spec(
+                fjob.get("spec", {}), include_owner=include_owner
+            ),
         },
         "pods": [],
         "stages": stages,
@@ -611,6 +639,7 @@ async def rerun_job(job_name: str, user=Depends(require_admin)):
     forge = spec.get("executionEngine", {}).get("forge", {})
     project = forge.get("project", "unknown")
     spec.pop("shutdown", None)
+    spec["owner"] = _verified_owner(user)
 
     new_name = k8s.sanitize_job_name("forge-{}".format(project))
     body = {
@@ -706,6 +735,7 @@ def _apply_scheduling(spec: dict, schedule: str, scheduled_start_time: Optional[
 @router.post("/submit", response_model=SubmitJobResponse)
 async def submit_job(req: SubmitJobRequest, user=Depends(require_auth)):
     config_overrides = dict(req.config_overrides)
+    owner = _verified_owner(user)
 
     if req.version:
         version_key = _VERSION_KEYS.get(
@@ -733,7 +763,7 @@ async def submit_job(req: SubmitJobRequest, user=Depends(require_auth)):
     spec: dict[str, Any] = {
         "cluster": req.cluster,
         "displayName": display_name,
-        "owner": req.owner or "fournos-dashboard",
+        "owner": owner,
         "pipeline": req.pipeline,
         "exclusive": req.exclusive,
         "priority": req.priority,
@@ -788,7 +818,7 @@ async def submit_job(req: SubmitJobRequest, user=Depends(require_auth)):
                 preset=req.preset or " ".join(req.args),
                 cluster=req.cluster,
                 pipeline=req.pipeline,
-                owner=req.owner or "fournos-dashboard",
+                owner=owner,
                 requester_subject=user.get("subject", ""),
                 requester_email=user.get("email", ""),
                 requester_name=user.get("name", ""),
@@ -829,6 +859,7 @@ async def submit_matrix(req: SubmitMatrixRequest, user=Depends(require_auth)):
     if not req.models or not req.workloads:
         raise HTTPException(400, "models and workloads are required")
 
+    owner = _verified_owner(user)
     results = []
     for model_item in req.models:
         args = list(req.args) + [model_item.key] + list(req.workloads)
@@ -848,7 +879,7 @@ async def submit_matrix(req: SubmitMatrixRequest, user=Depends(require_auth)):
         spec: dict[str, Any] = {
             "cluster": req.cluster,
             "displayName": display_name,
-            "owner": req.owner,
+            "owner": owner,
             "pipeline": req.pipeline,
             "exclusive": req.exclusive,
             "priority": req.priority,
@@ -900,7 +931,7 @@ async def submit_matrix(req: SubmitMatrixRequest, user=Depends(require_auth)):
                         preset="{} {}".format(model_item.key, " ".join(req.workloads)),
                         cluster=req.cluster,
                         pipeline=req.pipeline,
-                        owner=req.owner,
+                        owner=owner,
                         requester_subject=user.get("subject", ""),
                         requester_email=user.get("email", ""),
                         requester_name=user.get("name", ""),
@@ -1151,7 +1182,7 @@ async def github_sync_refresh(_=Depends(require_auth)):
 # fournos/fournos/handlers/lifecycle.py). No separate CRD, no Control
 # Center-managed CronJobs — this reads/writes real FournosJob objects only.
 
-def _recurring_job_to_response(job: dict) -> dict:
+def _recurring_job_to_response(job: dict, *, include_owner: bool = True) -> dict:
     meta = job.get("metadata", {})
     spec = job.get("spec", {})
     status = job.get("status", {})
@@ -1162,7 +1193,7 @@ def _recurring_job_to_response(job: dict) -> dict:
         "cluster": spec.get("cluster", ""),
         "pipeline": spec.get("pipeline", ""),
         "preset": " ".join(forge.get("args", [])),
-        "owner": spec.get("owner", ""),
+        "owner": spec.get("owner", "") if include_owner else "",
         "schedule": spec.get("schedule", ""),
         "phase": status.get("phase", ""),
         "message": status.get("message", ""),
@@ -1172,12 +1203,16 @@ def _recurring_job_to_response(job: dict) -> dict:
 
 
 @router.get("/recurring-jobs", response_model=List[RecurringJobResponse])
-async def list_recurring_jobs(cluster: str = Query("")):
+async def list_recurring_jobs(request: Request, cluster: str = Query("")):
+    include_owner = get_current_user(request) is not None
     jobs = await asyncio.to_thread(k8s.list_recurring_jobs)
     if cluster:
         jobs = [j for j in jobs if j.get("spec", {}).get("cluster") == cluster]
     return _sort_latest(
-        [_recurring_job_to_response(j) for j in jobs],
+        [
+            _recurring_job_to_response(j, include_owner=include_owner)
+            for j in jobs
+        ],
         "last_scheduled_time",
         "created_at",
     )
@@ -1238,14 +1273,14 @@ async def delete_recurring_job(name: str, _=Depends(require_admin)):
 # spec.lockUntil) holds the cluster's full Kueue quota without running a
 # pipeline (see fournos/fournos/handlers/execution.py::is_lock_only).
 
-def _cluster_lock_to_response(job: dict) -> dict:
+def _cluster_lock_to_response(job: dict, *, include_owner: bool = True) -> dict:
     meta = job.get("metadata", {})
     spec = job.get("spec", {})
     status = job.get("status", {})
     return {
         "name": meta.get("name", ""),
         "cluster": spec.get("cluster", ""),
-        "owner": spec.get("owner", ""),
+        "owner": spec.get("owner", "") if include_owner else "",
         "reason": spec.get("displayName", ""),
         "phase": status.get("phase", ""),
         "lock_until": spec.get("lockUntil"),
@@ -1255,10 +1290,14 @@ def _cluster_lock_to_response(job: dict) -> dict:
 
 
 @router.get("/cluster-locks", response_model=List[ClusterLockResponse])
-async def list_cluster_locks(cluster: str = Query("")):
+async def list_cluster_locks(request: Request, cluster: str = Query("")):
+    include_owner = get_current_user(request) is not None
     locks = await asyncio.to_thread(k8s.list_cluster_locks, None, cluster or None)
     return _sort_latest(
-        [_cluster_lock_to_response(j) for j in locks],
+        [
+            _cluster_lock_to_response(j, include_owner=include_owner)
+            for j in locks
+        ],
         "scheduled_start_time",
         "created_at",
     )
@@ -1271,7 +1310,7 @@ async def create_cluster_lock(
     spec: dict[str, Any] = {
         "cluster": req.cluster,
         "displayName": req.reason or "Cluster lock",
-        "owner": req.owner or "fournos-dashboard",
+        "owner": _verified_owner(user),
         "exclusive": True,
         "lockOnly": True,
     }
@@ -1312,7 +1351,7 @@ async def delete_cluster_lock(name: str, _=Depends(require_admin)):
 # ─── routes: per-cluster overview ────────────────────────────────────────
 
 @router.get("/clusters/{cluster}/overview", response_model=ClusterOverviewResponse)
-async def cluster_overview(cluster: str):
+async def cluster_overview(cluster: str, request: Request):
     """Backs the "Defer / Recurring / Lock cluster" popup on the Submit
     page: what's running on this cluster now, what recurs on it, and what
     locks (active or scheduled) it has — all live from the fournos
@@ -1326,17 +1365,26 @@ async def cluster_overview(cluster: str):
     recurring = await asyncio.to_thread(k8s.list_recurring_jobs)
     recurring = [j for j in recurring if j.get("spec", {}).get("cluster") == cluster]
     locks = await asyncio.to_thread(k8s.list_cluster_locks, None, cluster)
+    include_owner = get_current_user(request) is not None
 
     return {
         "cluster": cluster,
-        "current_jobs": [_live_job_to_summary(j) for j in current],
+        "current_jobs": [
+            _live_job_to_summary(j, include_owner=include_owner) for j in current
+        ],
         "recurring_jobs": _sort_latest(
-            [_recurring_job_to_response(j) for j in recurring],
+            [
+                _recurring_job_to_response(j, include_owner=include_owner)
+                for j in recurring
+            ],
             "last_scheduled_time",
             "created_at",
         ),
         "locks": _sort_latest(
-            [_cluster_lock_to_response(j) for j in locks],
+            [
+                _cluster_lock_to_response(j, include_owner=include_owner)
+                for j in locks
+            ],
             "scheduled_start_time",
             "created_at",
         ),

@@ -21,7 +21,7 @@ import {
   EllipsisVerticalIcon,
 } from '@heroicons/react/24/outline'
 import clsx from 'clsx'
-import { isAdmin, isAuthenticated } from '../stores/authStore'
+import { getDisplayName, isAdmin, isAuthenticated } from '../stores/authStore'
 import { useClusters } from '../hooks/useClusters'
 import DynamicSubmitForm from '../components/DynamicSubmitForm'
 import ClusterCombobox from '../components/ClusterCombobox'
@@ -389,7 +389,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   const [pipeline, setPipeline] = useState('forge-test-only')
   const [preset, setPreset] = useState('')
   const [version, setVersion] = useState('')
-  const [owner, setOwner] = useState('')
+  const [owner, setOwner] = useState(() => getDisplayName() || '')
   const [priority, setPriority] = useState('manual')
   const [exclusive, setExclusive] = useState(false)
   const [configRaw, setConfigRaw] = useState('')
@@ -404,10 +404,18 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   const [step, setStep] = useState(1)
   const [lockCluster, setLockCluster] = useState('')
   const [lockReason, setLockReason] = useState('')
-  const [lockOwner, setLockOwner] = useState('')
   const [scheduling, setScheduling] = useState<JobScheduling>({ mode: 'now' })
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false)
   const createLock = useCreateClusterLock()
+
+  // Keep the visible owner tied to the authenticated session. The backend
+  // independently derives the same value and ignores client-supplied owners.
+  useEffect(() => {
+    const syncOwner = () => setOwner(getDisplayName() || '')
+    syncOwner()
+    window.addEventListener('auth-change', syncOwner)
+    return () => window.removeEventListener('auth-change', syncOwner)
+  }, [])
 
   // "What's happening on this cluster" popup for the Basics step — only
   // interrupts the user automatically when there's something running or
@@ -638,16 +646,16 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-900">
-                  Owner<span className="ml-0.5 text-red-500">*</span>
+                  Requested by
                 </label>
                 <input
                   type="text"
-                  value={lockOwner}
-                  onChange={(e) => setLockOwner(e.target.value)}
-                  required
-                  placeholder="your-name"
-                  className="mt-1.5 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                  value={owner}
+                  readOnly
+                  aria-readonly="true"
+                  className="mt-1.5 block w-full rounded-md border-gray-300 bg-gray-50 text-gray-600 shadow-sm sm:text-sm"
                 />
+                <p className="mt-1 text-xs text-gray-400">From your signed-in account</p>
               </div>
             </div>
 
@@ -658,8 +666,8 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
             <div className="border-t border-gray-100 bg-gray-50/50 px-5 py-5">
               {!lockCluster ? (
                 <p className="py-6 text-center text-sm text-gray-400">Pick a cluster to inspect and schedule its locks.</p>
-              ) : !lockReason.trim() || !lockOwner.trim() ? (
-                <p className="py-6 text-center text-sm text-gray-400">Enter a reason and an owner for the lock to pick a time on the calendar.</p>
+              ) : !lockReason.trim() || !owner.trim() ? (
+                <p className="py-6 text-center text-sm text-gray-400">Enter a reason for the lock to pick a time on the calendar.</p>
               ) : (
                 <>
                   <h4 className="mb-3 text-sm font-semibold text-gray-900">Pick a time</h4>
@@ -669,7 +677,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
                     onApplyLock={async (choice) => {
                       await createLock.mutateAsync({
                         cluster: lockCluster,
-                        owner: lockOwner,
+                        owner,
                         reason: lockReason,
                         scheduled_start_time: choice.startUtc,
                         lock_until: choice.untilUtc,
@@ -753,16 +761,16 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
 
             <div>
               <label className="block text-sm font-medium text-gray-700">
-                Owner<span className="text-red-500 ml-0.5">*</span>
+                Requested by
               </label>
               <input
                 type="text"
                 value={owner}
-                onChange={(e) => setOwner(e.target.value)}
-                required
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-                placeholder="your-name"
+                readOnly
+                aria-readonly="true"
+                className="mt-1 block w-full rounded-md border-gray-300 bg-gray-50 text-gray-600 shadow-sm sm:text-sm"
               />
+              <p className="mt-1 text-xs text-gray-400">From your signed-in account</p>
             </div>
 
             <div>
@@ -883,7 +891,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
               type="button"
               disabled={!project || !cluster || !owner.trim()}
               onClick={() => setStep(3)}
-              title={!owner.trim() ? 'Owner is required' : undefined}
+              title={!owner.trim() ? 'Sign in to submit a job' : undefined}
               className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-50"
             >
               Next: Project Details
@@ -978,7 +986,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
               <ReviewRow label="Project" value={project} missing={!project} />
               <ReviewRow label="Cluster" value={cluster} missing={!cluster} />
               <ReviewRow label="Pipeline" value={pipeline} />
-              {owner && <ReviewRow label="Owner" value={owner} />}
+              {owner && <ReviewRow label="Requested by" value={owner} />}
               <ReviewRow label="Priority" value={priority} />
               {exclusive && <ReviewRow label="Exclusive" value="Yes" />}
               {pullSha && <ReviewRow label="Pull Request" value={prSearch || pullSha} mono={!prSearch} />}
