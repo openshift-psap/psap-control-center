@@ -28,7 +28,7 @@ const navigation = [
   { name: 'Clusters', href: '/clusters', icon: ServerStackIcon },
   { name: 'Reservations', href: '/reservations', icon: ClipboardDocumentListIcon },
   { name: 'Calendar', href: '/calendar', icon: CalendarDaysIcon },
-  { name: 'Testing', href: '/testing', icon: BeakerIcon },
+  { name: 'Testing', href: '/testing', icon: BeakerIcon, badge: 'Experimental' },
   { name: 'Results', href: '/results', icon: ChartBarIcon, comingSoon: true },
   { name: 'Cost Explorer', href: '/cost-explorer', icon: CurrencyDollarIcon, adminOnly: true },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon, adminOnly: true },
@@ -223,6 +223,11 @@ export default function Layout() {
                                 Soon
                               </span>
                             )}
+                            {item.badge && (
+                              <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                                {item.badge}
+                              </span>
+                            )}
                           </NavLink>
                         </li>
                       ))}
@@ -278,6 +283,11 @@ export default function Layout() {
                     {item.comingSoon && (
                       <span className="ml-auto text-xs text-gray-500 bg-white/10 px-2 py-0.5 rounded-full">
                         Soon
+                      </span>
+                    )}
+                    {item.badge && (
+                      <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                        {item.badge}
                       </span>
                     )}
                   </NavLink>
