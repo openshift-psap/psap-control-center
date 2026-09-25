@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     
     DATABASE_URL: str = "sqlite+aiosqlite:///./psap_control_center.db"
     
-    SECRET_KEY: str = "your-secret-key-change-in-production"
+    SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 hours
     
@@ -72,6 +72,30 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+_INSECURE_SECRET_KEYS = {
+    "dev-secret-key",
+    "change-this-in-production",
+    "your-secret-key-change-in-production",
+    "your-super-secret-key-change-in-production",
+}
+
+
+def validate_secret_key(secret_key: str) -> None:
+    """Reject missing, documented, or undersized session-signing keys."""
+    value = secret_key.strip()
+    if not value:
+        raise RuntimeError("SECRET_KEY is required")
+    if value in _INSECURE_SECRET_KEYS or (
+        value.startswith("<") and value.endswith(">")
+    ):
+        raise RuntimeError("SECRET_KEY must not use a documented placeholder")
+    if len(value) < 32:
+        raise RuntimeError("SECRET_KEY must contain at least 32 characters")
+
+
+validate_secret_key(settings.SECRET_KEY)
 
 _missing = []
 if settings.LOCAL_LOGIN_ENABLED:

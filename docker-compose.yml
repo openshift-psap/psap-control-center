@@ -12,7 +12,7 @@ services:
     environment:
       - DATABASE_URL=sqlite+aiosqlite:///./data/pasp_control_center.db
       - KUBECONFIG_STORAGE_PATH=/app/kubeconfigs
-      - SECRET_KEY=${SECRET_KEY:-change-this-in-production}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set to a random value of at least 32 characters}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-change-admin-password}
