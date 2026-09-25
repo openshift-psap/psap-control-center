@@ -607,7 +607,7 @@ export default function DynamicSubmitForm({
                 <ReviewRow label="Project" value={project} />
                 <ReviewRow label="Cluster" value={basics.cluster} missing={!basics.cluster} />
                 <ReviewRow label="Pipeline" value={basics.pipeline} />
-                {basics.owner && <ReviewRow label="Owner" value={basics.owner} />}
+                {basics.owner && <ReviewRow label="Requested by" value={basics.owner} />}
                 <ReviewRow label="Priority" value={basics.priority} />
                 {basics.exclusive && <ReviewRow label="Exclusive" value="Yes" />}
                 {basics.pullSha && (
