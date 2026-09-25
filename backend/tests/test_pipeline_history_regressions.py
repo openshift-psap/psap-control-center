@@ -161,6 +161,45 @@ def test_stage_snapshot_retries_are_timed_and_bounded():
     ) is True
 
 
+def test_failure_enrichment_retries_are_timed_and_bounded():
+    now = datetime.now(timezone.utc)
+
+    assert watcher._failure_enrichment_retry_due(0, None, now) is True
+    assert watcher._failure_enrichment_retry_due(1, now, now) is False
+    assert watcher._failure_enrichment_retry_due(
+        1,
+        now - timedelta(seconds=watcher.FAILURE_ENRICHMENT_RETRY_SECONDS + 1),
+        now,
+    ) is True
+    assert watcher._failure_enrichment_retry_due(
+        watcher.FAILURE_ENRICHMENT_MAX_ATTEMPTS, None, now
+    ) is False
+
+
+def test_failure_enrichment_does_not_backfill_migrated_history():
+    assert watcher._should_enrich_failure(
+        mlflow_url="https://mlflow.example/#/runs/abc",
+        enrichment_state="pending",
+        enrichment_due=True,
+        transitioning_into_terminal=False,
+        enrichment_attempts=0,
+    ) is False
+    assert watcher._should_enrich_failure(
+        mlflow_url="https://mlflow.example/#/runs/abc",
+        enrichment_state="pending",
+        enrichment_due=True,
+        transitioning_into_terminal=True,
+        enrichment_attempts=0,
+    ) is True
+    assert watcher._should_enrich_failure(
+        mlflow_url="https://mlflow.example/#/runs/abc",
+        enrichment_state="unavailable",
+        enrichment_due=True,
+        transitioning_into_terminal=False,
+        enrichment_attempts=0,
+    ) is True
+
+
 def test_testing_list_sort_uses_latest_available_date():
     rows = [
         {

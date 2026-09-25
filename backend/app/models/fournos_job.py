@@ -61,6 +61,13 @@ class FournosJob(Base):
     # full-sync pass from creating another Kubernetes API storm.
     stage_snapshot_attempts = Column(Integer, default=0, nullable=False)
     stage_snapshot_attempted_at = Column(DateTime(timezone=True), nullable=True)
+    failure_outcome = Column(String(50), default="", index=True)
+    failure_summary = Column(JSONB, default=dict)
+    failure_enrichment_state = Column(
+        String(50), default="pending", nullable=False
+    )
+    failure_enrichment_attempts = Column(Integer, default=0, nullable=False)
+    failure_enrichment_attempted_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(Text, default="")
     triggered_by_schedule = Column(String(255), nullable=True, index=True)
     trigger_type = Column(String(50), default="manual")

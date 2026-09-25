@@ -35,6 +35,7 @@ from app.schemas.fournos import (
     ClusterOverviewResponse,
     CreateClusterLockRequest,
     FournosJobSummary,
+    FournosJobDetailResponse,
     GitHubPR,
     GithubSyncStatusResponse,
     HoldSlotRequest,
@@ -58,6 +59,7 @@ from app.services import fournos_k8s_client as k8s
 from app.services import pipeline_definitions
 from app.services import project_ui_schema
 from app.services.source_provenance import extract_source_request_fields
+from app.services.failure_details import first_actionable_failure
 from app.services.forge_discovery import discover_projects, get_project
 
 logger = logging.getLogger(__name__)
@@ -633,7 +635,7 @@ async def list_jobs(
     }
 
 
-@router.get("/jobs/{job_name}")
+@router.get("/jobs/{job_name}", response_model=FournosJobDetailResponse)
 async def get_job(job_name: str, request: Request):
     include_owner = get_current_user(request) is not None
     job = await asyncio.to_thread(k8s.get_fournos_job, job_name)
@@ -713,6 +715,25 @@ async def get_job(job_name: str, request: Request):
         task_progress = _parse_task_progress(
             job.get("status", {}).get("message", "")
         )
+        phase = job.get("status", {}).get("phase", "")
+        failure_summary = first_actionable_failure(
+            stages,
+            job_phase=phase,
+            job_message=job.get("status", {}).get("message", ""),
+        )
+        enrichment_state = "pending" if phase in (
+            "Succeeded", "Failed", "Stopped"
+        ) else "not_applicable"
+        archived = None
+        if phase in ("Succeeded", "Failed", "Stopped"):
+            async with AsyncSessionLocal() as session:
+                archived = await db_svc.get_job_by_name(session, job_name)
+            if archived:
+                if archived.failure_summary:
+                    failure_summary = archived.failure_summary
+                enrichment_state = (
+                    archived.failure_enrichment_state or enrichment_state
+                )
 
         return {
             "job": {
@@ -723,7 +744,7 @@ async def get_job(job_name: str, request: Request):
                 "status": job.get("status", {}),
                 "source": "live",
                 "duration_seconds": None,
-                "mlflow_url": "",
+                "mlflow_url": (archived.mlflow_url or "") if archived else "",
                 "ci_artifacts_url": "",
             },
             "pods": pods,
@@ -731,6 +752,8 @@ async def get_job(job_name: str, request: Request):
             "current_step": current_step,
             "forge_info": forge_info,
             "task_progress": task_progress,
+            "failure_summary": failure_summary,
+            "failure_enrichment_state": enrichment_state,
         }
 
     async with AsyncSessionLocal() as session:
@@ -773,6 +796,10 @@ async def get_job(job_name: str, request: Request):
         "current_step": current_step,
         "forge_info": forge_info,
         "task_progress": task_progress,
+        "failure_summary": db_job.failure_summary or None,
+        "failure_enrichment_state": (
+            db_job.failure_enrichment_state or "unavailable"
+        ),
     }
 
 

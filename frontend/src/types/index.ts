@@ -473,6 +473,25 @@ export interface PipelineStage {
   startTime: string | null
   completionTime: string | null
   finally: boolean
+  outcome?: string
+  reason?: string
+  reasonCode?: string
+  reasonSource?: string
+  failedStep?: string
+  exitCode?: number | null
+}
+
+export interface FailureSummary {
+  outcome: 'failed' | 'cancelled' | 'infrastructure_error' | 'unknown'
+  stage: string
+  stageDisplayName: string
+  step: string
+  reason: string
+  reasonCode: string
+  source: string
+  artifactPath: string
+  executionReason?: string
+  executionSource?: string
 }
 
 export interface TaskProgress {
@@ -530,6 +549,8 @@ export interface FournosJobDetailResponse {
   current_step: CurrentStep | null
   forge_info: ForgeInfo
   task_progress: TaskProgress | null
+  failure_summary: FailureSummary | null
+  failure_enrichment_state: string
 }
 
 export interface FournosJobEvent {

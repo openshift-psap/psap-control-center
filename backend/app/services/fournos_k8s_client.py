@@ -19,6 +19,11 @@ from kubernetes import client, config, watch
 from kubernetes.client.rest import ApiException
 
 from app.core.config import settings
+from app.services.failure_details import (
+    is_infrastructure_reason,
+    normalize_reason,
+    outcome_for_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -332,7 +337,13 @@ def _phase_from_conditions(conditions: list) -> str:
         return "Succeeded"
     # Cancellation/skipping are also represented by a False condition, so
     # classify their specific reasons before the generic failure fallback.
-    if reason == "TaskRunCancelled":
+    if reason in (
+        "TaskRunCancelled",
+        "PipelineRunCancelled",
+        "Cancelled",
+        "StoppedRunFinally",
+        "CancelledRunFinally",
+    ):
         return "Cancelled"
     if reason == "SkippingNoMatch":
         return "Skipped"
@@ -372,6 +383,8 @@ def extract_pipeline_stages(pipelinerun: dict) -> list:
     child_refs = status.get("childReferences") or []
     skipped_tasks = status.get("skippedTasks") or []
     pipeline_spec = status.get("pipelineSpec") or {}
+    pipeline_phase = _phase_from_conditions(status.get("conditions", []))
+    pipeline_terminal = pipeline_phase in ("Succeeded", "Failed", "Cancelled")
 
     finally_task_names = set()
     for task in pipeline_spec.get("finally", []):
@@ -385,6 +398,12 @@ def extract_pipeline_stages(pipelinerun: dict) -> list:
         start_time = None
         completion_time = None
         task_phase = "Pending"
+        outcome = ""
+        reason = ""
+        reason_code = ""
+        reason_source = ""
+        failed_step = ""
+        exit_code = None
 
         tr = get_taskrun(task_run_name)
         if tr:
@@ -394,6 +413,41 @@ def extract_pipeline_stages(pipelinerun: dict) -> list:
             task_phase = _phase_from_conditions(
                 tr_status.get("conditions", [])
             )
+            outcome = outcome_for_status(task_phase)
+            conditions = tr_status.get("conditions") or []
+            condition = conditions[0] if conditions else {}
+            reason_code = condition.get("reason", "")
+            reason = normalize_reason(condition.get("message"))
+            reason_source = "tekton_condition" if reason or reason_code else ""
+
+            if task_phase == "Failed":
+                for step in tr_status.get("steps") or []:
+                    terminated = (step.get("terminated") or {}) if isinstance(step, dict) else {}
+                    step_exit_code = terminated.get("exitCode")
+                    step_reason = terminated.get("reason", "")
+                    if not terminated or (
+                        step_exit_code in (None, 0) and step_reason in ("", "Completed")
+                    ):
+                        continue
+                    failed_step = step.get("name", "")
+                    exit_code = step_exit_code
+                    reason_code = step_reason or reason_code
+                    reason = normalize_reason(
+                        terminated.get("message") or reason or step_reason
+                    )
+                    reason_source = "step_termination"
+                    break
+
+                if is_infrastructure_reason(
+                    reason_code, condition.get("reason", "")
+                ):
+                    outcome = "infrastructure_error"
+        elif pipeline_terminal:
+            task_phase = "Unknown"
+            outcome = "unknown"
+            reason = "TaskRun details were unavailable after the pipeline terminated."
+            reason_code = "TASKRUN_UNAVAILABLE"
+            reason_source = "tekton_reference"
 
         return {
             "name": task_name,
@@ -402,6 +456,12 @@ def extract_pipeline_stages(pipelinerun: dict) -> list:
             "startTime": start_time,
             "completionTime": completion_time,
             "finally": task_name in finally_task_names,
+            "outcome": outcome,
+            "reason": reason,
+            "reasonCode": reason_code,
+            "reasonSource": reason_source,
+            "failedStep": failed_step,
+            "exitCode": exit_code,
         }
 
     # Each of these is its own blocking K8s API round-trip — a pipeline
@@ -435,6 +495,12 @@ def extract_pipeline_stages(pipelinerun: dict) -> list:
             "startTime": None,
             "completionTime": None,
             "finally": task_name in finally_task_names,
+            "outcome": "skipped",
+            "reason": normalize_reason(skipped.get("reason")) if isinstance(skipped, dict) else "",
+            "reasonCode": "SkippingNoMatch",
+            "reasonSource": "tekton_skipped_task",
+            "failedStep": "",
+            "exitCode": None,
         })
         existing_names.add(task_name)
 
