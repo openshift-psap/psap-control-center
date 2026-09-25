@@ -793,4 +793,3 @@ export interface ProjectUiSchemaResponse {
   project: string
   ui_schema: ProjectUiSchema | null
 }
-
