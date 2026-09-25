@@ -303,8 +303,22 @@ export const hearthApi = {
 }
 
 export const authApi = {
+  config: async (): Promise<{ google_enabled: boolean; local_login_enabled: boolean }> => {
+    const { data } = await api.get('/auth/config')
+    return data
+  },
+
   login: async (username: string, password: string): Promise<AuthSession> => {
     const { data } = await api.post('/auth/login', { username, password })
+    return data
+  },
+
+  loginWithGoogle: (): void => {
+    window.location.assign('/api/v1/auth/google/login')
+  },
+
+  completeGoogleLogin: async (code: string, state: string): Promise<AuthSession> => {
+    const { data } = await api.post('/auth/google/callback', { code, state })
     return data
   },
 
@@ -323,7 +337,28 @@ export interface SlackSettings {
   enabled: boolean
 }
 
+export interface ManagedUser {
+  id: string
+  username: string
+  email: string
+  full_name: string | null
+  role: 'admin' | 'user'
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
 export const settingsApi = {
+  getUsers: async (): Promise<ManagedUser[]> => {
+    const { data } = await api.get('/settings/users')
+    return data
+  },
+
+  updateUserRole: async (userId: string, role: 'admin' | 'user'): Promise<ManagedUser> => {
+    const { data } = await api.patch(`/settings/users/${userId}/role`, { role })
+    return data
+  },
+
   getSlack: async (): Promise<SlackSettings> => {
     const { data } = await api.get('/settings/slack')
     return data
@@ -405,6 +440,169 @@ export const costExplorerApi = {
 
   recomputeSnapshots: async () => {
     const { data } = await api.post('/cost-explorer/snapshots/recompute')
+    return data
+  },
+}
+
+export const fournosApi = {
+  listJobs: async (params: {
+    tab?: string
+    project?: string
+    cluster?: string
+    status?: string
+    owner?: string
+    start_time?: string
+    end_time?: string
+    sort_by?: string
+    sort_dir?: 'asc' | 'desc'
+    page?: number
+    per_page?: number
+  } = {}) => {
+    // Some managed browser profiles cancel requests containing `/jobs`
+    // before they reach the server. `/runs` is a backward-compatible alias
+    // for the same list handler; job-specific APIs retain their existing URLs.
+    const { data } = await api.get('/fournos/runs', { params })
+    return data
+  },
+
+  getJob: async (name: string) => {
+    const { data } = await api.get(`/fournos/jobs/${name}`)
+    return data
+  },
+
+  getJobEvents: async (name: string) => {
+    const { data } = await api.get(`/fournos/jobs/${name}/events`)
+    return data
+  },
+
+  cancelJob: async (name: string) => {
+    const { data } = await api.post(`/fournos/jobs/${name}/cancel`)
+    return data
+  },
+
+  rerunJob: async (name: string) => {
+    const { data } = await api.post(`/fournos/jobs/${name}/rerun`)
+    return data
+  },
+
+  deleteHistoryJob: async (name: string) => {
+    const { data } = await api.delete(`/fournos/history/${name}`)
+    return data
+  },
+
+  submitJob: async (req: import('../types').SubmitJobRequest) => {
+    const { data } = await api.post('/fournos/submit', req)
+    return data
+  },
+
+  listProjects: async () => {
+    const { data } = await api.get('/fournos/projects')
+    return data
+  },
+
+  getProjectInfo: async (name: string) => {
+    const { data } = await api.get(`/fournos/projects/${name}`)
+    return data
+  },
+
+  getProjectUiSchema: async (name: string) => {
+    const { data } = await api.get(`/fournos/projects/${name}/ui-schema`)
+    return data
+  },
+
+  refreshProjectUiSchema: async (name: string) => {
+    const { data } = await api.post(`/fournos/projects/${name}/ui-schema/refresh`)
+    return data
+  },
+
+  listPipelines: async () => {
+    const { data } = await api.get('/fournos/pipelines')
+    return data
+  },
+
+  // ─── Recurring jobs (native FournosJob spec.schedule) ─────────────────
+
+  listRecurringJobs: async (cluster?: string) => {
+    const { data } = await api.get('/fournos/recurring-jobs', { params: cluster ? { cluster } : undefined })
+    return data
+  },
+
+  getRecurringJobChildren: async (name: string) => {
+    const { data } = await api.get(`/fournos/recurring-jobs/${name}/children`)
+    return data
+  },
+
+  triggerRecurringJob: async (name: string) => {
+    const { data } = await api.post(`/fournos/recurring-jobs/${name}/trigger`)
+    return data
+  },
+
+  deleteRecurringJob: async (name: string) => {
+    const { data } = await api.delete(`/fournos/recurring-jobs/${name}`)
+    return data
+  },
+
+  // ─── Cluster locks (native FournosJob spec.lockOnly) ───────────────────
+
+  listClusterLocks: async (cluster?: string) => {
+    const { data } = await api.get('/fournos/cluster-locks', { params: cluster ? { cluster } : undefined })
+    return data
+  },
+
+  createClusterLock: async (req: import('../types').CreateClusterLockRequest) => {
+    const { data } = await api.post('/fournos/cluster-locks', req)
+    return data
+  },
+
+  deleteClusterLock: async (name: string) => {
+    const { data } = await api.delete(`/fournos/cluster-locks/${name}`)
+    return data
+  },
+
+  getClusterOverview: async (cluster: string) => {
+    const { data } = await api.get(`/fournos/clusters/${cluster}/overview`)
+    return data
+  },
+
+  // ─── Calendar slot holds (ephemeral, UX-only anti-race claim) ─────────
+
+  listSlotHolds: async (cluster: string) => {
+    const { data } = await api.get(`/fournos/clusters/${cluster}/slot-holds`)
+    return data
+  },
+
+  holdSlot: async (cluster: string, startTime: string) => {
+    const { data } = await api.post(`/fournos/clusters/${cluster}/slot-holds`, { start_time: startTime })
+    return data
+  },
+
+  releaseSlot: async (cluster: string, startTime: string) => {
+    const { data } = await api.delete(`/fournos/clusters/${cluster}/slot-holds`, { params: { start_time: startTime } })
+    return data
+  },
+
+  getGithubPRs: async () => {
+    const { data } = await api.get('/fournos/github/open-prs')
+    return data
+  },
+
+  refreshGithubPRs: async () => {
+    const { data } = await api.post('/fournos/github/open-prs/refresh')
+    return data
+  },
+
+  getGithubSyncStatus: async () => {
+    const { data } = await api.get('/fournos/github/sync-status')
+    return data
+  },
+
+  refreshGithubSync: async () => {
+    const { data } = await api.post('/fournos/github/sync')
+    return data
+  },
+
+  submitMatrix: async (req: import('../types').SubmitMatrixRequest) => {
+    const { data } = await api.post('/fournos/submit-matrix', req)
     return data
   },
 }

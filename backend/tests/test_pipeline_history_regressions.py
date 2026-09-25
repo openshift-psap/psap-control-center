@@ -1,0 +1,183 @@
+import asyncio
+from datetime import datetime, timedelta, timezone
+
+from app.services import fournos_k8s_client as k8s
+from app.services import fournos_watcher as watcher
+from app.api import fournos as fournos_api
+from app.core import database as database_core
+from app.services import fournos_db_service as db_service
+
+
+def test_log_stream_terminal_sentinel_displaces_oldest_item_when_full():
+    async def exercise_queue():
+        queue = asyncio.Queue(maxsize=1)
+        queue.put_nowait("old-line")
+
+        fournos_api._enqueue_stream_item(queue, "dropped-line")
+        assert queue.get_nowait() == "old-line"
+
+        queue.put_nowait("last-line")
+        fournos_api._enqueue_stream_item(queue, None)
+        assert queue.get_nowait() is None
+
+    asyncio.run(exercise_queue())
+
+
+def test_taskrun_condition_specific_terminal_reasons_win_over_false_status():
+    assert k8s._phase_from_conditions(
+        [{"reason": "TaskRunCancelled", "status": "False"}]
+    ) == "Cancelled"
+    assert k8s._phase_from_conditions(
+        [{"reason": "SkippingNoMatch", "status": "False"}]
+    ) == "Skipped"
+
+
+def test_extract_pipeline_stages_includes_tekton_skipped_tasks(monkeypatch):
+    monkeypatch.setattr(
+        k8s,
+        "get_taskrun",
+        lambda _name: {
+            "status": {
+                "conditions": [{"reason": "Succeeded", "status": "True"}],
+                "startTime": "2026-09-03T12:00:00Z",
+                "completionTime": "2026-09-03T12:01:00Z",
+            }
+        },
+    )
+    pipelinerun = {
+        "status": {
+            "childReferences": [
+                {"name": "prepare-run", "pipelineTaskName": "prepare"}
+            ],
+            "skippedTasks": [{"name": "optional-check"}],
+            "pipelineSpec": {
+                "tasks": [{"name": "prepare"}, {"name": "optional-check"}]
+            },
+        }
+    }
+
+    stages = k8s.extract_pipeline_stages(pipelinerun)
+
+    assert {stage["name"]: stage["status"] for stage in stages} == {
+        "prepare": "Succeeded",
+        "optional-check": "Skipped",
+    }
+
+
+def test_terminal_snapshot_requires_a_complete_pipelinerun(monkeypatch):
+    monkeypatch.setattr(k8s, "get_pipelinerun", lambda _name: None)
+    monkeypatch.setattr(k8s, "list_pipelineruns_for_job", lambda _name: [])
+
+    assert watcher._compute_terminal_stages(
+        "job-1", {"pipeline": "forge-test-only"}, {"pipelineRun": "missing"}
+    ) is None
+
+
+def test_terminal_snapshot_marks_unstarted_definition_tasks_not_run(monkeypatch):
+    monkeypatch.setattr(k8s, "get_pipelinerun", lambda _name: {"status": {}})
+    monkeypatch.setattr(
+        k8s,
+        "extract_pipeline_stages",
+        lambda _pr: [
+            {
+                "name": "prepare",
+                "displayName": "Prepare",
+                "status": "Failed",
+                "startTime": "2026-09-03T12:00:00Z",
+                "completionTime": "2026-09-03T12:01:00Z",
+                "finally": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        watcher.pipeline_definitions,
+        "get_definition_sync",
+        lambda _name: {
+            "name": "forge-test-only",
+            "tasks": ["prepare", "test"],
+            "finally": [],
+        },
+    )
+
+    stages = watcher._compute_terminal_stages(
+        "job-1", {"pipeline": "forge-test-only"}, {"pipelineRun": "run-1"}
+    )
+
+    assert {stage["name"]: stage["status"] for stage in stages} == {
+        "prepare": "Failed",
+        "test": "NotRun",
+    }
+
+
+def test_stage_snapshot_retries_are_timed_and_bounded():
+    now = datetime.now(timezone.utc)
+
+    assert watcher._stage_snapshot_retry_due(0, None, now) is True
+    assert watcher._stage_snapshot_retry_due(1, now, now) is False
+    assert watcher._stage_snapshot_retry_due(
+        1, now - timedelta(seconds=watcher.STAGE_SNAPSHOT_RETRY_SECONDS + 1), now
+    ) is True
+    assert watcher._stage_snapshot_retry_due(
+        watcher.STAGE_SNAPSHOT_MAX_ATTEMPTS, None, now
+    ) is False
+
+    assert watcher._has_usable_stage_snapshot([]) is False
+    assert watcher._has_usable_stage_snapshot(
+        [{"name": "test", "status": "Pending"}]
+    ) is False
+    assert watcher._has_usable_stage_snapshot(
+        [{"name": "test", "status": "Succeeded"}]
+    ) is True
+
+
+def test_testing_list_sort_uses_latest_available_date():
+    rows = [
+        {
+            "name": "never-run",
+            "last_scheduled_time": None,
+            "created_at": "2026-09-05T09:00:00Z",
+        },
+        {
+            "name": "older-run",
+            "last_scheduled_time": "2026-09-05T10:00:00Z",
+            "created_at": "",
+        },
+        {
+            "name": "newer-run",
+            "last_scheduled_time": "2026-09-05T12:00:00Z",
+            "created_at": "",
+        },
+    ]
+
+    sorted_rows = fournos_api._sort_latest(
+        rows, "last_scheduled_time", "created_at"
+    )
+
+    assert [row["name"] for row in sorted_rows] == [
+        "newer-run",
+        "older-run",
+        "never-run",
+    ]
+
+
+def test_unknown_live_sort_key_falls_back_to_latest_age():
+    rows = [
+        {"name": "older", "created_at": "2026-09-05T09:00:00Z"},
+        {"name": "newer", "created_at": "2026-09-05T12:00:00Z"},
+    ]
+
+    rows.sort(key=fournos_api._live_sort_key("unsupported"), reverse=True)
+
+    assert [row["name"] for row in rows] == ["newer", "older"]
+
+
+def test_history_date_sort_falls_back_to_created_at():
+    assert "coalesce" in str(db_service._SORT_COLUMNS["date"]).lower()
+
+
+def test_history_effective_date_index_is_created_for_existing_databases():
+    indexes = {name: columns for name, table, columns in database_core._INDEXES}
+
+    assert indexes["ix_fournos_jobs_effective_date"] == (
+        "COALESCE(completed_at, created_at)"
+    )

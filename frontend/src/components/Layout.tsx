@@ -18,7 +18,7 @@ import {
 import clsx from 'clsx'
 import LoginModal from './LoginModal'
 import HearthConnectModal from './HearthConnectModal'
-import { isAuthenticated, isAdmin, getSession, clearSession } from '../stores/authStore'
+import { isAuthenticated, isAdmin, getDisplayName, clearSession } from '../stores/authStore'
 import { authApi } from '../services/api'
 import { useHearthStatus, useDisconnectHearth } from '../hooks/useHearth'
 import { useReservations } from '../hooks/useReservations'
@@ -28,7 +28,7 @@ const navigation = [
   { name: 'Clusters', href: '/clusters', icon: ServerStackIcon },
   { name: 'Reservations', href: '/reservations', icon: ClipboardDocumentListIcon },
   { name: 'Calendar', href: '/calendar', icon: CalendarDaysIcon },
-  { name: 'Testing', href: '/testing', icon: BeakerIcon, comingSoon: true },
+  { name: 'Testing', href: '/testing', icon: BeakerIcon, badge: 'Experimental' },
   { name: 'Results', href: '/results', icon: ChartBarIcon, comingSoon: true },
   { name: 'Cost Explorer', href: '/cost-explorer', icon: CurrencyDollarIcon, adminOnly: true },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon, adminOnly: true },
@@ -124,6 +124,8 @@ function HearthIndicator({
   )
 }
 
+const envBanner = import.meta.env.VITE_ENV_BANNER as string | undefined
+
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [loginOpen, setLoginOpen] = useState(false)
@@ -154,6 +156,11 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-[#f0f0f0]">
+      {envBanner && (
+        <div className="fixed top-0 inset-x-0 z-[60] bg-amber-500 text-black text-center text-xs font-bold tracking-widest uppercase py-1 select-none">
+          {envBanner}
+        </div>
+      )}
       <Transition.Root show={sidebarOpen} as={Fragment}>
         <Dialog as="div" className="relative z-50 lg:hidden" onClose={setSidebarOpen}>
           <Transition.Child
@@ -216,6 +223,11 @@ export default function Layout() {
                                 Soon
                               </span>
                             )}
+                            {item.badge && (
+                              <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                                {item.badge}
+                              </span>
+                            )}
                           </NavLink>
                         </li>
                       ))}
@@ -228,7 +240,7 @@ export default function Layout() {
         </Dialog>
       </Transition.Root>
 
-      <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col">
+      <div className={clsx('hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col', envBanner && 'lg:top-7')}>
         <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-[#212427] px-0 pb-4">
           <div className="flex h-16 shrink-0 items-center px-6">
             <div className="flex items-center gap-3">
@@ -273,6 +285,11 @@ export default function Layout() {
                         Soon
                       </span>
                     )}
+                    {item.badge && (
+                      <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                        {item.badge}
+                      </span>
+                    )}
                   </NavLink>
                 </li>
               ))}
@@ -291,7 +308,7 @@ export default function Layout() {
       </div>
 
       <div className="lg:pl-72">
-        <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-white/10 bg-[#151515] px-4 sm:gap-x-6 sm:px-6 lg:px-8">
+        <div className={clsx('sticky z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-white/10 bg-[#151515] px-4 sm:gap-x-6 sm:px-6 lg:px-8', envBanner ? 'top-7' : 'top-0')}>
           <button
             type="button"
             className="-m-2.5 p-2.5 text-gray-300 lg:hidden"
@@ -335,7 +352,7 @@ export default function Layout() {
                 <div className="flex items-center gap-3">
                   <span className="flex items-center gap-1.5 text-sm text-gray-300">
                     <LockClosedIcon className="h-4 w-4 text-green-400" />
-                    <span className="hidden sm:inline font-medium">{getSession()?.username}</span>
+                    <span className="hidden sm:inline font-medium">{getDisplayName()}</span>
                   </span>
                   <button
                     onClick={handleLogout}

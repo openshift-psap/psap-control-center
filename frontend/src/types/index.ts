@@ -429,3 +429,367 @@ export interface SnapshotPeriod {
   discount_pct?: number | null
   clusters: SnapshotCluster[]
 }
+
+// ─── Fournos Testing Tab ──────────────────────────────────────────────
+
+export interface FournosJobSummary {
+  name: string
+  project: string
+  preset: string
+  cluster: string
+  pipeline: string
+  owner: string
+  status: string
+  message: string
+  created_at: string | null
+  completed_at: string | null
+  duration_seconds: number | null
+  mlflow_url: string
+  trigger_type: string
+  triggered_by_schedule: string | null
+  /** Actual planned start for a deferred one-off job — distinct from
+   * created_at (when the CR was created). Powers the scheduling calendar. */
+  scheduled_start_time: string | null
+  source: 'live' | 'history'
+}
+
+export interface FournosJobListResponse {
+  jobs: FournosJobSummary[]
+  total: number
+  page: number
+  per_page: number
+}
+
+export interface PipelineStage {
+  name: string
+  displayName: string
+  status: string
+  startTime: string | null
+  completionTime: string | null
+  finally: boolean
+}
+
+export interface TaskProgress {
+  completed: number
+  failed: number
+  cancelled: number
+  incomplete: number
+  skipped: number
+  total: number
+}
+
+export interface FournosPod {
+  name: string
+  phase: string
+  container: string
+  ready: boolean
+  restarts: number
+  age_minutes: number
+  exit_code: number | null
+  term_reason: string
+  term_message: string
+}
+
+export interface CurrentStep {
+  name: string
+  displayName: string
+  startTime: string | null
+}
+
+export interface ForgeInfo {
+  project: string
+  args: string[]
+  config_overrides: Record<string, unknown>
+  pr_number: string
+  pr_title: string
+  pr_url: string
+}
+
+export interface FournosJobDetailResponse {
+  job: {
+    metadata: Record<string, unknown>
+    spec: Record<string, unknown>
+    status: Record<string, unknown>
+    source: 'live' | 'history'
+    duration_seconds: number | null
+    mlflow_url: string
+    ci_artifacts_url: string
+  }
+  pods: FournosPod[]
+  stages: PipelineStage[]
+  current_step: CurrentStep | null
+  forge_info: ForgeInfo
+  task_progress: TaskProgress | null
+}
+
+export interface FournosJobEvent {
+  id: string
+  phase: string
+  message: string
+  timestamp: string | null
+}
+
+// ─── Recurring jobs & cluster locks ─────────────────────────────────────
+// Not separate resources — both are FournosJobs (spec.schedule /
+// spec.lockOnly respectively), exactly as the operator itself models them.
+// See docs on fournos/fournos/handlers/lifecycle.py + execution.py.
+
+export interface RecurringJob {
+  name: string
+  project: string
+  cluster: string
+  pipeline: string
+  preset: string
+  owner: string
+  schedule: string // cron expression, UTC
+  phase: string
+  message: string
+  last_scheduled_time: string | null
+  created_at: string
+}
+
+export interface ScheduleChildJob {
+  name: string
+  status: string
+  trigger_type: string
+  duration_seconds: number | null
+  mlflow_url: string
+  created_at: string
+}
+
+/** @deprecated kept as an alias for ScheduleChildJob during the Schedules-tab rename */
+export type ScheduleRun = ScheduleChildJob
+
+export interface ClusterLock {
+  name: string
+  cluster: string
+  owner: string
+  reason: string
+  phase: string
+  lock_until: string | null
+  scheduled_start_time: string | null
+  created_at: string
+}
+
+export interface CreateClusterLockRequest {
+  cluster: string
+  owner: string
+  reason: string
+  /** Lock is one-time only — omit for "held indefinitely until released". */
+  lock_until?: string | null
+  scheduled_start_time?: string | null
+}
+
+export interface ClusterOverview {
+  cluster: string
+  current_jobs: FournosJobSummary[]
+  recurring_jobs: RecurringJob[]
+  locks: ClusterLock[]
+}
+
+/** An ephemeral "someone else is booking this slot right now" claim on the
+ * scheduling calendar — not a Fournos concept, purely a Control Center UX
+ * nicety to stop two users racing on the same slot. See
+ * slot_hold_service.py. */
+export interface SlotHold {
+  cluster: string
+  start_time: string // ISO 8601 UTC, truncated to the slot granularity
+  held_by: string
+  expires_at: string
+}
+
+/** When a Submit-page job should run — threaded into SubmitJobRequest /
+ * SubmitMatrixRequest as `schedule` / `scheduled_start_time` (both UTC). */
+export type JobScheduling =
+  | { mode: 'now' }
+  | { mode: 'defer'; scheduledStartTimeUtc: string; label: string }
+  | { mode: 'recurring'; scheduleUtc: string; label: string }
+
+export interface ForgeProject {
+  name: string
+  cluster: string
+  presets: string[]
+  config_keys: string[]
+  has_cli: boolean
+}
+
+export interface GitHubPR {
+  number: number
+  title: string
+  author: string
+  head_sha: string
+  branch: string
+  draft: boolean
+}
+
+export interface GithubSyncStatus {
+  in_progress: boolean
+  last_synced_at: string | null
+  last_error: string | null
+  project_count: number
+}
+
+export interface SubmitJobRequest {
+  project: string
+  cluster: string
+  pipeline: string
+  preset: string
+  args?: string[]
+  version: string
+  owner: string
+  exclusive: boolean
+  config_overrides: Record<string, string>
+  pull_sha: string
+  priority?: string
+  gpu_type?: string
+  gpu_count?: number
+  /** ISO 8601 UTC — mutually exclusive with `schedule`. Job stays Scheduled until this time. */
+  scheduled_start_time?: string | null
+  /** Cron expression, UTC — mutually exclusive with `scheduled_start_time`. Makes this a recurring template. */
+  schedule?: string
+}
+
+export interface SubmitJobResponse {
+  status: string
+  job_name: string
+  redirect: string
+}
+
+// ─── Matrix (pipeline/CPT-style) submission ────────────────────────────
+// Generic across every project whose ui/submit.yaml declares a
+// `kind: matrix` mode — not project-specific.
+
+export interface SubmitMatrixModelInput {
+  key: string
+  overrides: Record<string, unknown>
+  gpu_count?: number | null
+}
+
+export interface SubmitMatrixRequest {
+  project: string
+  cluster: string
+  pipeline: string
+  args: string[]
+  config_overrides: Record<string, string>
+  models: SubmitMatrixModelInput[]
+  workloads: string[]
+  owner: string
+  priority: string
+  exclusive: boolean
+  pull_sha: string
+  gpu_type: string
+  scheduled_start_time?: string | null
+  schedule?: string
+}
+
+export interface SubmitMatrixResultItem {
+  model: string
+  job_name?: string | null
+  status: string
+  error?: string | null
+}
+
+export interface SubmitMatrixResponse {
+  status: string
+  jobs: SubmitMatrixResultItem[]
+  total: number
+}
+
+// ─── Generic project UI schema (projects/<name>/ui/submit.yaml) ───────
+
+export interface UiOption {
+  value: string
+  label: string
+  overrides: Record<string, unknown>
+  extra: Record<string, unknown>
+}
+
+export interface UiVisibleIf {
+  field: string
+  equals?: unknown
+  one_of?: unknown[]
+}
+
+export interface UiOptionRestriction {
+  when: UiVisibleIf
+  exclude_values: string[]
+}
+
+export interface UiField {
+  key: string
+  label: string
+  type: 'text' | 'textarea' | 'number' | 'boolean' | 'select' | 'multiselect' | 'radio' | 'hidden'
+  required: boolean
+  default?: unknown
+  help: string
+  placeholder: string
+  maps_to?: string | null
+  options: UiOption[]
+  visible_if?: UiVisibleIf | null
+  restrict_if: UiOptionRestriction[]
+  min?: number | null
+  max?: number | null
+}
+
+export interface UiSection {
+  id: string
+  label: string
+  fields: UiField[]
+}
+
+export interface UiQuickPreset {
+  key: string
+  label: string
+  fills: Record<string, unknown>
+  overrides: Record<string, unknown>
+}
+
+export interface UiMatrixConfig {
+  marker_key: string
+  models_key: string
+  workloads_key: string
+  label_key: string
+  tp_key: string
+}
+
+export interface UiPipelineModel {
+  key: string
+  label: string
+  overrides: Record<string, unknown>
+  tp?: number | null
+}
+
+export interface UiPipeline {
+  key: string
+  label: string
+  models: UiPipelineModel[]
+  workloads: string[]
+  overrides: Record<string, unknown>
+}
+
+export interface UiMode {
+  id: string
+  label: string
+  default: boolean
+  kind: 'form' | 'matrix'
+  sections: UiSection[]
+  quick_presets: UiQuickPreset[]
+  matrix?: UiMatrixConfig | null
+  pipelines: UiPipeline[]
+  dimensions: string[]
+}
+
+export interface ProjectUiSchema {
+  schema_version: number
+  project: string
+  title: string
+  description: string
+  defaults: Record<string, unknown>
+  modes: UiMode[]
+}
+
+export interface ProjectUiSchemaResponse {
+  found: boolean
+  project: string
+  ui_schema: ProjectUiSchema | null
+}
