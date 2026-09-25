@@ -230,6 +230,17 @@ oc apply -n <namespace> -f deploy/ocp/image-updater-cronjob.yaml
 
 **Before applying the CronJob**, edit `deploy/ocp/image-updater-cronjob.yaml`:
 
+- Pin the updater container to the CLI image referenced by the target
+  cluster. Refresh this digest after an OpenShift upgrade:
+
+  ```bash
+  oc get imagestream cli -n openshift \
+    -o jsonpath='{.status.tags[?(@.tag=="latest")].items[0].dockerImageReference}{"\n"}'
+  ```
+
+  Use the returned immutable reference for the updater container. Do not use
+  `registry.redhat.io/openshift4/ose-cli:latest`; that repository requires an
+  explicit version or digest.
 - Set `IMAGE_TAG` to `latest` (prod) or `dev` (dev).
 - Adjust `HTTPS_PROXY` / `NO_PROXY` for your cluster's network, or remove
   them entirely if no proxy is needed.
