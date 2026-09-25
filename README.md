@@ -173,6 +173,7 @@ default.
 | [Contributing](docs/CONTRIBUTING.md) | Branch workflow, code standards, PR process |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and solutions |
 | [OCP Deployment](deploy/README.md) | Step-by-step OpenShift deployment guide |
+| [Release Process](docs/RELEASING.md) | Automated semantic versions and release images |
 
 ## API
 
