@@ -573,6 +573,7 @@ export interface ClusterLock {
 
 export interface CreateClusterLockRequest {
   cluster: string
+  /** Compatibility field; the backend records the authenticated requester. */
   owner: string
   reason: string
   /** Lock is one-time only — omit for "held indefinitely until released". */
@@ -636,6 +637,7 @@ export interface SubmitJobRequest {
   preset: string
   args?: string[]
   version: string
+  /** Compatibility/display field; the backend records the authenticated requester. */
   owner: string
   exclusive: boolean
   config_overrides: Record<string, string>
@@ -673,6 +675,7 @@ export interface SubmitMatrixRequest {
   config_overrides: Record<string, string>
   models: SubmitMatrixModelInput[]
   workloads: string[]
+  /** Compatibility/display field; the backend records the authenticated requester. */
   owner: string
   priority: string
   exclusive: boolean
