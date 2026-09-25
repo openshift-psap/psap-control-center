@@ -271,7 +271,7 @@ async def google_callback(
     response = _session_response(user, request)
     response.delete_cookie(key=OAUTH_STATE_COOKIE, path="/")
     response.delete_cookie(key=OAUTH_STATE_COOKIE, path="/api")
-    logger.info(f"Google user logged in: {email} (role={user['role']})")
+    logger.info(f"Google user logged in (role={user['role']})")
     return response
 
 

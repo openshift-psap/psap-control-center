@@ -61,10 +61,28 @@ router = APIRouter(prefix="/fournos", tags=["fournos"])
 
 _COMPLETED_GRACE_SECONDS = 180
 
+_REQUESTER_ANNOTATIONS = {
+    REQUESTER_SUBJECT_ANNOTATION,
+    REQUESTER_EMAIL_ANNOTATION,
+    REQUESTER_NAME_ANNOTATION,
+    REQUESTER_PROVIDER_ANNOTATION,
+}
+
 _VERSION_KEYS = {"mcp_gateway": "infrastructure.mcp_gateway_version"}
 
 
 # ─── helper functions ────────────────────────────────────────────────────
+
+def _public_job_metadata(metadata: dict) -> dict:
+    """Return job metadata without private requester identity annotations."""
+    public_metadata = dict(metadata or {})
+    annotations = dict(public_metadata.get("annotations") or {})
+    public_metadata["annotations"] = {
+        key: value
+        for key, value in annotations.items()
+        if key not in _REQUESTER_ANNOTATIONS
+    }
+    return public_metadata
 
 def _extract_forge_info(job: dict) -> dict:
     forge = job.get("spec", {}).get("executionEngine", {}).get("forge", {})
@@ -470,7 +488,7 @@ async def get_job(job_name: str):
 
         return {
             "job": {
-                "metadata": job.get("metadata", {}),
+                "metadata": _public_job_metadata(job.get("metadata", {})),
                 "spec": job.get("spec", {}),
                 "status": job.get("status", {}),
                 "source": "live",
@@ -513,7 +531,10 @@ async def get_job(job_name: str):
     )
 
     return {
-        "job": fjob,
+        "job": {
+            **fjob,
+            "metadata": _public_job_metadata(fjob.get("metadata", {})),
+        },
         "pods": [],
         "stages": stages,
         "current_step": current_step,

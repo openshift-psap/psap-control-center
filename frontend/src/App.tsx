@@ -16,6 +16,43 @@ import { isAdmin, setSession } from './stores/authStore'
 import { authApi } from './services/api'
 import toast from 'react-hot-toast'
 
+const OAUTH_QUERY_KEYS = [
+  'code',
+  'state',
+  'scope',
+  'authuser',
+  'hd',
+  'prompt',
+  'iss',
+  'error',
+  'error_description',
+]
+
+function consumeOAuthCallback() {
+  const params = new URLSearchParams(window.location.search)
+  const callback = {
+    code: params.get('code'),
+    state: params.get('state'),
+    error: params.get('error'),
+  }
+
+  if (callback.code || callback.state || callback.error) {
+    for (const key of OAUTH_QUERY_KEYS) params.delete(key)
+    const query = params.toString()
+    window.history.replaceState(
+      {},
+      '',
+      `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`,
+    )
+  }
+
+  return callback
+}
+
+// Consume OAuth parameters before React renders so child data requests cannot
+// copy the authorization code or state into their Referer header.
+const oauthCallback = consumeOAuthCallback()
+
 function NotFound() {
   return (
     <div className="text-center py-12">
@@ -39,10 +76,7 @@ function App() {
 
   useEffect(() => {
     const bootstrapAuth = async () => {
-      const params = new URLSearchParams(window.location.search)
-      const code = params.get('code')
-      const state = params.get('state')
-      const oauthError = params.get('error')
+      const { code, state, error: oauthError } = oauthCallback
 
       try {
         if (code && state) {
@@ -60,18 +94,6 @@ function App() {
           toast.error(error instanceof Error ? error.message : 'Google sign-in failed')
         }
         // No valid session cookie is expected for anonymous visitors.
-      } finally {
-        if (code || state || oauthError) {
-          for (const key of ['code', 'state', 'scope', 'authuser', 'hd', 'prompt', 'error', 'error_description']) {
-            params.delete(key)
-          }
-          const query = params.toString()
-          window.history.replaceState(
-            {},
-            '',
-            `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`,
-          )
-        }
       }
     }
     bootstrapAuth()
