@@ -303,8 +303,22 @@ export const hearthApi = {
 }
 
 export const authApi = {
+  config: async (): Promise<{ google_enabled: boolean; local_login_enabled: boolean }> => {
+    const { data } = await api.get('/auth/config')
+    return data
+  },
+
   login: async (username: string, password: string): Promise<AuthSession> => {
     const { data } = await api.post('/auth/login', { username, password })
+    return data
+  },
+
+  loginWithGoogle: (): void => {
+    window.location.assign('/api/v1/auth/google/login')
+  },
+
+  completeGoogleLogin: async (code: string, state: string): Promise<AuthSession> => {
+    const { data } = await api.post('/auth/google/callback', { code, state })
     return data
   },
 
@@ -323,7 +337,28 @@ export interface SlackSettings {
   enabled: boolean
 }
 
+export interface ManagedUser {
+  id: string
+  username: string
+  email: string
+  full_name: string | null
+  role: 'admin' | 'user'
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
 export const settingsApi = {
+  getUsers: async (): Promise<ManagedUser[]> => {
+    const { data } = await api.get('/settings/users')
+    return data
+  },
+
+  updateUserRole: async (userId: string, role: 'admin' | 'user'): Promise<ManagedUser> => {
+    const { data } = await api.patch(`/settings/users/${userId}/role`, { role })
+    return data
+  },
+
   getSlack: async (): Promise<SlackSettings> => {
     const { data } = await api.get('/settings/slack')
     return data

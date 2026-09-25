@@ -77,6 +77,14 @@ _MIGRATIONS = [
     ("fournos_jobs", "stages", "JSONB"),
     ("fournos_jobs", "stage_snapshot_attempts", "INTEGER NOT NULL DEFAULT 0"),
     ("fournos_jobs", "stage_snapshot_attempted_at", "TIMESTAMP WITH TIME ZONE"),
+    ("fournos_jobs", "requester_subject", "VARCHAR(255)"),
+    ("fournos_jobs", "requester_email", "VARCHAR(255)"),
+    ("fournos_jobs", "requester_name", "VARCHAR(255)"),
+    ("fournos_jobs", "auth_provider", "VARCHAR(50)"),
+    ("reservations", "created_by_subject", "VARCHAR(255)"),
+    ("reservations", "created_by_email", "VARCHAR(255)"),
+    ("reservations", "created_by_name", "VARCHAR(255)"),
+    ("reservations", "created_by_provider", "VARCHAR(50)"),
 ]
 
 
@@ -122,6 +130,10 @@ _INDEXES = [
         "COALESCE(completed_at, created_at)",
     ),
     ("ix_fournos_jobs_trigger_type", "fournos_jobs", "trigger_type"),
+    ("ix_fournos_jobs_requester_subject", "fournos_jobs", "requester_subject"),
+    ("ix_fournos_jobs_requester_email", "fournos_jobs", "requester_email"),
+    ("ix_reservations_created_by_subject", "reservations", "created_by_subject"),
+    ("ix_reservations_created_by_email", "reservations", "created_by_email"),
     ("ix_fournos_jobs_history", "fournos_jobs", "status, is_lock, trigger_type, completed_at"),
 ]
 
