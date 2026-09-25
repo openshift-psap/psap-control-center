@@ -96,20 +96,13 @@ podman push quay.io/${QUAY_ORG}/psap-control-center-frontend:latest
 oc new-project psap-control-center
 ```
 
-### 4. Create secrets
+### 4. Configure runtime settings
 
-```bash
-oc create secret generic psap-control-center-admin \
-  --from-literal=ADMIN_USERNAME=admin \
-  --from-literal=ADMIN_PASSWORD='<pick-a-secure-password>' \
-  --from-literal=USER_USERNAME=user \
-  --from-literal=USER_PASSWORD='<pick-a-secure-password>'
-
-oc create secret generic psap-control-center-config \
-  --from-literal=SECRET_KEY='<random-string>' \
-  --from-literal=DATABASE_URL='sqlite+aiosqlite:///./data/psap_control_center.db' \
-  --from-literal=LOG_LEVEL='INFO'
-```
+Provision authentication, database, and application settings through the
+organization's approved runtime secret-management process. Credential values,
+creation commands, and rotation procedures are intentionally excluded from
+this repository. The Google OAuth redirect URI must exactly match an authorized
+redirect URI configured for its web client.
 
 ### 5. Create persistent volume claims
 
@@ -139,6 +132,11 @@ oc set volume deployment/psap-control-center-backend \
 oc set volume deployment/psap-control-center-backend \
   --add --name=kubeconfigs --mount-path=/app/kubeconfigs \
   --claim-name=psap-control-center-kubeconfigs
+
+# Both backend volumes are ReadWriteOnce. Recreate prevents a rolling update
+# from blocking while the replacement pod tries to attach volumes still in use.
+oc patch deployment psap-control-center-backend --type=merge \
+  -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
 
 oc expose deployment psap-control-center-backend --port=8000
 ```
@@ -196,7 +194,9 @@ supported side-by-side on the same cluster:
    pushes them to Quay.io with the appropriate tag.
 2. **OCP CronJob** (runs every 2 minutes) polls Quay for new image digests.
    When a change is detected, it triggers `kubectl rollout restart` for the
-   corresponding deployment.
+   corresponding deployment. The last successfully deployed digest is kept in
+   the `psap-control-center.io/image-digest` Deployment annotation so it
+   persists across the CronJob's short-lived pods.
 3. **Total time from push to live:** ~4–6 minutes.
 
 ### GitHub Actions workflows
@@ -239,6 +239,10 @@ oc apply -n <namespace> -f deploy/ocp/image-updater-cronjob.yaml
 ```bash
 # Check CronJob status
 oc get cronjob image-updater -n <namespace>
+
+# Confirm the persistent digest recorded for each deployment
+oc get deployment -n <namespace> \
+  -o custom-columns=NAME:.metadata.name,DIGEST:.metadata.annotations.psap-control-center\\.io/image-digest
 
 # View the latest job's logs
 oc logs -n <namespace> job/$(oc get jobs -n <namespace> \
@@ -302,30 +306,13 @@ oc rollout restart deployment/psap-control-center-frontend
 
 ## Authentication
 
-Authentication uses HttpOnly session cookies (JWT). Two role-based accounts
-are configured via environment variables:
-
-| Role    | Env Vars                              | Permissions |
-| ------- | ------------------------------------- | ----------- |
-| `admin` | `ADMIN_USERNAME` / `ADMIN_PASSWORD`   | Full access: cluster management, reservations, Hearth |
-| `user`  | `USER_USERNAME` / `USER_PASSWORD`     | View all data, create/cancel own reservations |
-
-All GET endpoints remain open (no authentication required).
+Authentication uses HttpOnly session cookies (JWT) and supports Google
+Workspace SSO plus optional local break-glass accounts. Administrator-only
+operations are enforced by the backend. Selected read-only APIs, including
+Testing run history and pod logs, intentionally remain accessible without
+authentication.
 
 Sessions expire after eight hours by default (configurable via `ACCESS_TOKEN_EXPIRE_MINUTES`).
-
-## Updating Credentials
-
-```bash
-oc delete secret psap-control-center-admin
-oc create secret generic psap-control-center-admin \
-  --from-literal=ADMIN_USERNAME=admin \
-  --from-literal=ADMIN_PASSWORD='<new-password>' \
-  --from-literal=USER_USERNAME=user \
-  --from-literal=USER_PASSWORD='<new-password>'
-
-oc rollout restart deployment/psap-control-center-backend
-```
 
 ## Teardown
 

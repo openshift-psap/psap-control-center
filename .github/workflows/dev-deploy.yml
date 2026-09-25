@@ -1,6 +1,6 @@
 name: Dev Build & Push
 
-on:
+"on":
   push:
     branches: [development]
   workflow_dispatch:
@@ -25,6 +25,8 @@ jobs:
 
       - name: Build frontend
         working-directory: frontend
+        env:
+          VITE_ENV_BANNER: DEVELOPMENT
         run: npm ci && npm run build
 
       - name: Log in to Quay.io
