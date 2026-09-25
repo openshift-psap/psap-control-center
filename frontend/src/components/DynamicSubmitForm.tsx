@@ -234,7 +234,6 @@ export default function DynamicSubmitForm({
         setFieldValue(field.key, '')
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeMode, values])
 
   const applyQuickPreset = (qp: UiQuickPreset) => {

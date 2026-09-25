@@ -96,42 +96,13 @@ podman push quay.io/${QUAY_ORG}/psap-control-center-frontend:latest
 oc new-project psap-control-center
 ```
 
-### 4. Create secrets
+### 4. Configure runtime settings
 
-```bash
-oc create secret generic psap-control-center-admin \
-  --from-literal=ADMIN_USERNAME=admin \
-  --from-literal=ADMIN_PASSWORD='<pick-a-secure-password>' \
-  --from-literal=USER_USERNAME=user \
-  --from-literal=USER_PASSWORD='<pick-a-secure-password>'
-
-oc create secret generic psap-control-center-config \
-  --from-literal=SECRET_KEY='<random-string>' \
-  --from-literal=DATABASE_URL='sqlite+aiosqlite:///./data/psap_control_center.db' \
-  --from-literal=LOG_LEVEL='INFO'
-```
-
-For Google Workspace SSO, create a separate secret from the downloaded web
-client credentials. Do not commit the JSON file or client secret:
-
-```bash
-oc create secret generic psap-control-center-google-oauth \
-  --from-literal=GOOGLE_OAUTH_ENABLED=true \
-  --from-literal=GOOGLE_CLIENT_ID='<web-client-id>' \
-  --from-literal=GOOGLE_CLIENT_SECRET='<web-client-secret>' \
-  --from-literal=GOOGLE_REDIRECT_URI='https://control-center.example.com' \
-  --from-literal=GOOGLE_ALLOWED_DOMAIN='example.com' \
-  --from-literal=GOOGLE_ADMIN_EMAILS='admin1@example.com,admin2@example.com'
-
-oc set env deployment/psap-control-center-backend \
-  --from=secret/psap-control-center-google-oauth
-```
-
-The redirect URI must exactly match one of the web client's authorized
-redirect URIs in Google Cloud Console. During rollout, keep
-`LOCAL_LOGIN_ENABLED=true` so the existing administrator account remains an
-emergency fallback. Google users default to the normal user role unless their
-verified email appears in `GOOGLE_ADMIN_EMAILS`.
+Provision authentication, database, and application settings through the
+organization's approved runtime secret-management process. Credential values,
+creation commands, and rotation procedures are intentionally excluded from
+this repository. The Google OAuth redirect URI must exactly match an authorized
+redirect URI configured for its web client.
 
 ### 5. Create persistent volume claims
 
@@ -335,30 +306,13 @@ oc rollout restart deployment/psap-control-center-frontend
 
 ## Authentication
 
-Authentication uses HttpOnly session cookies (JWT). Two role-based accounts
-are configured via environment variables:
-
-| Role    | Env Vars                              | Permissions |
-| ------- | ------------------------------------- | ----------- |
-| `admin` | `ADMIN_USERNAME` / `ADMIN_PASSWORD`   | Full access: cluster management, reservations, Hearth |
-| `user`  | `USER_USERNAME` / `USER_PASSWORD`     | View all data, create/cancel own reservations |
-
-All GET endpoints remain open (no authentication required).
+Authentication uses HttpOnly session cookies (JWT) and supports Google
+Workspace SSO plus optional local break-glass accounts. Administrator-only
+operations are enforced by the backend. Selected read-only APIs, including
+Testing run history and pod logs, intentionally remain accessible without
+authentication.
 
 Sessions expire after eight hours by default (configurable via `ACCESS_TOKEN_EXPIRE_MINUTES`).
-
-## Updating Credentials
-
-```bash
-oc delete secret psap-control-center-admin
-oc create secret generic psap-control-center-admin \
-  --from-literal=ADMIN_USERNAME=admin \
-  --from-literal=ADMIN_PASSWORD='<new-password>' \
-  --from-literal=USER_USERNAME=user \
-  --from-literal=USER_PASSWORD='<new-password>'
-
-oc rollout restart deployment/psap-control-center-backend
-```
 
 ## Teardown
 

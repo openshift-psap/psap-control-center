@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any, List, Optional
@@ -72,6 +73,30 @@ _VERSION_KEYS = {"mcp_gateway": "infrastructure.mcp_gateway_version"}
 
 
 # ─── helper functions ────────────────────────────────────────────────────
+
+def _enqueue_stream_item(
+    queue: asyncio.Queue,
+    item: Optional[str],
+) -> None:
+    """Enqueue a log item from the event-loop thread without raising.
+
+    Log lines may be dropped when a slow client fills the bounded queue. The
+    terminal sentinel must always be delivered, so it replaces the oldest
+    queued line when necessary.
+    """
+    if queue.full():
+        if item is not None:
+            return
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+    try:
+        queue.put_nowait(item)
+    except asyncio.QueueFull:
+        # Another callback cannot interleave while this synchronous helper is
+        # running, but retain a defensive guard for alternate event loops.
+        pass
 
 def _public_job_metadata(metadata: dict) -> dict:
     """Return job metadata without private requester identity annotations."""
@@ -630,23 +655,24 @@ async def stream_logs(job_name: str, pod_name: str):
         raise HTTPException(404, "Pod not found for this job")
 
     async def generate():
-        stop = asyncio.Event()
+        stop = threading.Event()
         queue: asyncio.Queue = asyncio.Queue(maxsize=64)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _reader():
             try:
                 for line in k8s.read_pod_log(pod_name, follow=True):
                     if stop.is_set():
                         break
-                    try:
-                        loop.call_soon_threadsafe(queue.put_nowait, line)
-                    except asyncio.QueueFull:
-                        pass
+                    loop.call_soon_threadsafe(
+                        _enqueue_stream_item, queue, line
+                    )
             finally:
-                loop.call_soon_threadsafe(queue.put_nowait, None)
+                loop.call_soon_threadsafe(
+                    _enqueue_stream_item, queue, None
+                )
 
-        asyncio.get_event_loop().run_in_executor(None, _reader)
+        loop.run_in_executor(None, _reader)
         try:
             while True:
                 line = await queue.get()
