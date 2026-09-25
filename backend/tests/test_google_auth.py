@@ -143,7 +143,12 @@ def test_google_callback_creates_user_session(monkeypatch):
     monkeypatch.setattr(auth_api, "_verify_google_id_token", fake_verify)
 
     request = _request(cookie=f"{auth_api.OAUTH_STATE_COOKIE}={state_token}")
-    response = asyncio.run(auth_api.google_callback(request, code="code", state=state))
+    response = asyncio.run(
+        auth_api.google_callback(
+            request,
+            auth_api.GoogleCallbackRequest(code="code", state=state),
+        )
+    )
     payload = json.loads(response.body)
 
     assert payload == {

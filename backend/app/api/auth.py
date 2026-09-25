@@ -5,10 +5,10 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from jose import JWTError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.auth import (
     validate_credentials,
@@ -29,6 +29,11 @@ GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class GoogleCallbackRequest(BaseModel):
+    code: str = Field(min_length=1)
+    state: str = Field(min_length=1)
 
 
 @router.post("/login")
@@ -158,9 +163,11 @@ async def google_login(request: Request):
         httponly=True,
         secure=_secure_request(request),
         samesite="lax",
-        path="/api",
+        path="/",
         max_age=600,
     )
+    # Remove the narrower cookie used by the first development implementation.
+    response.delete_cookie(key=OAUTH_STATE_COOKIE, path="/api")
     return response
 
 
@@ -168,11 +175,13 @@ async def _verify_google_id_token(id_token: str, expected_nonce: str) -> dict:
     try:
         header = jwt.get_unverified_header(id_token)
     except JWTError as exc:
+        logger.warn("Google callback rejected: invalid ID-token header")
         raise HTTPException(401, "Google returned an invalid ID token") from exc
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         jwks_response = await client.get("https://www.googleapis.com/oauth2/v3/certs")
     if jwks_response.status_code != 200:
+        logger.warn("Google callback failed: signing keys unavailable")
         raise HTTPException(502, "Unable to validate Google identity")
 
     key = next(
@@ -180,6 +189,7 @@ async def _verify_google_id_token(id_token: str, expected_nonce: str) -> dict:
         None,
     )
     if key is None:
+        logger.warn("Google callback rejected: signing key not found")
         raise HTTPException(401, "Google signing key was not found")
 
     try:
@@ -191,30 +201,35 @@ async def _verify_google_id_token(id_token: str, expected_nonce: str) -> dict:
             options={"verify_iss": False},
         )
     except JWTError as exc:
+        logger.warn("Google callback rejected: ID-token verification failed")
         raise HTTPException(401, "Google identity verification failed") from exc
 
     if claims.get("iss") not in GOOGLE_ISSUERS:
+        logger.warn("Google callback rejected: invalid issuer")
         raise HTTPException(401, "Google identity issuer is invalid")
     if not secrets.compare_digest(str(claims.get("nonce", "")), expected_nonce):
+        logger.warn("Google callback rejected: nonce mismatch")
         raise HTTPException(401, "Google login nonce is invalid")
     if claims.get("email_verified") is not True:
+        logger.warn("Google callback rejected: email is not verified")
         raise HTTPException(403, "A verified organization email is required")
     if claims.get("hd", "").lower() != settings.GOOGLE_ALLOWED_DOMAIN.lower():
+        logger.warn("Google callback rejected: Workspace domain mismatch")
         raise HTTPException(403, "This Google Workspace organization is not allowed")
     return claims
 
 
-@router.get("/google/callback")
+@router.post("/google/callback")
 async def google_callback(
     request: Request,
-    code: str = Query(..., min_length=1),
-    state: str = Query(..., min_length=1),
+    body: GoogleCallbackRequest,
 ):
     if not settings.GOOGLE_OAUTH_ENABLED:
         raise HTTPException(status_code=404, detail="Google login is disabled")
 
     state_token = request.cookies.get(OAUTH_STATE_COOKIE)
     if not state_token:
+        logger.warn("Google callback rejected: missing state cookie")
         raise HTTPException(401, "Google login session expired; please try again")
     try:
         state_claims = jwt.decode(
@@ -223,17 +238,19 @@ async def google_callback(
             algorithms=[settings.ALGORITHM],
         )
     except JWTError as exc:
+        logger.warn("Google callback rejected: invalid state cookie")
         raise HTTPException(401, "Google login session is invalid") from exc
     if state_claims.get("type") != "google_oauth" or not secrets.compare_digest(
-        str(state_claims.get("state", "")), state
+        str(state_claims.get("state", "")), body.state
     ):
+        logger.warn("Google callback rejected: state mismatch")
         raise HTTPException(401, "Google login state is invalid")
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         token_response = await client.post(
             "https://oauth2.googleapis.com/token",
             data={
-                "code": code,
+                "code": body.code,
                 "client_id": settings.GOOGLE_CLIENT_ID,
                 "client_secret": settings.GOOGLE_CLIENT_SECRET,
                 "redirect_uri": settings.GOOGLE_REDIRECT_URI,
@@ -242,10 +259,12 @@ async def google_callback(
             },
         )
     if token_response.status_code != 200:
-        logger.warn("Google authorization-code exchange failed")
+        error_code = token_response.json().get("error", "unknown_error")
+        logger.warn(f"Google authorization-code exchange failed: {error_code}")
         raise HTTPException(401, "Google login could not be completed")
     id_token = token_response.json().get("id_token")
     if not id_token:
+        logger.warn("Google callback rejected: ID token missing")
         raise HTTPException(401, "Google did not return an identity token")
 
     claims = await _verify_google_id_token(id_token, state_claims["nonce"])
@@ -264,6 +283,7 @@ async def google_callback(
         "role": "admin" if email in admin_emails else "user",
     }
     response = _session_response(user, request)
+    response.delete_cookie(key=OAUTH_STATE_COOKIE, path="/")
     response.delete_cookie(key=OAUTH_STATE_COOKIE, path="/api")
     logger.info(f"Google user logged in: {email} (role={user['role']})")
     return response

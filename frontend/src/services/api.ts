@@ -318,7 +318,7 @@ export const authApi = {
   },
 
   completeGoogleLogin: async (code: string, state: string): Promise<AuthSession> => {
-    const { data } = await api.get('/auth/google/callback', { params: { code, state } })
+    const { data } = await api.post('/auth/google/callback', { code, state })
     return data
   },
 
