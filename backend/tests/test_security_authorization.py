@@ -137,6 +137,46 @@ def test_testing_owner_prefers_verified_display_name():
     assert fournos._verified_owner({**user, "name": ""}) == "person@example.com"
 
 
+def test_requester_scope_uses_only_authenticated_subject():
+    user = {"subject": "google:12345"}
+
+    assert fournos._requester_subject_for_scope("all", None) is None
+    assert fournos._requester_subject_for_scope("mine", user) == "google:12345"
+
+    with pytest.raises(HTTPException) as exc_info:
+        fournos._requester_subject_for_scope("mine", None)
+    assert exc_info.value.status_code == 401
+
+
+def test_live_requester_filter_reads_immutable_annotation():
+    job = {
+        "metadata": {
+            "annotations": {
+                fournos.REQUESTER_SUBJECT_ANNOTATION: "google:12345",
+            }
+        },
+        "spec": {"owner": "Editable Display Name"},
+    }
+
+    assert fournos._live_job_requester_subject(job) == "google:12345"
+    assert fournos._live_job_requester_subject({"metadata": {}}) == ""
+
+
+def test_recurring_child_inherits_requester_for_live_filter_without_mutation():
+    child = {
+        "metadata": {
+            "labels": {fournos.k8s.LABEL_RECURRING_PARENT: "nightly-parent"}
+        }
+    }
+
+    resolved = fournos._inherit_live_requester(
+        child, {"nightly-parent": "google:12345"}
+    )
+
+    assert fournos._live_job_requester_subject(resolved) == "google:12345"
+    assert fournos._live_job_requester_subject(child) == ""
+
+
 def test_cluster_lock_ignores_client_supplied_owner(monkeypatch):
     captured = {}
 

@@ -451,6 +451,7 @@ export const fournosApi = {
     cluster?: string
     status?: string
     owner?: string
+    requester_scope?: 'all' | 'mine'
     start_time?: string
     end_time?: string
     sort_by?: string

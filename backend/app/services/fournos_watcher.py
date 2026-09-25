@@ -215,6 +215,16 @@ def _extract_forge_fields(job: dict) -> dict:
     }
 
 
+def _inherit_requester_fields(fields: dict, parent: Optional[FournosJob]) -> None:
+    """Fill an operator-created recurring child from its archived parent."""
+    if parent is None or fields.get("requester_subject"):
+        return
+    fields["requester_subject"] = parent.requester_subject or ""
+    fields["requester_email"] = parent.requester_email or ""
+    fields["requester_name"] = parent.requester_name or ""
+    fields["auth_provider"] = parent.auth_provider or ""
+
+
 async def _archive_job(job: dict) -> None:
     if _watcher_session is None:
         logger.warning("Watcher DB not initialised — skipping archive")
@@ -227,6 +237,10 @@ async def _archive_job(job: dict) -> None:
 
     async with _watcher_session() as session, session.begin():
         existing = await db_svc.get_job_by_name(session, job_name)
+        schedule_parent = fields.get("triggered_by_schedule")
+        if schedule_parent and not fields.get("requester_subject"):
+            parent = await db_svc.get_job_by_name(session, schedule_parent)
+            _inherit_requester_fields(fields, parent)
         previous_phase = existing.status if existing else None
         previous_message = existing.message if existing else None
         existing_stages = existing.stages if existing else None

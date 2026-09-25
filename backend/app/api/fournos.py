@@ -125,6 +125,48 @@ def _verified_owner(user: dict) -> str:
     return str(user.get("name") or actor_label(user))
 
 
+def _requester_subject_for_scope(
+    requester_scope: str,
+    user: Optional[dict],
+) -> Optional[str]:
+    """Resolve the caller-controlled scope without accepting an identity."""
+    if requester_scope == "all":
+        return None
+    subject = str((user or {}).get("subject") or "")
+    if not subject:
+        raise HTTPException(status_code=401, detail="Sign in to view your jobs")
+    return subject
+
+
+def _live_job_requester_subject(job: dict) -> str:
+    annotations = job.get("metadata", {}).get("annotations", {}) or {}
+    return str(annotations.get(REQUESTER_SUBJECT_ANNOTATION, ""))
+
+
+def _inherit_live_requester(
+    job: dict,
+    parent_subjects: dict[str, str],
+) -> dict:
+    """Resolve recurring children whose operator-created metadata has no annotations."""
+    if _live_job_requester_subject(job):
+        return job
+    metadata = job.get("metadata", {}) or {}
+    parent_name = (metadata.get("labels", {}) or {}).get(
+        k8s.LABEL_RECURRING_PARENT, ""
+    )
+    parent_subject = parent_subjects.get(parent_name, "")
+    if not parent_subject:
+        return job
+
+    resolved_job = dict(job)
+    resolved_metadata = dict(metadata)
+    resolved_annotations = dict(resolved_metadata.get("annotations", {}) or {})
+    resolved_annotations[REQUESTER_SUBJECT_ANNOTATION] = parent_subject
+    resolved_metadata["annotations"] = resolved_annotations
+    resolved_job["metadata"] = resolved_metadata
+    return resolved_job
+
+
 def _extract_forge_info(job: dict) -> dict:
     forge = job.get("spec", {}).get("executionEngine", {}).get("forge", {})
     env = job.get("spec", {}).get("env", {})
@@ -276,6 +318,11 @@ def _get_live_jobs_sync() -> list:
     from dateutil.parser import parse
 
     jobs = k8s.list_fournos_jobs()
+    parent_subjects = {
+        job.get("metadata", {}).get("name", ""): _live_job_requester_subject(job)
+        for job in jobs
+        if job.get("spec", {}).get("schedule")
+    }
     now = datetime.now(timezone.utc)
     visible = []
     for j in jobs:
@@ -304,7 +351,7 @@ def _get_live_jobs_sync() -> list:
                         pass
             if last_ts and (now - last_ts).total_seconds() > _COMPLETED_GRACE_SECONDS:
                 continue
-        visible.append(j)
+        visible.append(_inherit_live_requester(j, parent_subjects))
     visible.sort(
         key=lambda j: j.get("metadata", {}).get("creationTimestamp", ""),
         reverse=True,
@@ -386,6 +433,7 @@ async def list_jobs(
     cluster: str = Query(""),
     status: str = Query(""),
     owner: str = Query(""),
+    requester_scope: str = Query("all", pattern="^(all|mine)$"),
     start_time: Optional[str] = Query(None, description="ISO 8601 UTC — history tab only"),
     end_time: Optional[str] = Query(None, description="ISO 8601 UTC — history tab only"),
     sort_by: str = Query(""),
@@ -393,9 +441,37 @@ async def list_jobs(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
 ):
-    include_owner = get_current_user(request) is not None
+    current_user = get_current_user(request)
+    include_owner = current_user is not None
+    requester_subject = _requester_subject_for_scope(
+        requester_scope, current_user
+    )
     if tab == "live":
         jobs = await _get_live_jobs()
+        if requester_subject:
+            missing_parent_names = {
+                (job.get("metadata", {}).get("labels", {}) or {}).get(
+                    k8s.LABEL_RECURRING_PARENT, ""
+                )
+                for job in jobs
+                if not _live_job_requester_subject(job)
+            }
+            missing_parent_names.discard("")
+            if missing_parent_names:
+                async with AsyncSessionLocal() as session:
+                    archived_parent_subjects = (
+                        await db_svc.get_requester_subjects_by_names(
+                            session, sorted(missing_parent_names)
+                        )
+                    )
+                jobs = [
+                    _inherit_live_requester(job, archived_parent_subjects)
+                    for job in jobs
+                ]
+            jobs = [
+                job for job in jobs
+                if _live_job_requester_subject(job) == requester_subject
+            ]
         if project:
             jobs = [
                 j for j in jobs
@@ -434,6 +510,7 @@ async def list_jobs(
                 cluster=cluster or None,
                 status=status or None,
                 owner=(owner or None) if include_owner else None,
+                requester_subject=requester_subject,
                 created_after=created_after,
                 created_before=created_before,
                 sort_by=sort_by or None,
