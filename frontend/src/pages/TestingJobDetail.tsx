@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, Fragment } from 'react'
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import {
   ArrowLeftIcon,
@@ -284,7 +284,7 @@ export default function TestingJobDetail() {
   const [autoSelected, setAutoSelected] = useState(false)
   const [activeTab, setActiveTab] = useState<'timeline' | 'pods' | 'spec'>('timeline')
 
-  const pods = data?.pods ?? []
+  const pods = useMemo(() => data?.pods ?? [], [data?.pods])
   const phase = (data?.job.status as Record<string, unknown> | undefined)?.phase as string | undefined
   // Once a job is archived to history its pods are long gone from the
   // cluster — no point offering a tab that can only ever say "no pods".

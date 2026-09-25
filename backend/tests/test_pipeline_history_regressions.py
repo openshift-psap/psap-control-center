@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from app.services import fournos_k8s_client as k8s
@@ -5,6 +6,21 @@ from app.services import fournos_watcher as watcher
 from app.api import fournos as fournos_api
 from app.core import database as database_core
 from app.services import fournos_db_service as db_service
+
+
+def test_log_stream_terminal_sentinel_displaces_oldest_item_when_full():
+    async def exercise_queue():
+        queue = asyncio.Queue(maxsize=1)
+        queue.put_nowait("old-line")
+
+        fournos_api._enqueue_stream_item(queue, "dropped-line")
+        assert queue.get_nowait() == "old-line"
+
+        queue.put_nowait("last-line")
+        fournos_api._enqueue_stream_item(queue, None)
+        assert queue.get_nowait() is None
+
+    asyncio.run(exercise_queue())
 
 
 def test_taskrun_condition_specific_terminal_reasons_win_over_false_status():
