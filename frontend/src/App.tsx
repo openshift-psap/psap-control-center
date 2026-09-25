@@ -80,7 +80,19 @@ function App() {
   return (
     <Routes>
       <Route path="/" element={<Layout />}>
-        <Route index element={<Navigate to="/clusters" replace />} />
+        <Route
+          index
+          element={
+            <Navigate
+              to={{
+                pathname: '/clusters',
+                search: window.location.search,
+                hash: window.location.hash,
+              }}
+              replace
+            />
+          }
+        />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="clusters" element={<Clusters />} />
         <Route path="clusters/:id" element={<ClusterDetail />} />
