@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -58,6 +58,12 @@ class PipelineStage(BaseModel):
     startTime: Optional[str] = None
     completionTime: Optional[str] = None
     is_finally: bool = Field(False, alias="finally")
+    outcome: str = ""
+    reason: str = ""
+    reasonCode: str = ""
+    reasonSource: str = ""
+    failedStep: str = ""
+    exitCode: Optional[int] = None
 
     class Config:
         populate_by_name = True
@@ -90,6 +96,19 @@ class CurrentStep(BaseModel):
     startTime: Optional[str] = None
 
 
+class FailureSummary(BaseModel):
+    outcome: Literal["failed", "cancelled", "infrastructure_error", "unknown"]
+    stage: str = ""
+    stageDisplayName: str = ""
+    step: str = ""
+    reason: str = ""
+    reasonCode: str = ""
+    source: str = "unknown"
+    artifactPath: str = ""
+    executionReason: str = ""
+    executionSource: str = ""
+
+
 class ForgeInfo(BaseModel):
     project: str = ""
     args: List[str] = Field(default_factory=list)
@@ -101,6 +120,17 @@ class ForgeInfo(BaseModel):
     head_branch: str = ""
     requested_sha: str = ""
     resolved_sha: str = ""
+
+
+class FournosJobDetailResponse(BaseModel):
+    job: FournosJobDetail
+    pods: List[FournosPod] = Field(default_factory=list)
+    stages: List[PipelineStage] = Field(default_factory=list)
+    current_step: Optional[CurrentStep] = None
+    forge_info: ForgeInfo = Field(default_factory=ForgeInfo)
+    task_progress: Optional[TaskProgress] = None
+    failure_summary: Optional[FailureSummary] = None
+    failure_enrichment_state: str = "not_applicable"
 
 
 # -- Job event schemas --

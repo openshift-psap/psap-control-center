@@ -14,6 +14,7 @@ import {
   CubeIcon,
   CodeBracketIcon,
   ClockIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline'
 import {
   CheckCircleIcon,
@@ -55,11 +56,17 @@ const STAGE_STYLES: Record<string, { ring: string; chip: string; text: string; i
   Cancelled: { ring: 'ring-gray-200', chip: 'bg-gray-400', text: 'text-gray-500', icon: 'minus' },
   Skipped: { ring: 'ring-gray-200', chip: 'bg-gray-300', text: 'text-gray-400', icon: 'forward' },
   NotRun: { ring: 'ring-gray-200', chip: 'bg-gray-300', text: 'text-gray-400', icon: 'minus' },
+  Unknown: { ring: 'ring-amber-200', chip: 'bg-amber-400', text: 'text-amber-700', icon: 'minus' },
   Pending: { ring: 'ring-gray-200', chip: 'bg-white border-2 border-gray-300', text: 'text-gray-400', icon: 'none' },
 }
 
 function StageChip({ stage, index }: { stage: PipelineStage; index: number }) {
   const style = STAGE_STYLES[stage.status] || STAGE_STYLES.Pending
+  const outcomeLabel = stage.outcome === 'infrastructure_error'
+    ? 'infrastructure error'
+    : stage.outcome === 'not_run'
+      ? 'not run'
+      : stage.outcome || (stage.status === 'Pending' ? 'queued' : stage.status)
   return (
     <div
       className={clsx(
@@ -75,16 +82,22 @@ function StageChip({ stage, index }: { stage: PipelineStage; index: number }) {
         {style.icon === 'spin' && <span className="block h-2.5 w-2.5 rounded-full bg-white animate-pulse" />}
         {style.icon === 'none' && <span className="text-xs font-semibold text-gray-400">{index + 1}</span>}
       </span>
-      <div className="min-w-0">
+      <div className="min-w-0 max-w-xs">
         <p className={clsx('truncate text-xs font-semibold', stage.status === 'Pending' ? 'text-gray-400' : 'text-gray-800')}>
           {stage.displayName}
         </p>
         <p className={clsx('text-[10px] font-medium uppercase tracking-wide', style.text)}>
-          {stage.status === 'Pending' ? 'queued' : stage.status === 'NotRun' ? 'not run' : stage.status}
+          {outcomeLabel}
           {stage.startTime && stage.status !== 'Pending' && (
             <span className="ml-1 font-normal normal-case text-gray-400">· {formatDuration(stage.startTime, stage.completionTime)}</span>
           )}
         </p>
+        {stage.reason && stage.outcome && !['succeeded', 'skipped', 'not_run'].includes(stage.outcome) && (
+          <p className="mt-1 line-clamp-2 text-[11px] font-normal text-gray-500" title={stage.reason}>
+            {stage.failedStep && <span className="font-medium">{stage.failedStep}: </span>}
+            {stage.reason}
+          </p>
+        )}
       </div>
       {stage.status === 'Running' && (
         <span className="absolute -inset-px rounded-xl ring-2 ring-blue-400 animate-pulse pointer-events-none" />
@@ -324,7 +337,7 @@ export default function TestingJobDetail() {
     )
   }
 
-  const { job, stages, forge_info } = data
+  const { job, stages, forge_info, failure_summary } = data
   const meta = job.metadata as Record<string, unknown>
   const spec = job.spec as Record<string, unknown>
   const status = job.status as Record<string, unknown>
@@ -383,6 +396,39 @@ export default function TestingJobDetail() {
           )}
         </div>
       </div>
+
+      {failure_summary && (
+        <div className={clsx(
+          'rounded-xl border p-4',
+          failure_summary.outcome === 'cancelled'
+            ? 'border-amber-200 bg-amber-50'
+            : 'border-red-200 bg-red-50'
+        )}>
+          <div className="flex items-start gap-3">
+            <ExclamationTriangleIcon className={clsx(
+              'mt-0.5 h-5 w-5 shrink-0',
+              failure_summary.outcome === 'cancelled' ? 'text-amber-600' : 'text-red-600'
+            )} />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-900">
+                {failure_summary.outcome === 'infrastructure_error'
+                  ? 'Infrastructure error'
+                  : failure_summary.outcome === 'cancelled'
+                    ? 'Execution cancelled'
+                    : failure_summary.outcome === 'unknown'
+                      ? 'Failure details unavailable'
+                      : 'Test or execution failure'}
+              </p>
+              <p className="mt-1 text-sm text-gray-700">{failure_summary.reason}</p>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                {failure_summary.stageDisplayName && <span>Stage: <strong>{failure_summary.stageDisplayName}</strong></span>}
+                {failure_summary.step && <span>Step: <strong>{failure_summary.step}</strong></span>}
+                <span>Source: <strong>{failure_summary.source.replace(/_/g, ' ')}</strong></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">

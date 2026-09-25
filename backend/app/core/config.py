@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     KUBECONFIG_STORAGE_PATH: str = "./kubeconfigs"
     
     MLFLOW_BASE_URL: Optional[str] = None
+    MLFLOW_TRACKING_URI: Optional[str] = None
+    MLFLOW_TRACKING_USERNAME: Optional[str] = None
+    MLFLOW_TRACKING_PASSWORD: Optional[str] = None
+    MLFLOW_WORKSPACE: Optional[str] = None
+    MLFLOW_TRACKING_INSECURE_TLS: bool = False
+    MLFLOW_FAILURE_ENRICHMENT_ENABLED: bool = True
+    MLFLOW_REQUEST_TIMEOUT_SECONDS: float = 10.0
     
     ADMIN_USERNAME: str = ""
     ADMIN_PASSWORD: str = ""

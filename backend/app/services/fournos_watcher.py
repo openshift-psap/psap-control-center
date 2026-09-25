@@ -22,6 +22,11 @@ from app.core.auth import (
 from app.services import fournos_k8s_client as k8s_client
 from app.services import fournos_db_service as db_svc
 from app.services import pipeline_definitions
+from app.services.failure_details import (
+    first_actionable_failure,
+    merge_caliper_failure,
+)
+from app.services.mlflow_failure_provider import fetch_caliper_completion
 from app.services.source_provenance import extract_source_request_fields
 from app.models.fournos_job import FournosJob
 
@@ -34,6 +39,13 @@ SYNC_INTERVAL_SECONDS = 60
 TERMINAL_PHASES = {"Succeeded", "Failed", "Stopped"}
 STAGE_SNAPSHOT_MAX_ATTEMPTS = 3
 STAGE_SNAPSHOT_RETRY_SECONDS = 60
+FAILURE_ENRICHMENT_MAX_ATTEMPTS = 5
+FAILURE_ENRICHMENT_RETRY_SECONDS = 60
+FINAL_ENRICHMENT_STATES = {
+    "complete",
+    "disabled",
+    "exhausted",
+}
 
 
 def _init_watcher_db(loop: asyncio.AbstractEventLoop) -> None:
@@ -90,7 +102,16 @@ def _compute_terminal_stages(
         # longer queued. Keep that distinct from Tekton's explicit `Skipped`
         # status while ensuring History never presents terminal work as active.
         return [
-            {**stage, "status": "NotRun"}
+            {
+                **stage,
+                "status": "NotRun",
+                "outcome": "not_run",
+                "reason": "Stage did not start before the pipeline terminated.",
+                "reasonCode": "NOT_RUN",
+                "reasonSource": "pipeline_definition",
+                "failedStep": "",
+                "exitCode": None,
+            }
             if stage.get("status") == "Pending"
             else stage
             for stage in actual_stages
@@ -122,6 +143,44 @@ def _stage_snapshot_retry_due(
     if attempted_at.tzinfo is None:
         attempted_at = attempted_at.replace(tzinfo=timezone.utc)
     return (now - attempted_at).total_seconds() >= STAGE_SNAPSHOT_RETRY_SECONDS
+
+
+def _failure_enrichment_retry_due(
+    attempts: int,
+    attempted_at: Optional[datetime],
+    now: datetime,
+) -> bool:
+    if attempts >= FAILURE_ENRICHMENT_MAX_ATTEMPTS:
+        return False
+    if attempted_at is None:
+        return True
+    if attempted_at.tzinfo is None:
+        attempted_at = attempted_at.replace(tzinfo=timezone.utc)
+    return (
+        now - attempted_at
+    ).total_seconds() >= FAILURE_ENRICHMENT_RETRY_SECONDS
+
+
+def _should_enrich_failure(
+    *,
+    mlflow_url: str,
+    enrichment_state: str,
+    enrichment_due: bool,
+    transitioning_into_terminal: bool,
+    enrichment_attempts: int,
+) -> bool:
+    if not mlflow_url or enrichment_state in FINAL_ENRICHMENT_STATES:
+        return False
+    if not enrichment_due:
+        return False
+    # Existing rows receive `pending` from the additive migration. Do not turn
+    # the first post-deploy full sync into a credentialed MLflow backfill. New
+    # terminal transitions and jobs whose URL arrived late are enriched.
+    return (
+        transitioning_into_terminal
+        or enrichment_attempts > 0
+        or enrichment_state == "unavailable"
+    )
 
 
 def _extract_forge_fields(job: dict) -> dict:
@@ -250,6 +309,15 @@ async def _archive_job(job: dict) -> None:
         snapshot_attempted_at = (
             existing.stage_snapshot_attempted_at if existing else None
         )
+        enrichment_state = (
+            existing.failure_enrichment_state if existing else "pending"
+        ) or "pending"
+        enrichment_attempts = (
+            existing.failure_enrichment_attempts if existing else 0
+        ) or 0
+        enrichment_attempted_at = (
+            existing.failure_enrichment_attempted_at if existing else None
+        )
 
         phase = fields["status"]
         if phase in TERMINAL_PHASES:
@@ -274,6 +342,61 @@ async def _archive_job(job: dict) -> None:
                 fields["stage_snapshot_attempted_at"] = now
                 if new_stages is not None:
                     fields["stages"] = new_stages
+            effective_stages = fields.get("stages", existing_stages or [])
+            failure_summary = first_actionable_failure(
+                effective_stages,
+                job_phase=phase,
+                job_message=fields.get("message", ""),
+            )
+
+            if (
+                enrichment_state == "complete"
+                and existing
+                and existing.failure_summary
+                and existing.failure_summary.get("source") == "mlflow_caliper"
+            ):
+                failure_summary = existing.failure_summary
+
+            mlflow_url = fields.get("mlflow_url") or (
+                existing.mlflow_url if existing else ""
+            )
+            enrichment_due = _failure_enrichment_retry_due(
+                enrichment_attempts, enrichment_attempted_at, now
+            )
+            if _should_enrich_failure(
+                mlflow_url=mlflow_url,
+                enrichment_state=enrichment_state,
+                enrichment_due=enrichment_due,
+                transitioning_into_terminal=transitioning_into_terminal,
+                enrichment_attempts=enrichment_attempts,
+            ):
+                try:
+                    completion = await asyncio.wait_for(
+                        fetch_caliper_completion(mlflow_url),
+                        timeout=settings.MLFLOW_REQUEST_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    completion = None
+                enrichment_attempts += 1
+                fields["failure_enrichment_attempts"] = enrichment_attempts
+                fields["failure_enrichment_attempted_at"] = now
+                enrichment_state = completion.state if completion else "pending"
+                if enrichment_attempts >= FAILURE_ENRICHMENT_MAX_ATTEMPTS and (
+                    enrichment_state in {"pending", "malformed", "invalid_reference"}
+                ):
+                    enrichment_state = "exhausted"
+                failure_summary = merge_caliper_failure(
+                    failure_summary,
+                    completion.first_failure if completion else None,
+                )
+
+            if not mlflow_url and enrichment_state == "pending":
+                enrichment_state = "unavailable"
+            fields["failure_enrichment_state"] = enrichment_state
+            fields["failure_summary"] = failure_summary or {}
+            fields["failure_outcome"] = (
+                failure_summary.get("outcome", "") if failure_summary else ""
+            )
         # else: job isn't terminal — omit "stages" entirely so upsert_job's
         # on_conflict update leaves whatever's already stored untouched.
 
