@@ -19,6 +19,8 @@ import type {
   HearthConnectResponse,
   BillingReport,
   CostRefreshStatus,
+  HistoryPreferenceResponse,
+  HistoryViewState,
 } from '../types'
 import { createLogger } from '../utils/logger'
 import { clearSession } from '../stores/authStore'
@@ -452,6 +454,14 @@ export const fournosApi = {
     status?: string
     owner?: string
     requester_scope?: 'all' | 'mine'
+    q?: string
+    identity?: string
+    failure_outcome?: string
+    repository?: string
+    pr_number?: number
+    source_sha?: string
+    forge?: string
+    tags?: string
     start_time?: string
     end_time?: string
     sort_by?: string
@@ -463,6 +473,21 @@ export const fournosApi = {
     // before they reach the server. `/runs` is a backward-compatible alias
     // for the same list handler; job-specific APIs retain their existing URLs.
     const { data } = await api.get('/fournos/runs', { params })
+    return data
+  },
+
+  getHistoryPreference: async (): Promise<HistoryPreferenceResponse> => {
+    const { data } = await api.get('/fournos/history/preferences')
+    return data
+  },
+
+  saveHistoryPreference: async (state: HistoryViewState): Promise<HistoryPreferenceResponse> => {
+    const { data } = await api.put('/fournos/history/preferences', { state })
+    return data
+  },
+
+  resetHistoryPreference: async (): Promise<{ status: string; deleted: boolean }> => {
+    const { data } = await api.delete('/fournos/history/preferences')
     return data
   },
 

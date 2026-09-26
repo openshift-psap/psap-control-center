@@ -19,6 +19,8 @@ import type {
   SubmitMatrixRequest,
   SubmitMatrixResponse,
   ProjectUiSchemaResponse,
+  HistoryPreferenceResponse,
+  HistoryViewState,
 } from '../types'
 
 // ─── Jobs ──────────────────────────────────────────────────────────────
@@ -30,18 +32,58 @@ export function useFournosJobs(params: {
   status?: string
   owner?: string
   requester_scope?: 'all' | 'mine'
+  q?: string
+  identity?: string
+  failure_outcome?: string
+  repository?: string
+  pr_number?: number
+  source_sha?: string
+  forge?: string
+  tags?: string
   start_time?: string
   end_time?: string
   sort_by?: string
   sort_dir?: 'asc' | 'desc'
   page?: number
   per_page?: number
-} = {}) {
+} = {}, enabled = true) {
   return useQuery<FournosJobListResponse>({
     queryKey: ['fournos-jobs', params],
     queryFn: () => fournosApi.listJobs(params),
+    enabled,
     refetchInterval: params.tab === 'live' ? 5000 : false,
     retry: 1,
+  })
+}
+
+export function useHistoryPreference(enabled: boolean) {
+  return useQuery<HistoryPreferenceResponse>({
+    queryKey: ['fournos-history-preference'],
+    queryFn: () => fournosApi.getHistoryPreference(),
+    enabled,
+    retry: 1,
+  })
+}
+
+export function useSaveHistoryPreference() {
+  const qc = useQueryClient()
+  return useMutation<HistoryPreferenceResponse, Error, HistoryViewState>({
+    mutationFn: (state) => fournosApi.saveHistoryPreference(state),
+    onSuccess: (data) => {
+      qc.setQueryData(['fournos-history-preference'], data)
+    },
+    onError: (error) => toast.error(error.message || 'Failed to save History view'),
+  })
+}
+
+export function useResetHistoryPreference() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => fournosApi.resetHistoryPreference(),
+    onSuccess: () => {
+      qc.removeQueries({ queryKey: ['fournos-history-preference'] })
+    },
+    onError: (error) => toast.error(error.message || 'Failed to reset History view'),
   })
 }
 

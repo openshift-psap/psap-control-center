@@ -469,6 +469,33 @@ export interface FournosJobListResponse {
   per_page: number
 }
 
+export interface HistoryViewState {
+  query: string
+  project: string
+  cluster: string
+  status: string
+  requester_scope: 'all' | 'mine'
+  identity: string
+  failure_outcome: string
+  repository: string
+  pr_number: number | null
+  source_sha: string
+  forge: string
+  tags: string[]
+  history_date: string
+  from_time: string
+  to_time: string
+  sort_by: 'name' | 'project' | 'cluster' | 'status' | 'owner' | 'date' | 'duration' | 'triggered_by'
+  sort_dir: 'asc' | 'desc'
+  per_page: number
+}
+
+export interface HistoryPreferenceResponse {
+  schema_version: number
+  state: HistoryViewState
+  updated_at: string | null
+}
+
 export interface PipelineStage {
   name: string
   displayName: string

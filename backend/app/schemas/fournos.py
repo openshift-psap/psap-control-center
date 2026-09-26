@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # -- Job schemas --
@@ -193,6 +193,98 @@ class JobListResponse(BaseModel):
     total: int
     page: int
     per_page: int
+
+
+class HistoryViewState(BaseModel):
+    """Validated, versioned state for one user's latest History view."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field("", max_length=200)
+    project: str = Field("", max_length=255)
+    cluster: str = Field("", max_length=255)
+    status: str = Field("", max_length=50)
+    requester_scope: Literal["all", "mine"] = "all"
+    identity: str = Field("", max_length=255)
+    failure_outcome: str = Field("", max_length=50)
+    repository: str = Field("", max_length=255)
+    pr_number: Optional[int] = Field(None, ge=1, le=2147483647)
+    source_sha: str = Field(
+        "", max_length=64, pattern=r"^$|^[0-9a-fA-F]{4,64}$"
+    )
+    forge: str = Field("", max_length=255)
+    tags: List[str] = Field(default_factory=list, max_length=20)
+    history_date: str = Field("", pattern=r"^$|^\d{4}-\d{2}-\d{2}$")
+    from_time: str = Field("00:00", pattern=r"^\d{2}:\d{2}$")
+    to_time: str = Field("23:59", pattern=r"^\d{2}:\d{2}$")
+    sort_by: Literal[
+        "name", "project", "cluster", "status", "owner", "date",
+        "duration", "triggered_by",
+    ] = "date"
+    sort_dir: Literal["asc", "desc"] = "desc"
+    per_page: Literal[25, 50, 100, 200] = 50
+
+    @field_validator(
+        "query", "project", "cluster", "status", "identity",
+        "failure_outcome", "repository", "source_sha", "forge",
+    )
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        if value not in {"", "Succeeded", "Failed", "Stopped"}:
+            raise ValueError("unsupported History status")
+        return value
+
+    @field_validator("failure_outcome")
+    @classmethod
+    def validate_failure_outcome(cls, value: str) -> str:
+        if value not in {
+            "", "failed", "cancelled", "infrastructure_error", "unknown",
+        }:
+            raise ValueError("unsupported failure outcome")
+        return value
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, values: List[str]) -> List[str]:
+        normalized = []
+        for value in values:
+            tag = value.strip()
+            if not tag:
+                continue
+            if len(tag) > 100:
+                raise ValueError("tags must be at most 100 characters")
+            if tag not in normalized:
+                normalized.append(tag)
+        return normalized
+
+    @field_validator("history_date")
+    @classmethod
+    def validate_history_date(cls, value: str) -> str:
+        if value:
+            date.fromisoformat(value)
+        return value
+
+    @field_validator("from_time", "to_time")
+    @classmethod
+    def validate_time(cls, value: str) -> str:
+        datetime.strptime(value, "%H:%M")
+        return value
+
+
+class HistoryPreferenceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    state: HistoryViewState
+
+
+class HistoryPreferenceResponse(BaseModel):
+    schema_version: int = 1
+    state: HistoryViewState = Field(default_factory=HistoryViewState)
+    updated_at: Optional[datetime] = None
 
 
 # -- Submit job --
