@@ -41,6 +41,18 @@ ANNOTATION_TRIGGER_NOW = "fournos.dev/trigger-now"
 HEARTH_KUBECONFIG_FILENAME = "hearth-management.kubeconfig"
 
 
+class TaskRunLookupError(RuntimeError):
+    """A TaskRun lookup failed for a reason other than not-found."""
+
+    def __init__(self, name: str, status: Optional[int], reason: str):
+        self.name = name
+        self.status = status
+        self.reason = reason
+        super().__init__(
+            f"TaskRun {name} lookup failed ({status or 'unknown'}): {reason}"
+        )
+
+
 def _saved_hearth_kubeconfig() -> Optional[str]:
     """Return the on-disk Hearth kubeconfig uploaded via the UI, if it exists."""
     path = os.path.join(settings.KUBECONFIG_STORAGE_PATH, HEARTH_KUBECONFIG_FILENAME)
@@ -324,7 +336,7 @@ def get_taskrun(name: str, namespace: Optional[str] = None) -> Optional[dict]:
         if exc.status == 404:
             return None
         logger.error("Failed to get TaskRun %s: %s", name, exc.reason)
-        return None
+        raise TaskRunLookupError(name, exc.status, exc.reason or "API error") from exc
 
 
 def _phase_from_conditions(conditions: list) -> str:
@@ -378,7 +390,9 @@ def get_current_step_for_job(
     return None
 
 
-def extract_pipeline_stages(pipelinerun: dict) -> list:
+def extract_pipeline_stages(
+    pipelinerun: dict, *, strict_lookup_errors: bool = False
+) -> list:
     status = pipelinerun.get("status") or {}
     child_refs = status.get("childReferences") or []
     skipped_tasks = status.get("skippedTasks") or []
@@ -405,7 +419,14 @@ def extract_pipeline_stages(pipelinerun: dict) -> list:
         failed_step = ""
         exit_code = None
 
-        tr = get_taskrun(task_run_name)
+        lookup_error = None
+        try:
+            tr = get_taskrun(task_run_name)
+        except TaskRunLookupError as exc:
+            if strict_lookup_errors:
+                raise
+            tr = None
+            lookup_error = exc
         if tr:
             tr_status = tr.get("status", {})
             start_time = tr_status.get("startTime")
@@ -442,6 +463,19 @@ def extract_pipeline_stages(pipelinerun: dict) -> list:
                     reason_code, condition.get("reason", "")
                 ):
                     outcome = "infrastructure_error"
+        elif lookup_error:
+            task_phase = "Unknown"
+            outcome = "unknown"
+            if lookup_error.status in (401, 403):
+                reason = "Control Center is not authorized to read this TaskRun."
+                reason_code = "TASKRUN_ACCESS_DENIED"
+            else:
+                reason = (
+                    "TaskRun status could not be read due to a Kubernetes "
+                    "API error."
+                )
+                reason_code = "TASKRUN_LOOKUP_FAILED"
+            reason_source = "tekton_api"
         elif pipeline_terminal:
             task_phase = "Unknown"
             outcome = "unknown"

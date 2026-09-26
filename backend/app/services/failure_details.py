@@ -148,6 +148,39 @@ def first_actionable_failure(
     return None
 
 
+def select_failure_summary(
+    live_summary: Optional[dict],
+    archived_summary: Optional[dict],
+) -> Optional[dict]:
+    """Choose the most useful summary without letting stale history win."""
+
+    def _quality(summary: Optional[dict]) -> int:
+        if not summary:
+            return 0
+        outcome = summary.get("outcome", "")
+        if outcome in ("infrastructure_error", "cancelled"):
+            return 60
+        if summary.get("source") == "mlflow_caliper":
+            return 50
+        if outcome == "failed" and (
+            summary.get("stage")
+            or summary.get("step")
+            or summary.get("reasonCode")
+        ):
+            return 30
+        if outcome == "failed":
+            return 20
+        if outcome == "unknown":
+            return 10
+        return 5
+
+    # Prefer current execution evidence on equal quality. The one archived
+    # signal intentionally ranked above it is richer provider enrichment.
+    if _quality(archived_summary) > _quality(live_summary):
+        return archived_summary
+    return live_summary or archived_summary
+
+
 def merge_caliper_failure(
     execution_summary: Optional[dict],
     caliper_failure: Optional[dict],

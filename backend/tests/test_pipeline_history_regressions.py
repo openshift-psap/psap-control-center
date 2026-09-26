@@ -109,7 +109,7 @@ def test_terminal_snapshot_marks_unstarted_definition_tasks_not_run(monkeypatch)
     monkeypatch.setattr(
         k8s,
         "extract_pipeline_stages",
-        lambda _pr: [
+        lambda _pr, **_kwargs: [
             {
                 "name": "prepare",
                 "displayName": "Prepare",
@@ -138,6 +138,25 @@ def test_terminal_snapshot_marks_unstarted_definition_tasks_not_run(monkeypatch)
         "prepare": "Failed",
         "test": "NotRun",
     }
+
+
+def test_terminal_snapshot_propagates_taskrun_authorization_errors(monkeypatch):
+    monkeypatch.setattr(k8s, "get_pipelinerun", lambda _name: {"status": {}})
+
+    def fail_lookup(_pr, *, strict_lookup_errors=False):
+        assert strict_lookup_errors is True
+        raise k8s.TaskRunLookupError("test-run", 403, "Forbidden")
+
+    monkeypatch.setattr(k8s, "extract_pipeline_stages", fail_lookup)
+
+    try:
+        watcher._compute_terminal_stages(
+            "job-1", {}, {"pipelineRun": "run-1"}
+        )
+    except k8s.TaskRunLookupError as exc:
+        assert exc.status == 403
+    else:
+        raise AssertionError("authorization failures must remain retryable")
 
 
 def test_stage_snapshot_retries_are_timed_and_bounded():
