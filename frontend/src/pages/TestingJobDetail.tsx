@@ -23,7 +23,7 @@ import {
   ForwardIcon,
 } from '@heroicons/react/24/solid'
 import clsx from 'clsx'
-import { isAdmin } from '../stores/authStore'
+import { isAdmin, isAuthenticated } from '../stores/authStore'
 import {
   useFournosJob,
   useCancelJob,
@@ -288,9 +288,16 @@ function LogViewer({ jobName, podName }: { jobName: string; podName: string }) {
 
 // ─── Main Component ─────────────────────────────────────────────────────
 
+function jobLoadErrorMessage(error: unknown): string {
+  const status = (error as { response?: { status?: number } } | null)?.response?.status
+  return status === 404
+    ? 'Job not found'
+    : 'Unable to load job details. Please retry.'
+}
+
 export default function TestingJobDetail() {
   const { name } = useParams<{ name: string }>()
-  const { data, isLoading, error } = useFournosJob(name)
+  const { data, isLoading, error, refetch } = useFournosJob(name)
   const cancelJob = useCancelJob()
   const rerunJob = useRerunJob()
   const [selectedPod, setSelectedPod] = useState('')
@@ -332,7 +339,18 @@ export default function TestingJobDetail() {
         <Link to="/testing" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
           <ArrowLeftIcon className="h-4 w-4" /> Back
         </Link>
-        <div className="card p-8 text-center text-gray-500">Job not found</div>
+        <div className="card p-8 text-center text-gray-500">
+          <p>{error ? jobLoadErrorMessage(error) : 'Job not found'}</p>
+          {error && (error as { response?: { status?: number } }).response?.status !== 404 && (
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              className="mt-3 inline-flex items-center gap-1 rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+            >
+              <ArrowPathIcon className="h-4 w-4" /> Retry
+            </button>
+          )}
+        </div>
       </div>
     )
   }
@@ -437,7 +455,7 @@ export default function TestingJobDetail() {
           { label: 'Namespace', value: (meta.namespace as string) || '-', icon: CubeIcon },
           { label: 'Cluster', value: (spec.cluster as string) || '-', icon: ServerIcon },
           { label: 'Pipeline', value: (spec.pipeline as string) || '-', icon: Square3Stack3DIcon },
-          { label: 'Owner', value: (spec.owner as string) || '-', icon: UserIcon },
+          { label: 'Owner', value: (spec.owner as string) || (isAuthenticated() ? '-' : 'Sign in to view'), icon: UserIcon },
           { label: 'Created', value: meta.creationTimestamp ? new Date(meta.creationTimestamp as string).toLocaleString() : '-', icon: CalendarIcon },
         ].map(({ label, value, icon: Icon }) => (
           <div key={label} className="card flex items-start gap-3 p-4">

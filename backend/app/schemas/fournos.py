@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # -- Job schemas --
@@ -166,6 +166,12 @@ class FournosJobDetailResponse(BaseModel):
         default_factory=ForgeExecutionProvenance
     )
     forge_provenance_state: str = "not_applicable"
+
+    @field_validator("failure_summary", mode="before")
+    @classmethod
+    def empty_failure_summary_is_absent(cls, value):
+        """Successful jobs persist `{}`; expose that as no failure."""
+        return None if value == {} else value
 
 
 # -- Job event schemas --
