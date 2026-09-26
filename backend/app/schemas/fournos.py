@@ -287,6 +287,17 @@ class HistoryPreferenceResponse(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class HistoryFilterOptionsResponse(BaseModel):
+    """Known values available to History's editable filter controls."""
+
+    identities: List[str] = Field(default_factory=list)
+    repositories: List[str] = Field(default_factory=list)
+    pr_numbers: List[int] = Field(default_factory=list)
+    source_shas: List[str] = Field(default_factory=list)
+    forge: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+
+
 # -- Submit job --
 
 class PullRequestSelection(BaseModel):

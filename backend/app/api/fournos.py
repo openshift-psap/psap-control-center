@@ -38,6 +38,7 @@ from app.schemas.fournos import (
     FournosJobDetailResponse,
     GitHubPR,
     GithubSyncStatusResponse,
+    HistoryFilterOptionsResponse,
     HistoryPreferenceResponse,
     HistoryPreferenceUpdate,
     HistoryViewState,
@@ -710,6 +711,19 @@ async def list_jobs(
         "page": page,
         "per_page": per_page,
     }
+
+
+@router.get(
+    "/history/filter-options",
+    response_model=HistoryFilterOptionsResponse,
+)
+async def get_history_filter_options(request: Request):
+    async with AsyncSessionLocal() as session:
+        options = await db_svc.get_history_filter_options(
+            session,
+            include_identity=get_current_user(request) is not None,
+        )
+    return HistoryFilterOptionsResponse(**options)
 
 
 @router.get(

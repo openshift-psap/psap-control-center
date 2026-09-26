@@ -66,6 +66,16 @@ _IDENTITY_SEARCH_COLUMNS = (
 )
 
 
+def _normalized_options(values: Sequence[Any], limit: int) -> list[str]:
+    """Return sorted, unique non-empty strings without exposing DB nulls."""
+    normalized = {
+        str(value).strip()
+        for value in values
+        if str(value or "").strip()
+    }
+    return sorted(normalized)[:limit]
+
+
 def _text_search_expression(columns, query: str, *, postgres: bool):
     """Build indexed PostgreSQL token search with a portable test fallback."""
     if postgres:
@@ -324,6 +334,102 @@ async def get_history_preference(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_history_filter_options(
+    session: AsyncSession,
+    *,
+    include_identity: bool,
+    limit: int = 200,
+) -> dict[str, list[Any]]:
+    """Discover bounded combobox choices from the complete durable History.
+
+    These are suggestions, not an allow-list. Identity values are only queried
+    for authenticated callers because public History deliberately redacts them.
+    """
+    filters = [
+        FournosJob.status.in_(TERMINAL_STATUSES),
+        FournosJob.is_lock.is_(False),
+        FournosJob.trigger_type != "recurring-parent",
+    ]
+
+    async def distinct_values(expression) -> list[Any]:
+        result = await session.execute(
+            select(expression)
+            .where(*filters, expression.is_not(None), expression != "")
+            .distinct()
+            .order_by(expression)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    identities: list[str] = []
+    if include_identity:
+        identity_values: list[Any] = []
+        for expression in _IDENTITY_SEARCH_COLUMNS:
+            identity_values.extend(await distinct_values(expression))
+        identities = _normalized_options(identity_values, limit)
+
+    repositories = _normalized_options(
+        await distinct_values(FournosJob.source_repository), limit
+    )
+
+    pr_result = await session.execute(
+        select(FournosJob.source_pr_number)
+        .where(*filters, FournosJob.source_pr_number.is_not(None))
+        .distinct()
+        .order_by(FournosJob.source_pr_number.desc())
+        .limit(limit)
+    )
+    pr_numbers = list(pr_result.scalars().all())
+
+    sha_values: list[Any] = []
+    for expression in (
+        FournosJob.source_requested_sha,
+        FournosJob.source_resolved_sha,
+    ):
+        sha_values.extend(await distinct_values(expression))
+
+    forge_values: list[Any] = []
+    if settings.DATABASE_URL.startswith("postgresql"):
+        forge_version = cast(
+            FournosJob.forge_execution.op("#>>")(
+                literal_column("'{gitVersions,0,version}'")
+            ),
+            Text,
+        )
+        forge_image_id = cast(
+            FournosJob.forge_execution.op("#>>")(
+                literal_column("'{images,0,imageID}'")
+            ),
+            Text,
+        )
+        forge_digest = func.split_part(
+            forge_image_id, literal_column("'@'"), literal_column("2")
+        )
+        forge_values.extend(await distinct_values(forge_version))
+        forge_values.extend(await distinct_values(forge_digest))
+
+    tag_values: list[Any] = []
+    if settings.DATABASE_URL.startswith("postgresql"):
+        tag = func.unnest(FournosJob.tags).label("tag")
+        tag_result = await session.execute(
+            select(tag)
+            .where(*filters)
+            .distinct()
+            .order_by(tag)
+            .limit(limit)
+        )
+        tag_values = list(tag_result.scalars().all())
+
+    return {
+        "identities": identities,
+        "repositories": repositories,
+        "pr_numbers": pr_numbers,
+        "source_shas": _normalized_options(sha_values, limit),
+        "forge": _normalized_options(forge_values, limit),
+        "tags": _normalized_options(tag_values, limit),
+    }
 
 
 async def save_history_preference(

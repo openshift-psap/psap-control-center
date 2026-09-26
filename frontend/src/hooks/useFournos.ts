@@ -20,6 +20,7 @@ import type {
   SubmitMatrixResponse,
   ProjectUiSchemaResponse,
   HistoryPreferenceResponse,
+  HistoryFilterOptionsResponse,
   HistoryViewState,
 } from '../types'
 
@@ -61,6 +62,16 @@ export function useHistoryPreference(enabled: boolean) {
     queryKey: ['fournos-history-preference'],
     queryFn: () => fournosApi.getHistoryPreference(),
     enabled,
+    retry: 1,
+  })
+}
+
+export function useHistoryFilterOptions(enabled: boolean) {
+  return useQuery<HistoryFilterOptionsResponse>({
+    queryKey: ['fournos-history-filter-options'],
+    queryFn: () => fournosApi.getHistoryFilterOptions(),
+    enabled,
+    staleTime: 5 * 60 * 1000,
     retry: 1,
   })
 }
