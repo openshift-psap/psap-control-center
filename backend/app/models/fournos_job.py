@@ -35,6 +35,16 @@ class FournosJob(Base):
     source_head_branch = Column(String(255), default="")
     source_requested_sha = Column(String(64), default="", index=True)
     source_resolved_sha = Column(String(64), default="", index=True)
+    # Observed execution evidence, kept separate from the source revision the
+    # requester selected.  A merged-code run normally executes the Forge
+    # commit baked into the container image; MLflow and the pod image digest
+    # are therefore the authoritative record of what actually ran.
+    forge_execution = Column(JSONB, default=dict)
+    forge_provenance_state = Column(
+        String(50), default="pending", nullable=False
+    )
+    forge_provenance_attempts = Column(Integer, default=0, nullable=False)
+    forge_provenance_attempted_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(String(50), default="Pending", index=True)
     message = Column(Text, default="")
     created_at = Column(

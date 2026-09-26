@@ -337,7 +337,8 @@ export default function TestingJobDetail() {
     )
   }
 
-  const { job, stages, forge_info, failure_summary } = data
+  const { job, stages, forge_info, failure_summary, forge_execution } = data
+  const forgeExecution = forge_execution ?? { images: [], gitVersions: [], observedAt: null }
   const meta = job.metadata as Record<string, unknown>
   const spec = job.spec as Record<string, unknown>
   const status = job.status as Record<string, unknown>
@@ -452,10 +453,10 @@ export default function TestingJobDetail() {
       </div>
 
       {/* Forge info & MLflow */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {(forge_info.pr_url || forge_info.repository || forge_info.requested_sha) && (
           <div className="card p-4">
-            <p className="text-xs text-gray-500 mb-1">Pull Request</p>
+            <p className="text-xs text-gray-500 mb-1">Requested source revision</p>
             {forge_info.pr_url ? (
               <a href={forge_info.pr_url} target="_blank" rel="noopener noreferrer" className="text-sm text-indigo-600 hover:text-indigo-800 hover:underline">
                 #{forge_info.pr_number}: {forge_info.pr_title}
@@ -492,6 +493,29 @@ export default function TestingJobDetail() {
             )}
           </div>
         )}
+        <div className="card p-4">
+          <p className="text-xs text-gray-500 mb-1">Forge execution</p>
+          {forgeExecution.gitVersions.length > 0 ? (
+            <div className="space-y-1">
+              {forgeExecution.gitVersions.map((item) => (
+                <p key={`${item.version}-${item.artifactPath}`} className="text-xs text-gray-500" title={item.artifactPath}>
+                  Version used: <code className="font-medium text-gray-800">{item.version}</code>
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-400">Version not yet observed</p>
+          )}
+          {forgeExecution.images.map((item) => (
+            <div key={`${item.image}-${item.imageID}`} className="mt-2 space-y-1 text-xs text-gray-500">
+              <p className="break-all">Image: <code className="text-gray-700">{item.image || '-'}</code></p>
+              <p className="break-all">Image ID: <code className="text-gray-700">{item.imageID || '-'}</code></p>
+            </div>
+          ))}
+          <p className="mt-2 text-xs text-gray-400">
+            Evidence: {(data.forge_provenance_state || 'pending').replace(/_/g, ' ')}
+          </p>
+        </div>
         <div className="card p-4">
           <p className="text-xs text-gray-500 mb-1">MLflow</p>
           {job.mlflow_url ? (

@@ -27,6 +27,7 @@ from app.services.failure_details import (
     merge_caliper_failure,
 )
 from app.services.mlflow_failure_provider import fetch_caliper_completion
+from app.services.forge_provenance import fetch_forge_versions
 from app.services.source_provenance import extract_source_request_fields
 from app.models.fournos_job import FournosJob
 
@@ -41,6 +42,8 @@ STAGE_SNAPSHOT_MAX_ATTEMPTS = 3
 STAGE_SNAPSHOT_RETRY_SECONDS = 60
 FAILURE_ENRICHMENT_MAX_ATTEMPTS = 5
 FAILURE_ENRICHMENT_RETRY_SECONDS = 60
+FORGE_PROVENANCE_MAX_ATTEMPTS = 5
+FORGE_PROVENANCE_RETRY_SECONDS = 60
 FINAL_ENRICHMENT_STATES = {
     "complete",
     "disabled",
@@ -163,6 +166,95 @@ def _failure_enrichment_retry_due(
     return (
         now - attempted_at
     ).total_seconds() >= FAILURE_ENRICHMENT_RETRY_SECONDS
+
+
+def _forge_provenance_retry_due(
+    attempts: int,
+    attempted_at: Optional[datetime],
+    now: datetime,
+) -> bool:
+    if attempts >= FORGE_PROVENANCE_MAX_ATTEMPTS:
+        return False
+    if attempted_at is None:
+        return True
+    if attempted_at.tzinfo is None:
+        attempted_at = attempted_at.replace(tzinfo=timezone.utc)
+    return (
+        now - attempted_at
+    ).total_seconds() >= FORGE_PROVENANCE_RETRY_SECONDS
+
+
+def _merge_forge_execution(
+    existing: Optional[dict],
+    *,
+    images: Optional[list[dict]] = None,
+    git_versions: Optional[list[dict]] = None,
+    observed_at: Optional[datetime] = None,
+) -> dict:
+    merged = dict(existing or {})
+    current_images = merged.get("images", []) or []
+    current_versions = merged.get("gitVersions", []) or []
+    image_map = {
+        (item.get("image", ""), item.get("imageID", ""), item.get("container", "")): item
+        for item in [*current_images, *(images or [])]
+        if isinstance(item, dict)
+    }
+    version_map = {
+        (item.get("version", ""), item.get("artifactPath", "")): item
+        for item in [*current_versions, *(git_versions or [])]
+        if isinstance(item, dict) and item.get("version")
+    }
+    merged["images"] = [image_map[key] for key in sorted(image_map)]
+    merged["gitVersions"] = [version_map[key] for key in sorted(version_map)]
+    if observed_at and (images or git_versions):
+        merged["observedAt"] = observed_at.isoformat()
+    return merged
+
+
+def _forge_provenance_state(
+    execution: dict,
+    *,
+    terminal: bool,
+    mlflow_url: str,
+    fetch_state: str,
+    attempts: int,
+) -> str:
+    has_images = bool(execution.get("images"))
+    has_versions = bool(execution.get("gitVersions"))
+    if has_images and has_versions:
+        return "complete"
+    if not terminal:
+        return "pending"
+    if not mlflow_url:
+        return "partial" if has_images else "unavailable"
+    if has_images or has_versions:
+        return "partial"
+    if fetch_state == "disabled":
+        return "disabled"
+    if attempts >= FORGE_PROVENANCE_MAX_ATTEMPTS:
+        return "exhausted"
+    return "pending"
+
+
+def _should_fetch_forge_provenance(
+    *,
+    mlflow_url: str,
+    state: str,
+    retry_due: bool,
+    transitioning_into_terminal: bool,
+    attempts: int,
+) -> bool:
+    if not mlflow_url or state in {"complete", "disabled", "exhausted"}:
+        return False
+    if not retry_due:
+        return False
+    # As with failure enrichment, additive migration defaults must not trigger
+    # an unbounded historical MLflow backfill on the first deployment.
+    return (
+        transitioning_into_terminal
+        or attempts > 0
+        or state in {"unavailable", "partial"}
+    )
 
 
 def _should_enrich_failure(
@@ -322,8 +414,34 @@ async def _archive_job(job: dict) -> None:
         enrichment_attempted_at = (
             existing.failure_enrichment_attempted_at if existing else None
         )
+        forge_execution = dict(
+            (existing.forge_execution if existing else None) or {}
+        )
+        provenance_state = (
+            existing.forge_provenance_state if existing else "pending"
+        ) or "pending"
+        provenance_attempts = (
+            existing.forge_provenance_attempts if existing else 0
+        ) or 0
+        provenance_attempted_at = (
+            existing.forge_provenance_attempted_at if existing else None
+        )
 
         phase = fields["status"]
+        # Observe the runtime-resolved image while the Tekton pod still
+        # exists. Terminal collection below owns its bounded retry budget.
+        if phase not in TERMINAL_PHASES and not forge_execution.get("images"):
+            observed_images = await asyncio.to_thread(
+                k8s_client.get_forge_execution_images, job_name
+            )
+            if observed_images:
+                forge_execution = _merge_forge_execution(
+                    forge_execution,
+                    images=observed_images,
+                    observed_at=datetime.now(timezone.utc),
+                )
+                fields["forge_execution"] = forge_execution
+
         if phase in TERMINAL_PHASES:
             transitioning_into_terminal = previous_phase not in TERMINAL_PHASES
             now = datetime.now(timezone.utc)
@@ -419,6 +537,72 @@ async def _archive_job(job: dict) -> None:
             fields["failure_outcome"] = (
                 failure_summary.get("outcome", "") if failure_summary else ""
             )
+
+            provenance_due = _forge_provenance_retry_due(
+                provenance_attempts, provenance_attempted_at, now
+            )
+            fetch_state = "pending"
+            provenance_eligible = provenance_due and (
+                transitioning_into_terminal
+                or provenance_attempts > 0
+                or provenance_state in {"unavailable", "partial"}
+            )
+            attempted_provenance = False
+            if provenance_eligible and not forge_execution.get("images"):
+                attempted_provenance = True
+                observed_images = await asyncio.to_thread(
+                    k8s_client.get_forge_execution_images, job_name
+                )
+                if observed_images:
+                    forge_execution = _merge_forge_execution(
+                        forge_execution,
+                        images=observed_images,
+                        observed_at=now,
+                    )
+                    fields["forge_execution"] = forge_execution
+
+            if (
+                not forge_execution.get("gitVersions")
+                and _should_fetch_forge_provenance(
+                    mlflow_url=mlflow_url,
+                    state=provenance_state,
+                    retry_due=provenance_due,
+                    transitioning_into_terminal=transitioning_into_terminal,
+                    attempts=provenance_attempts,
+                )
+            ):
+                attempted_provenance = True
+                try:
+                    provenance = await asyncio.wait_for(
+                        fetch_forge_versions(mlflow_url),
+                        timeout=settings.MLFLOW_REQUEST_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    provenance = None
+                fetch_state = provenance.state if provenance else "pending"
+                if provenance and provenance.versions:
+                    forge_execution = _merge_forge_execution(
+                        forge_execution,
+                        git_versions=provenance.versions,
+                        observed_at=now,
+                    )
+                    fields["forge_execution"] = forge_execution
+
+            if attempted_provenance:
+                provenance_attempts += 1
+                fields["forge_provenance_attempts"] = provenance_attempts
+                fields["forge_provenance_attempted_at"] = now
+
+            provenance_state = _forge_provenance_state(
+                forge_execution,
+                terminal=True,
+                mlflow_url=mlflow_url,
+                fetch_state=fetch_state,
+                attempts=provenance_attempts,
+            )
+            fields["forge_provenance_state"] = provenance_state
+        elif forge_execution:
+            fields["forge_provenance_state"] = "pending"
         # else: job isn't terminal — omit "stages" entirely so upsert_job's
         # on_conflict update leaves whatever's already stored untouched.
 

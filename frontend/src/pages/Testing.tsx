@@ -283,6 +283,7 @@ function JobsTable({
             <SortableTh label={source === 'live' ? 'Age' : 'Date'} sortKey={source === 'live' ? 'age' : 'date'} sort={sort} onSort={onSort} />
             <SortableTh label="Owner" sortKey="owner" sort={sort} onSort={onSort} />
             <SortableTh label="Triggered By" sortKey="triggered_by" sort={sort} onSort={onSort} />
+            {source === 'history' && <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Forge used</th>}
             {source === 'history' && <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">MLflow</th>}
             <th className="px-4 py-3" />
           </tr>
@@ -332,6 +333,22 @@ function JobsTable({
                   '-'
                 )}
               </td>
+              {source === 'history' && (
+                <td className="px-4 py-3 text-xs text-gray-500">
+                  {job.forge_git_version ? (
+                    <div className="space-y-0.5">
+                      <code className="font-medium text-gray-700" title="Forge git version recorded by MLflow">{job.forge_git_version}</code>
+                      {job.forge_image_digest && (
+                        <div className="max-w-28 truncate font-mono text-[10px] text-gray-400" title={job.forge_image_digest}>
+                          {job.forge_image_digest}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <span title={`Provenance: ${job.forge_provenance_state}`}>-</span>
+                  )}
+                </td>
+              )}
               {source === 'history' && (
                 <td className="px-4 py-3 text-sm text-center">
                   {job.mlflow_url ? (

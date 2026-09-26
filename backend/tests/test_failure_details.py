@@ -219,11 +219,24 @@ def test_job_detail_contract_serializes_normalized_failure_fields():
                 "artifactPath": "",
             },
             "failure_enrichment_state": "complete",
+            "forge_execution": {
+                "images": [{
+                    "image": "forge:latest",
+                    "imageID": "forge@sha256:abc",
+                    "container": "step-forge",
+                }],
+                "gitVersions": [{
+                    "version": "5415caf",
+                    "artifactPath": "01__test/000__ci_metadata/forge.git_version",
+                }],
+            },
+            "forge_provenance_state": "complete",
         }
     ).model_dump(by_alias=True)
 
     assert response["stages"][0]["finally"] is False
     assert response["failure_summary"]["step"] == "benchmark"
+    assert response["forge_execution"]["gitVersions"][0]["version"] == "5415caf"
 
 
 def test_caliper_failure_enriches_test_failure_but_not_infrastructure():

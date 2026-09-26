@@ -36,6 +36,9 @@ class FournosJobSummary(BaseModel):
     source_head_branch: str = ""
     source_requested_sha: str = ""
     source_resolved_sha: str = ""
+    forge_git_version: str = ""
+    forge_image_digest: str = ""
+    forge_provenance_state: str = "pending"
 
     class Config:
         from_attributes = True
@@ -122,6 +125,34 @@ class ForgeInfo(BaseModel):
     resolved_sha: str = ""
 
 
+class ForgeExecutionImage(BaseModel):
+    image: str = ""
+    image_id: str = Field("", alias="imageID")
+    container: str = "step-forge"
+
+    class Config:
+        populate_by_name = True
+
+
+class ForgeGitVersion(BaseModel):
+    version: str
+    artifact_path: str = Field("", alias="artifactPath")
+
+    class Config:
+        populate_by_name = True
+
+
+class ForgeExecutionProvenance(BaseModel):
+    images: List[ForgeExecutionImage] = Field(default_factory=list)
+    git_versions: List[ForgeGitVersion] = Field(
+        default_factory=list, alias="gitVersions"
+    )
+    observed_at: Optional[str] = Field(None, alias="observedAt")
+
+    class Config:
+        populate_by_name = True
+
+
 class FournosJobDetailResponse(BaseModel):
     job: FournosJobDetail
     pods: List[FournosPod] = Field(default_factory=list)
@@ -131,6 +162,10 @@ class FournosJobDetailResponse(BaseModel):
     task_progress: Optional[TaskProgress] = None
     failure_summary: Optional[FailureSummary] = None
     failure_enrichment_state: str = "not_applicable"
+    forge_execution: ForgeExecutionProvenance = Field(
+        default_factory=ForgeExecutionProvenance
+    )
+    forge_provenance_state: str = "not_applicable"
 
 
 # -- Job event schemas --
