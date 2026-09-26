@@ -20,6 +20,7 @@ import type {
   BillingReport,
   CostRefreshStatus,
   HistoryPreferenceResponse,
+  HistoryFilterOptionsResponse,
   HistoryViewState,
 } from '../types'
 import { createLogger } from '../utils/logger'
@@ -488,6 +489,11 @@ export const fournosApi = {
 
   resetHistoryPreference: async (): Promise<{ status: string; deleted: boolean }> => {
     const { data } = await api.delete('/fournos/history/preferences')
+    return data
+  },
+
+  getHistoryFilterOptions: async (): Promise<HistoryFilterOptionsResponse> => {
+    const { data } = await api.get('/fournos/history/filter-options')
     return data
   },
 

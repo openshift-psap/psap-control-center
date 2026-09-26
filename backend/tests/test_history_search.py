@@ -193,3 +193,68 @@ def test_history_search_indexes_cover_public_identity_and_tags():
     assert "ix_fournos_jobs_forge_digest_prefix" in ddl
     assert "ix_fournos_jobs_requested_sha_prefix" in ddl
     assert "ix_fournos_jobs_resolved_sha_prefix" in ddl
+
+
+def _scalar_result(values):
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = values
+    return result
+
+
+def test_history_filter_options_are_complete_and_deduplicated(monkeypatch):
+    monkeypatch.setattr(
+        db_service.settings,
+        "DATABASE_URL",
+        "postgresql+asyncpg://test/test",
+    )
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=[
+        _scalar_result(["alex", "alex"]),
+        _scalar_result(["Alex Calhoun"]),
+        _scalar_result(["alex@example.com"]),
+        _scalar_result(["owner/repo"]),
+        _scalar_result([42, 7]),
+        _scalar_result(["a" * 40]),
+        _scalar_result(["b" * 40]),
+        _scalar_result(["v1.2.3"]),
+        _scalar_result(["sha256:feedface"]),
+        _scalar_result(["nightly", "h200"]),
+    ])
+
+    options = asyncio.run(db_service.get_history_filter_options(
+        session, include_identity=True
+    ))
+
+    assert options["identities"] == [
+        "Alex Calhoun", "alex", "alex@example.com",
+    ]
+    assert options["repositories"] == ["owner/repo"]
+    assert options["pr_numbers"] == [42, 7]
+    assert options["source_shas"] == ["a" * 40, "b" * 40]
+    assert options["forge"] == ["sha256:feedface", "v1.2.3"]
+    assert options["tags"] == ["h200", "nightly"]
+
+
+def test_anonymous_history_options_never_query_or_return_identity(monkeypatch):
+    monkeypatch.setattr(
+        db_service.settings,
+        "DATABASE_URL",
+        "postgresql+asyncpg://test/test",
+    )
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=[
+        _scalar_result(["owner/repo"]),
+        _scalar_result([42]),
+        _scalar_result(["a" * 40]),
+        _scalar_result(["b" * 40]),
+        _scalar_result(["v1.2.3"]),
+        _scalar_result(["sha256:feedface"]),
+        _scalar_result(["nightly"]),
+    ])
+
+    options = asyncio.run(db_service.get_history_filter_options(
+        session, include_identity=False
+    ))
+
+    assert options["identities"] == []
+    assert session.execute.await_count == 7

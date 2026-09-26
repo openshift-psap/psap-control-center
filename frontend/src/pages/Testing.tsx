@@ -34,6 +34,7 @@ import WizardSteps from '../components/WizardSteps'
 import ReviewRow, { ReviewSection } from '../components/ReviewRow'
 import YamlPreview from '../components/YamlPreview'
 import SearchableSelect from '../components/SearchableSelect'
+import EditableCombobox from '../components/EditableCombobox'
 import { buildSingleJobPreview, toYamlPreview, withVersionOverride } from '../utils/fournosJobPreview'
 import {
   useFournosJobs,
@@ -56,6 +57,7 @@ import {
   useRefreshProjectUiSchema,
   useClusterOverview,
   useHistoryPreference,
+  useHistoryFilterOptions,
   useSaveHistoryPreference,
   useResetHistoryPreference,
 } from '../hooks/useFournos'
@@ -1484,6 +1486,7 @@ export default function Testing() {
   const [historyTags, setHistoryTags] = useState(initialHistory.tags.join(', '))
   const [historyPerPage, setHistoryPerPage] = useState(initialHistory.per_page)
   const authenticated = isAuthenticated()
+  const { data: historyFilterOptions } = useHistoryFilterOptions(activeTab === 'history')
   // History-only date + local time-of-day range filter. Empty historyDate
   // means "no time filter" — from/to only matter once a date is picked.
   const [historyDate, setHistoryDate] = useState(initialHistory.history_date)
@@ -1945,18 +1948,17 @@ export default function Testing() {
           {activeTab === 'history' && (
             <details className="w-full border-t border-gray-200 pt-2">
               <summary className="cursor-pointer select-none text-xs font-medium text-gray-600 hover:text-gray-800">
-                Provenance and failure filters
+                Filter list
               </summary>
               <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 {authenticated && (
-                  <input
-                    type="search"
+                  <EditableCombobox
                     value={historyIdentity}
                     maxLength={255}
-                    onChange={(e) => { setHistoryIdentity(e.target.value); setPage(1) }}
+                    onChange={(value) => { setHistoryIdentity(value); setPage(1) }}
+                    options={historyFilterOptions?.identities || []}
                     placeholder="Owner or requester"
-                    aria-label="Owner or requester"
-                    className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                    ariaLabel="Owner or requester"
                   />
                 )}
                 <select
@@ -1971,48 +1973,48 @@ export default function Testing() {
                   <option value="infrastructure_error">Infrastructure error</option>
                   <option value="unknown">Unknown</option>
                 </select>
-                <input
+                <EditableCombobox
                   value={historyRepository}
                   maxLength={255}
-                  onChange={(e) => { setHistoryRepository(e.target.value); setPage(1) }}
+                  onChange={(value) => { setHistoryRepository(value); setPage(1) }}
+                  options={historyFilterOptions?.repositories || []}
                   placeholder="Repository (owner/name)"
-                  aria-label="Source repository"
-                  className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                  ariaLabel="Source repository"
                 />
-                <input
-                  type="number"
-                  min={1}
+                <EditableCombobox
                   value={historyPrNumber}
-                  onChange={(e) => { setHistoryPrNumber(e.target.value); setPage(1) }}
+                  onChange={(value) => { setHistoryPrNumber(value.replace(/\D/g, '')); setPage(1) }}
+                  options={(historyFilterOptions?.pr_numbers || []).map(String)}
+                  inputMode="numeric"
                   placeholder="PR number"
-                  aria-label="Pull request number"
-                  className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                  ariaLabel="Pull request number"
                 />
-                <input
+                <EditableCombobox
                   value={historySourceSha}
                   maxLength={64}
-                  onChange={(e) => {
-                    setHistorySourceSha(e.target.value.replace(/[^0-9a-fA-F]/g, '').slice(0, 64))
+                  onChange={(value) => {
+                    setHistorySourceSha(value.replace(/[^0-9a-fA-F]/g, '').slice(0, 64))
                     setPage(1)
                   }}
+                  options={historyFilterOptions?.source_shas || []}
                   placeholder="Requested/submitted SHA"
-                  aria-label="Source commit SHA"
-                  className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                  ariaLabel="Source commit SHA"
                 />
-                <input
+                <EditableCombobox
                   value={historyForge}
                   maxLength={255}
-                  onChange={(e) => { setHistoryForge(e.target.value); setPage(1) }}
+                  onChange={(value) => { setHistoryForge(value); setPage(1) }}
+                  options={historyFilterOptions?.forge || []}
                   placeholder="Forge version or image digest"
-                  aria-label="Forge version or image digest"
-                  className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                  ariaLabel="Forge version or image digest"
                 />
-                <input
+                <EditableCombobox
                   value={historyTags}
-                  onChange={(e) => { setHistoryTags(e.target.value); setPage(1) }}
+                  onChange={(value) => { setHistoryTags(value); setPage(1) }}
+                  options={historyFilterOptions?.tags || []}
+                  multiple
                   placeholder="Tags (comma-separated)"
-                  aria-label="Tags"
-                  className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                  ariaLabel="Tags"
                 />
               </div>
             </details>

@@ -496,6 +496,15 @@ export interface HistoryPreferenceResponse {
   updated_at: string | null
 }
 
+export interface HistoryFilterOptionsResponse {
+  identities: string[]
+  repositories: string[]
+  pr_numbers: number[]
+  source_shas: string[]
+  forge: string[]
+  tags: string[]
+}
+
 export interface PipelineStage {
   name: string
   displayName: string
