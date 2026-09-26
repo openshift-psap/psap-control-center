@@ -329,6 +329,25 @@ def _live_job_to_summary(job: dict, *, include_owner: bool = True) -> dict:
     }
 
 
+def _forge_execution_summary(execution: Optional[dict]) -> dict:
+    execution = execution or {}
+    versions = execution.get("gitVersions", []) or []
+    images = execution.get("images", []) or []
+    version = next(
+        (item.get("version", "") for item in versions if isinstance(item, dict)),
+        "",
+    )
+    image_id = next(
+        (item.get("imageID", "") for item in images if isinstance(item, dict)),
+        "",
+    )
+    digest = image_id.rsplit("@", 1)[-1] if "@" in image_id else image_id
+    return {
+        "forge_git_version": version,
+        "forge_image_digest": digest,
+    }
+
+
 def _db_job_to_summary(job, *, include_owner: bool = True) -> dict:
     return {
         "name": job.name,
@@ -354,6 +373,8 @@ def _db_job_to_summary(job, *, include_owner: bool = True) -> dict:
         "source_head_branch": job.source_head_branch or "",
         "source_requested_sha": job.source_requested_sha or "",
         "source_resolved_sha": job.source_resolved_sha or "",
+        **_forge_execution_summary(job.forge_execution),
+        "forge_provenance_state": job.forge_provenance_state or "pending",
     }
 
 
@@ -727,10 +748,9 @@ async def get_job(job_name: str, request: Request):
         enrichment_state = "pending" if phase in (
             "Succeeded", "Failed", "Stopped"
         ) else "not_applicable"
-        archived = None
+        async with AsyncSessionLocal() as session:
+            archived = await db_svc.get_job_by_name(session, job_name)
         if phase in ("Succeeded", "Failed", "Stopped"):
-            async with AsyncSessionLocal() as session:
-                archived = await db_svc.get_job_by_name(session, job_name)
             if archived:
                 failure_summary = select_failure_summary(
                     failure_summary, archived.failure_summary
@@ -758,6 +778,13 @@ async def get_job(job_name: str, request: Request):
             "task_progress": task_progress,
             "failure_summary": failure_summary,
             "failure_enrichment_state": enrichment_state,
+            "forge_execution": (
+                archived.forge_execution or {} if archived else {}
+            ),
+            "forge_provenance_state": (
+                archived.forge_provenance_state or "pending"
+                if archived else "pending"
+            ),
         }
 
     async with AsyncSessionLocal() as session:
@@ -803,6 +830,10 @@ async def get_job(job_name: str, request: Request):
         "failure_summary": db_job.failure_summary or None,
         "failure_enrichment_state": (
             db_job.failure_enrichment_state or "unavailable"
+        ),
+        "forge_execution": db_job.forge_execution or {},
+        "forge_provenance_state": (
+            db_job.forge_provenance_state or "unavailable"
         ),
     }
 

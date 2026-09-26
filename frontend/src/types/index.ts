@@ -457,6 +457,9 @@ export interface FournosJobSummary {
   source_head_branch: string
   source_requested_sha: string
   source_resolved_sha: string
+  forge_git_version: string
+  forge_image_digest: string
+  forge_provenance_state: string
 }
 
 export interface FournosJobListResponse {
@@ -534,6 +537,19 @@ export interface ForgeInfo {
   resolved_sha: string
 }
 
+export interface ForgeExecutionProvenance {
+  images: Array<{
+    image: string
+    imageID: string
+    container: string
+  }>
+  gitVersions: Array<{
+    version: string
+    artifactPath: string
+  }>
+  observedAt: string | null
+}
+
 export interface FournosJobDetailResponse {
   job: {
     metadata: Record<string, unknown>
@@ -551,6 +567,8 @@ export interface FournosJobDetailResponse {
   task_progress: TaskProgress | null
   failure_summary: FailureSummary | null
   failure_enrichment_state: string
+  forge_execution: ForgeExecutionProvenance
+  forge_provenance_state: string
 }
 
 export interface FournosJobEvent {

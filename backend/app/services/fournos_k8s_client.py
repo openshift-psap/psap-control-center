@@ -621,6 +621,54 @@ def list_pods_for_job(
         return []
 
 
+def get_forge_execution_images(
+    job_name: str, namespace: Optional[str] = None
+) -> list[dict]:
+    """Return the observed Forge container image refs and immutable IDs.
+
+    Tekton prefixes step containers with ``step-``.  The image ID is the
+    runtime-resolved digest and remains authoritative even when the declared
+    image uses a moving tag such as ``latest``.
+    """
+    _ensure_loaded()
+    if _core_api is None:
+        return []
+    ns = namespace or settings.FOURNOS_NAMESPACE
+    try:
+        result = _core_api.list_namespaced_pod(
+            namespace=ns,
+            label_selector=f"fournos.dev/job-name={job_name}",
+        )
+    except ApiException as exc:
+        logger.warning(
+            "Failed to read Forge image provenance for %s: %s",
+            job_name,
+            exc.reason,
+        )
+        return []
+
+    images: dict[tuple[str, str, str], dict] = {}
+    for pod in result.items:
+        for container_status in pod.status.container_statuses or []:
+            container_name = container_status.name or ""
+            if container_name not in {"forge", "step-forge"}:
+                continue
+            image = container_status.image or ""
+            image_id = container_status.image_id or ""
+            # A declared tag without the runtime-resolved ID is not immutable
+            # evidence. Leave it pending so a later watcher pass can capture
+            # the digest once Kubernetes has populated containerStatuses.
+            if not image_id:
+                continue
+            evidence = {
+                "image": image,
+                "imageID": image_id,
+                "container": container_name,
+            }
+            images[(image, image_id, container_name)] = evidence
+    return [images[key] for key in sorted(images)]
+
+
 def read_pod_log(
     pod_name: str,
     namespace: Optional[str] = None,
