@@ -59,7 +59,10 @@ from app.services import fournos_k8s_client as k8s
 from app.services import pipeline_definitions
 from app.services import project_ui_schema
 from app.services.source_provenance import extract_source_request_fields
-from app.services.failure_details import first_actionable_failure
+from app.services.failure_details import (
+    first_actionable_failure,
+    select_failure_summary,
+)
 from app.services.forge_discovery import discover_projects, get_project
 
 logger = logging.getLogger(__name__)
@@ -729,8 +732,9 @@ async def get_job(job_name: str, request: Request):
             async with AsyncSessionLocal() as session:
                 archived = await db_svc.get_job_by_name(session, job_name)
             if archived:
-                if archived.failure_summary:
-                    failure_summary = archived.failure_summary
+                failure_summary = select_failure_summary(
+                    failure_summary, archived.failure_summary
+                )
                 enrichment_state = (
                     archived.failure_enrichment_state or enrichment_state
                 )

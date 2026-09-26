@@ -177,6 +177,75 @@ oc get route psap-control-center
 curl -k https://control-center.<apps-domain>/api/v1/health
 ```
 
+## Hearth/Management-Cluster Permissions
+
+The Hearth connection is also the Kubernetes connection used by the Testing
+tab. Control Center uses the identity from the uploaded management-cluster
+kubeconfig or from the OpenShift username/password login; it does not replace
+that identity with the Control Center pod's service account and does not
+elevate its permissions.
+
+Before connecting Hearth, ensure that identity has the required permissions in
+the configured namespaces:
+
+- In `HEARTH_NAMESPACE` (default: `hearth`), read access to
+  `fournosclusters.fournos.dev`.
+- In `FOURNOS_NAMESPACE` (default: `psap-automation`), read access to
+  `fournosjobs.fournos.dev`, `pipelineruns.tekton.dev`,
+  `taskruns.tekton.dev`, Pods, and the Pod log subresource.
+- Testing actions additionally require the corresponding `create`, `patch`, or
+  `delete` permission on `fournosjobs.fournos.dev`.
+
+Use the same kubeconfig that will be supplied to Control Center to verify the
+timeline permissions:
+
+```bash
+oc --kubeconfig=<management-kubeconfig> auth can-i get taskruns.tekton.dev \
+  -n <fournos-namespace>
+oc --kubeconfig=<management-kubeconfig> auth can-i list taskruns.tekton.dev \
+  -n <fournos-namespace>
+oc --kubeconfig=<management-kubeconfig> auth can-i watch taskruns.tekton.dev \
+  -n <fournos-namespace>
+```
+
+If an existing Fournos user has all other required permissions but lacks
+TaskRun read access, a management-cluster RBAC administrator can apply this
+least-privilege grant. Replace the namespace and subject with the values used
+by that deployment:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: psap-control-center-taskrun-reader
+  namespace: <fournos-namespace>
+rules:
+  - apiGroups: ["tekton.dev"]
+    resources: ["taskruns"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: psap-control-center-taskrun-reader
+  namespace: <fournos-namespace>
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: psap-control-center-taskrun-reader
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: <management-cluster-user>
+```
+
+Without TaskRun read access, the Pods view may still show accurate status while
+the Pipeline Timeline remains `Pending` for active runs or `UNKNOWN` for
+terminal runs. Control Center also cannot preserve durable stage snapshots in
+that state. The connected user usually cannot grant this permission to itself;
+the Role and RoleBinding must be created by an appropriately authorized
+management-cluster user.
+
 ## CI/CD: Automatic Build & Deploy
 
 The repository includes GitHub Actions workflows and OCP manifests for

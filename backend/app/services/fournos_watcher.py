@@ -80,7 +80,9 @@ def _compute_terminal_stages(
         if not pr:
             return None
 
-        actual_stages = k8s_client.extract_pipeline_stages(pr)
+        actual_stages = k8s_client.extract_pipeline_stages(
+            pr, strict_lookup_errors=True
+        )
         # A terminal PipelineRun should not have active/unknown TaskRuns. An
         # empty or Pending/Running result means the K8s snapshot was incomplete
         # (usually a transient lookup failure), so leave the DB value untouched
@@ -116,6 +118,8 @@ def _compute_terminal_stages(
             else stage
             for stage in actual_stages
         ]
+    except k8s_client.TaskRunLookupError:
+        raise
     except Exception as exc:
         logger.warning(
             "Could not snapshot pipeline stages for %s: %s", job_name, exc
@@ -335,11 +339,29 @@ async def _archive_job(job: dict) -> None:
                 and within_retry_budget
                 and (transitioning_into_terminal or retry_due)
             ):
-                new_stages = _compute_terminal_stages(
-                    job_name, fields.get("fjob_spec") or {}, fields.get("fjob_status") or {}
-                )
-                fields["stage_snapshot_attempts"] = (snapshot_attempts or 0) + 1
-                fields["stage_snapshot_attempted_at"] = now
+                consume_snapshot_attempt = True
+                try:
+                    new_stages = _compute_terminal_stages(
+                        job_name,
+                        fields.get("fjob_spec") or {},
+                        fields.get("fjob_status") or {},
+                    )
+                except k8s_client.TaskRunLookupError as exc:
+                    new_stages = None
+                    # Authorization is a configuration problem, not evidence
+                    # that TaskRuns disappeared. Preserve the retry budget so
+                    # archiving recovers after RBAC is corrected.
+                    consume_snapshot_attempt = exc.status not in (401, 403)
+                    logger.warning(
+                        "Could not snapshot stages for %s: %s",
+                        job_name,
+                        exc,
+                    )
+                if consume_snapshot_attempt:
+                    fields["stage_snapshot_attempts"] = (
+                        snapshot_attempts or 0
+                    ) + 1
+                    fields["stage_snapshot_attempted_at"] = now
                 if new_stages is not None:
                     fields["stages"] = new_stages
             effective_stages = fields.get("stages", existing_stages or [])

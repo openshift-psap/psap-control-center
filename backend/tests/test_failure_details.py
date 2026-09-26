@@ -106,6 +106,42 @@ def test_deleted_taskrun_is_archived_as_unknown_not_pending(monkeypatch):
     assert stage["reasonCode"] == "TASKRUN_UNAVAILABLE"
 
 
+def test_taskrun_authorization_failure_is_explicit_for_live_detail(monkeypatch):
+    monkeypatch.setattr(
+        k8s,
+        "get_taskrun",
+        lambda _name: (_ for _ in ()).throw(
+            k8s.TaskRunLookupError("test-run", 403, "Forbidden")
+        ),
+    )
+
+    stage = k8s.extract_pipeline_stages(_terminal_pipeline())[0]
+
+    assert stage["status"] == "Unknown"
+    assert stage["outcome"] == "unknown"
+    assert stage["reasonCode"] == "TASKRUN_ACCESS_DENIED"
+    assert stage["reasonSource"] == "tekton_api"
+
+
+def test_strict_taskrun_lookup_preserves_authorization_error(monkeypatch):
+    monkeypatch.setattr(
+        k8s,
+        "get_taskrun",
+        lambda _name: (_ for _ in ()).throw(
+            k8s.TaskRunLookupError("test-run", 403, "Forbidden")
+        ),
+    )
+
+    try:
+        k8s.extract_pipeline_stages(
+            _terminal_pipeline(), strict_lookup_errors=True
+        )
+    except k8s.TaskRunLookupError as exc:
+        assert exc.status == 403
+    else:
+        raise AssertionError("strict lookup must preserve authorization errors")
+
+
 def test_first_actionable_failure_ignores_skipped_and_not_run_stages():
     summary = failure_details.first_actionable_failure(
         [
@@ -216,6 +252,43 @@ def test_caliper_failure_enriches_test_failure_but_not_infrastructure():
     assert failure_details.merge_caliper_failure(
         infrastructure, caliper
     ) == infrastructure
+
+
+def test_fresh_concrete_failure_replaces_stale_archived_unknown():
+    live = {
+        "outcome": "failed",
+        "stage": "test",
+        "step": "benchmark",
+        "reason": "command exited with code 1",
+        "reasonCode": "Error",
+        "source": "step_termination",
+    }
+    archived = {
+        "outcome": "unknown",
+        "stage": "",
+        "step": "",
+        "reason": "details unavailable",
+        "source": "unknown",
+    }
+
+    assert failure_details.select_failure_summary(live, archived) == live
+
+
+def test_archived_mlflow_detail_remains_stronger_than_live_execution():
+    live = {
+        "outcome": "failed",
+        "stage": "test",
+        "reason": "command exited with code 1",
+        "source": "step_termination",
+    }
+    archived = {
+        "outcome": "failed",
+        "stage": "test",
+        "reason": "Configuration requested a failure",
+        "source": "mlflow_caliper",
+    }
+
+    assert failure_details.select_failure_summary(live, archived) == archived
 
 
 def test_parse_mlflow_fragment_url_uses_recorded_workspace(monkeypatch):
