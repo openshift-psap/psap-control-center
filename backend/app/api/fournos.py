@@ -776,7 +776,7 @@ async def get_job(job_name: str, request: Request):
             "current_step": current_step,
             "forge_info": forge_info,
             "task_progress": task_progress,
-            "failure_summary": failure_summary,
+            "failure_summary": failure_summary or None,
             "failure_enrichment_state": enrichment_state,
             "forge_execution": (
                 archived.forge_execution or {} if archived else {}

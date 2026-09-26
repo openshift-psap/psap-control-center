@@ -239,6 +239,22 @@ def test_job_detail_contract_serializes_normalized_failure_fields():
     assert response["forge_execution"]["gitVersions"][0]["version"] == "5415caf"
 
 
+def test_job_detail_contract_normalizes_empty_success_failure_summary():
+    response = FournosJobDetailResponse.model_validate(
+        {
+            "job": {
+                "metadata": {"name": "successful-job"},
+                "spec": {},
+                "status": {"phase": "Succeeded"},
+                "source": "history",
+            },
+            "failure_summary": {},
+        }
+    )
+
+    assert response.failure_summary is None
+
+
 def test_caliper_failure_enriches_test_failure_but_not_infrastructure():
     execution = {
         "outcome": "failed",
