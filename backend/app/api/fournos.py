@@ -38,6 +38,9 @@ from app.schemas.fournos import (
     FournosJobDetailResponse,
     GitHubPR,
     GithubSyncStatusResponse,
+    HistoryPreferenceResponse,
+    HistoryPreferenceUpdate,
+    HistoryViewState,
     HoldSlotRequest,
     JobEventResponse,
     JobListResponse,
@@ -210,6 +213,24 @@ def _requester_subject_for_scope(
     if not subject:
         raise HTTPException(status_code=401, detail="Sign in to view your jobs")
     return subject
+
+
+def _validate_identity_search(
+    identity: str, user: Optional[dict]
+) -> None:
+    """Identity predicates are private even though general History is public."""
+    if identity and user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to search owner or requester identity",
+        )
+
+
+def _visible_sort_by(sort_by: str, user: Optional[dict]) -> str:
+    """Do not let anonymous ordering reveal otherwise-redacted identity."""
+    if sort_by == "owner" and user is None:
+        return ""
+    return sort_by
 
 
 def _live_job_requester_subject(job: dict) -> str:
@@ -563,6 +584,18 @@ async def list_jobs(
     status: str = Query(""),
     owner: str = Query(""),
     requester_scope: str = Query("all", pattern="^(all|mine)$"),
+    q: str = Query("", max_length=200),
+    identity: str = Query("", max_length=255),
+    failure_outcome: str = Query(
+        "", pattern="^$|^(failed|cancelled|infrastructure_error|unknown)$"
+    ),
+    repository: str = Query("", max_length=255),
+    pr_number: Optional[int] = Query(None, ge=1, le=2147483647),
+    source_sha: str = Query(
+        "", max_length=64, pattern=r"^$|^[0-9a-fA-F]{4,64}$"
+    ),
+    forge: str = Query("", max_length=255),
+    tags: str = Query("", max_length=2020),
     start_time: Optional[str] = Query(None, description="ISO 8601 UTC — history tab only"),
     end_time: Optional[str] = Query(None, description="ISO 8601 UTC — history tab only"),
     sort_by: str = Query(""),
@@ -572,6 +605,18 @@ async def list_jobs(
 ):
     current_user = get_current_user(request)
     include_owner = current_user is not None
+    effective_sort_by = _visible_sort_by(sort_by, current_user)
+    _validate_identity_search(identity, current_user)
+    parsed_tags = []
+    for raw_tag in tags.split(","):
+        tag = raw_tag.strip()
+        if not tag or tag in parsed_tags:
+            continue
+        if len(tag) > 100:
+            raise HTTPException(400, "Tags must be at most 100 characters")
+        parsed_tags.append(tag)
+    if len(parsed_tags) > 20:
+        raise HTTPException(400, "At most 20 tags may be filtered at once")
     requester_subject = _requester_subject_for_scope(
         requester_scope, current_user
     )
@@ -624,7 +669,7 @@ async def list_jobs(
         summaries = [
             _live_job_to_summary(j, include_owner=include_owner) for j in jobs
         ]
-        key_fn = _live_sort_key(sort_by)
+        key_fn = _live_sort_key(effective_sort_by)
         summaries.sort(key=key_fn, reverse=(sort_dir == "desc"))
         total = len(summaries)
         offset = (page - 1) * per_page
@@ -640,9 +685,17 @@ async def list_jobs(
                 status=status or None,
                 owner=(owner or None) if include_owner else None,
                 requester_subject=requester_subject,
+                query=q.strip() or None,
+                identity=identity.strip() or None,
+                failure_outcome=failure_outcome.strip() or None,
+                repository=repository.strip() or None,
+                pr_number=pr_number,
+                source_sha=source_sha.strip() or None,
+                forge=forge.strip() or None,
+                tags=parsed_tags or None,
                 created_after=created_after,
                 created_before=created_before,
-                sort_by=sort_by or None,
+                sort_by=effective_sort_by or None,
                 sort_dir=sort_dir,
                 limit=per_page,
                 offset=(page - 1) * per_page,
@@ -657,6 +710,58 @@ async def list_jobs(
         "page": page,
         "per_page": per_page,
     }
+
+
+@router.get(
+    "/history/preferences",
+    response_model=HistoryPreferenceResponse,
+)
+async def get_history_preferences(user: dict = Depends(require_auth)):
+    subject = str(user.get("subject") or "")
+    async with AsyncSessionLocal() as session:
+        preference = await db_svc.get_history_preference(session, subject)
+    if preference is None:
+        return HistoryPreferenceResponse()
+    return HistoryPreferenceResponse(
+        schema_version=preference.schema_version,
+        state=HistoryViewState.model_validate(preference.state or {}),
+        updated_at=preference.updated_at,
+    )
+
+
+@router.put(
+    "/history/preferences",
+    response_model=HistoryPreferenceResponse,
+)
+async def update_history_preferences(
+    body: HistoryPreferenceUpdate,
+    user: dict = Depends(require_auth),
+):
+    subject = str(user.get("subject") or "")
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            preference = await db_svc.save_history_preference(
+                session,
+                subject=subject,
+                schema_version=1,
+                state=body.state.model_dump(),
+            )
+    return HistoryPreferenceResponse(
+        schema_version=preference.schema_version,
+        state=HistoryViewState.model_validate(preference.state or {}),
+        updated_at=preference.updated_at,
+    )
+
+
+@router.delete("/history/preferences")
+async def reset_history_preferences(user: dict = Depends(require_auth)):
+    subject = str(user.get("subject") or "")
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            deleted = await db_svc.delete_history_preference(
+                session, subject
+            )
+    return {"status": "ok", "deleted": deleted}
 
 
 @router.get("/jobs/{job_name}", response_model=FournosJobDetailResponse)

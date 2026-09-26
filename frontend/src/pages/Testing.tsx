@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, Fragment, type ComponentType } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback, Fragment, type ComponentType } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Menu, Transition } from '@headlessui/react'
 import {
@@ -55,6 +55,9 @@ import {
   useProjectUiSchema,
   useRefreshProjectUiSchema,
   useClusterOverview,
+  useHistoryPreference,
+  useSaveHistoryPreference,
+  useResetHistoryPreference,
 } from '../hooks/useFournos'
 import type {
   FournosJobSummary,
@@ -66,6 +69,7 @@ import type {
   ClusterOverview,
   GitHubPR,
   PullRequestSelection,
+  HistoryViewState,
 } from '../types'
 
 const RUNNING_JOB_STATUSES = new Set(['Running', 'Pending', 'Admitted', 'Resolving'])
@@ -112,6 +116,9 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 const ALL_STATUSES = ['Running', 'Pending', 'Admitted', 'Resolving', 'Succeeded', 'Failed', 'Stopped']
+const HISTORY_STATUSES = ['Succeeded', 'Failed', 'Stopped']
+const HISTORY_STATUS_SET = new Set(HISTORY_STATUSES)
+const HISTORY_FAILURE_SET = new Set(['failed', 'cancelled', 'infrastructure_error', 'unknown'])
 
 /** Today's date in the browser's own timezone, as a "YYYY-MM-DD" string —
  * matches what a native `<input type="date">` shows/expects, no UTC
@@ -146,6 +153,72 @@ const TABS = [
 
 type SortDir = 'asc' | 'desc'
 interface SortState { by: string; dir: SortDir }
+
+const DEFAULT_HISTORY_VIEW: HistoryViewState = {
+  query: '',
+  project: '',
+  cluster: '',
+  status: '',
+  requester_scope: 'all',
+  identity: '',
+  failure_outcome: '',
+  repository: '',
+  pr_number: null,
+  source_sha: '',
+  forge: '',
+  tags: [],
+  history_date: '',
+  from_time: '00:00',
+  to_time: '23:59',
+  sort_by: 'date',
+  sort_dir: 'desc',
+  per_page: 50,
+}
+
+const HISTORY_URL_KEYS = [
+  'q', 'project', 'cluster', 'status', 'scope', 'identity', 'failure',
+  'repository', 'pr', 'sha', 'forge', 'tags', 'date', 'from', 'to',
+  'sort', 'dir', 'per_page', 'page',
+] as const
+
+const HISTORY_SORT_KEYS = new Set([
+  'name', 'project', 'cluster', 'status', 'owner', 'date', 'duration',
+  'triggered_by',
+])
+
+function historyViewFromParams(params: URLSearchParams): HistoryViewState {
+  const parsedPr = Number(params.get('pr'))
+  const parsedPerPage = Number(params.get('per_page'))
+  const sort = params.get('sort') || ''
+  const dir = params.get('dir')
+  const status = params.get('status') || ''
+  const failure = params.get('failure') || ''
+  const sourceSha = params.get('sha') || ''
+  return {
+    query: params.get('q') || '',
+    project: params.get('project') || '',
+    cluster: params.get('cluster') || '',
+    status: HISTORY_STATUS_SET.has(status) ? status : '',
+    requester_scope: params.get('scope') === 'mine' ? 'mine' : 'all',
+    identity: params.get('identity') || '',
+    failure_outcome: HISTORY_FAILURE_SET.has(failure) ? failure : '',
+    repository: params.get('repository') || '',
+    pr_number: Number.isInteger(parsedPr) && parsedPr > 0 ? parsedPr : null,
+    source_sha: /^[0-9a-fA-F]{4,64}$/.test(sourceSha) ? sourceSha : '',
+    forge: params.get('forge') || '',
+    tags: (params.get('tags') || '').split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 20),
+    history_date: params.get('date') || '',
+    from_time: params.get('from') || '00:00',
+    to_time: params.get('to') || '23:59',
+    sort_by: (HISTORY_SORT_KEYS.has(sort) ? sort : 'date') as HistoryViewState['sort_by'],
+    sort_dir: dir === 'asc' ? 'asc' : 'desc',
+    per_page: [25, 50, 100, 200].includes(parsedPerPage) ? parsedPerPage : 50,
+  }
+}
+
+function hasHistoryUrlState(params: URLSearchParams): boolean {
+  return HISTORY_URL_KEYS.some((key) => params.has(key))
+}
 
 /** Clicking the already-active column flips its direction; clicking a new
  * column starts it off ascending. */
@@ -1393,23 +1466,35 @@ function SchedulesTab() {
 export default function Testing() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = searchParams.get('tab') || 'live'
-  const [page, setPage] = useState(1)
-  const [filterProject, setFilterProject] = useState('')
-  const [filterCluster, setFilterCluster] = useState('')
-  const [filterStatus, setFilterStatus] = useState('')
-  const [requesterScope, setRequesterScope] = useState<'all' | 'mine'>('all')
+  const initialHistoryRef = useRef(historyViewFromParams(searchParams))
+  const initialHistory = initialHistoryRef.current
+  const parsedInitialPage = Number(searchParams.get('page'))
+  const [page, setPage] = useState(Number.isInteger(parsedInitialPage) && parsedInitialPage > 0 ? parsedInitialPage : 1)
+  const [filterProject, setFilterProject] = useState(initialHistory.project)
+  const [filterCluster, setFilterCluster] = useState(initialHistory.cluster)
+  const [filterStatus, setFilterStatus] = useState(initialHistory.status)
+  const [requesterScope, setRequesterScope] = useState<'all' | 'mine'>(initialHistory.requester_scope)
+  const [historyQuery, setHistoryQuery] = useState(initialHistory.query)
+  const [historyIdentity, setHistoryIdentity] = useState(initialHistory.identity)
+  const [historyFailure, setHistoryFailure] = useState(initialHistory.failure_outcome)
+  const [historyRepository, setHistoryRepository] = useState(initialHistory.repository)
+  const [historyPrNumber, setHistoryPrNumber] = useState(initialHistory.pr_number ? String(initialHistory.pr_number) : '')
+  const [historySourceSha, setHistorySourceSha] = useState(initialHistory.source_sha)
+  const [historyForge, setHistoryForge] = useState(initialHistory.forge)
+  const [historyTags, setHistoryTags] = useState(initialHistory.tags.join(', '))
+  const [historyPerPage, setHistoryPerPage] = useState(initialHistory.per_page)
   const authenticated = isAuthenticated()
   // History-only date + local time-of-day range filter. Empty historyDate
   // means "no time filter" — from/to only matter once a date is picked.
-  const [historyDate, setHistoryDate] = useState('')
-  const [historyFromTime, setHistoryFromTime] = useState('00:00')
-  const [historyToTime, setHistoryToTime] = useState('23:59')
+  const [historyDate, setHistoryDate] = useState(initialHistory.history_date)
+  const [historyFromTime, setHistoryFromTime] = useState(initialHistory.from_time)
+  const [historyToTime, setHistoryToTime] = useState(initialHistory.to_time)
   // Live/History are server-paginated, so sorting has to be sent to the API
   // rather than done in-browser (client-side sort would only reorder the
   // current page). Kept as two separate states since their sortable
   // columns differ slightly (Age vs. Date).
   const [liveSort, setLiveSort] = useState<SortState>({ by: 'age', dir: 'desc' })
-  const [historySort, setHistorySort] = useState<SortState>({ by: 'date', dir: 'desc' })
+  const [historySort, setHistorySort] = useState<SortState>({ by: initialHistory.sort_by, dir: initialHistory.sort_dir })
   const activeSort = activeTab === 'live' ? liveSort : historySort
   const setActiveSort = activeTab === 'live' ? setLiveSort : setHistorySort
   const handleSort = (key: string) => {
@@ -1417,10 +1502,210 @@ export default function Testing() {
     setPage(1)
   }
   const tz = browserTimezone()
+  const historyUrlHasState = hasHistoryUrlState(searchParams)
+  const [preferenceApplied, setPreferenceApplied] = useState(
+    !authenticated || historyUrlHasState
+  )
+  const lastSavedStateRef = useRef<string | null>(
+    historyUrlHasState ? JSON.stringify(initialHistory) : null
+  )
+  const previousAuthenticatedRef = useRef(authenticated)
+  const observedUrlRef = useRef(searchParams.toString())
+  const applyingUrlRef = useRef(false)
+  const suppressPreferenceSaveRef = useRef(false)
+  const [debouncedTextFilters, setDebouncedTextFilters] = useState({
+    query: initialHistory.query,
+    identity: initialHistory.identity,
+    repository: initialHistory.repository,
+    sourceSha: initialHistory.source_sha,
+    forge: initialHistory.forge,
+    tags: initialHistory.tags.join(','),
+  })
+
+  const historyViewState = useMemo<HistoryViewState>(() => {
+    const prNumber = Number(historyPrNumber)
+    return {
+      query: historyQuery.trim(),
+      project: filterProject,
+      cluster: filterCluster,
+      status: filterStatus,
+      requester_scope: requesterScope,
+      identity: historyIdentity.trim(),
+      failure_outcome: historyFailure,
+      repository: historyRepository.trim(),
+      pr_number: Number.isInteger(prNumber) && prNumber > 0 ? prNumber : null,
+      source_sha: historySourceSha.trim(),
+      forge: historyForge.trim(),
+      tags: historyTags.split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 20),
+      history_date: historyDate,
+      from_time: historyFromTime,
+      to_time: historyToTime,
+      sort_by: historySort.by as HistoryViewState['sort_by'],
+      sort_dir: historySort.dir,
+      per_page: historyPerPage,
+    }
+  }, [
+    historyQuery, filterProject, filterCluster, filterStatus, requesterScope,
+    historyIdentity, historyFailure, historyRepository, historyPrNumber,
+    historySourceSha, historyForge, historyTags, historyDate,
+    historyFromTime, historyToTime, historySort, historyPerPage,
+  ])
+
+  const applyHistoryView = useCallback((state: HistoryViewState) => {
+    setHistoryQuery(state.query)
+    setFilterProject(state.project)
+    setFilterCluster(state.cluster)
+    setFilterStatus(state.status)
+    setRequesterScope(state.requester_scope)
+    setHistoryIdentity(state.identity)
+    setHistoryFailure(state.failure_outcome)
+    setHistoryRepository(state.repository)
+    setHistoryPrNumber(state.pr_number ? String(state.pr_number) : '')
+    setHistorySourceSha(state.source_sha)
+    setHistoryForge(state.forge)
+    setHistoryTags(state.tags.join(', '))
+    setHistoryDate(state.history_date)
+    setHistoryFromTime(state.from_time)
+    setHistoryToTime(state.to_time)
+    setHistorySort({ by: state.sort_by, dir: state.sort_dir })
+    setHistoryPerPage(state.per_page)
+    setDebouncedTextFilters({
+      query: state.query,
+      identity: state.identity,
+      repository: state.repository,
+      sourceSha: state.source_sha,
+      forge: state.forge,
+      tags: state.tags.join(','),
+    })
+    setPage(1)
+  }, [])
+
+  const preferenceQuery = useHistoryPreference(
+    authenticated && activeTab === 'history' && !historyUrlHasState && !preferenceApplied
+  )
+  const { mutate: saveHistoryPreference, isPending: preferenceSaving } = useSaveHistoryPreference()
+  const { mutate: resetHistoryPreference, isPending: preferenceResetting } = useResetHistoryPreference()
 
   useEffect(() => {
-    if (!authenticated && requesterScope === 'mine') setRequesterScope('all')
-  }, [authenticated, requesterScope])
+    const timeout = window.setTimeout(() => {
+      setDebouncedTextFilters({
+        query: historyQuery.trim(),
+        identity: historyIdentity.trim(),
+        repository: historyRepository.trim(),
+        sourceSha: historySourceSha.trim(),
+        forge: historyForge.trim(),
+        tags: historyViewState.tags.join(','),
+      })
+    }, 300)
+    return () => window.clearTimeout(timeout)
+  }, [historyQuery, historyIdentity, historyRepository, historySourceSha, historyForge, historyViewState.tags])
+
+  useEffect(() => {
+    if (authenticated && !previousAuthenticatedRef.current && activeTab === 'history' && !historyUrlHasState) {
+      lastSavedStateRef.current = null
+      setPreferenceApplied(false)
+    }
+    previousAuthenticatedRef.current = authenticated
+  }, [authenticated, activeTab, historyUrlHasState])
+
+  useEffect(() => {
+    if (activeTab !== 'history' || preferenceApplied) return
+    if (!authenticated || historyUrlHasState) {
+      lastSavedStateRef.current = JSON.stringify(historyViewState)
+      setPreferenceApplied(true)
+      return
+    }
+    if (preferenceQuery.data) {
+      applyHistoryView(preferenceQuery.data.state)
+      lastSavedStateRef.current = JSON.stringify(preferenceQuery.data.state)
+      setPreferenceApplied(true)
+    } else if (preferenceQuery.isError) {
+      lastSavedStateRef.current = JSON.stringify(historyViewState)
+      setPreferenceApplied(true)
+    }
+  }, [
+    activeTab, preferenceApplied, authenticated, historyUrlHasState,
+    preferenceQuery.data, preferenceQuery.isError, applyHistoryView,
+    historyViewState,
+  ])
+
+  useEffect(() => {
+    const currentUrl = searchParams.toString()
+    if (currentUrl === observedUrlRef.current) return
+    observedUrlRef.current = currentUrl
+    if (activeTab !== 'history' || !preferenceApplied) return
+
+    const urlState = historyViewFromParams(searchParams)
+    const urlPage = Number(searchParams.get('page'))
+    const normalizedPage = Number.isInteger(urlPage) && urlPage > 0 ? urlPage : 1
+    if (JSON.stringify(urlState) !== JSON.stringify(historyViewState) || normalizedPage !== page) {
+      applyingUrlRef.current = true
+      applyHistoryView(urlState)
+      setPage(normalizedPage)
+      lastSavedStateRef.current = JSON.stringify(urlState)
+    }
+  }, [searchParams, activeTab, preferenceApplied, historyViewState, page, applyHistoryView])
+
+  useEffect(() => {
+    if (activeTab !== 'history' || !preferenceApplied) return
+    if (applyingUrlRef.current) {
+      applyingUrlRef.current = false
+      return
+    }
+    const next = new URLSearchParams(searchParams)
+    HISTORY_URL_KEYS.forEach((key) => next.delete(key))
+    next.set('tab', 'history')
+    const setWhen = (key: string, value: string, condition = Boolean(value)) => {
+      if (condition) next.set(key, value)
+    }
+    setWhen('q', historyViewState.query)
+    setWhen('project', historyViewState.project)
+    setWhen('cluster', historyViewState.cluster)
+    setWhen('status', historyViewState.status)
+    setWhen('scope', historyViewState.requester_scope, historyViewState.requester_scope === 'mine')
+    setWhen('identity', historyViewState.identity, authenticated && Boolean(historyViewState.identity))
+    setWhen('failure', historyViewState.failure_outcome)
+    setWhen('repository', historyViewState.repository)
+    setWhen('pr', String(historyViewState.pr_number || ''), historyViewState.pr_number !== null)
+    setWhen('sha', historyViewState.source_sha)
+    setWhen('forge', historyViewState.forge)
+    setWhen('tags', historyViewState.tags.join(','), historyViewState.tags.length > 0)
+    setWhen('date', historyViewState.history_date)
+    setWhen('from', historyViewState.from_time, Boolean(historyViewState.history_date) && historyViewState.from_time !== '00:00')
+    setWhen('to', historyViewState.to_time, Boolean(historyViewState.history_date) && historyViewState.to_time !== '23:59')
+    setWhen('sort', historyViewState.sort_by, historyViewState.sort_by !== 'date')
+    setWhen('dir', historyViewState.sort_dir, historyViewState.sort_dir !== 'desc')
+    setWhen('per_page', String(historyViewState.per_page), historyViewState.per_page !== 50)
+    setWhen('page', String(page), page > 1)
+    if (next.toString() !== searchParams.toString()) {
+      observedUrlRef.current = next.toString()
+      setSearchParams(next, { replace: true })
+    }
+  }, [activeTab, authenticated, preferenceApplied, historyViewState, page, searchParams, setSearchParams])
+
+  useEffect(() => {
+    if (!authenticated || activeTab !== 'history' || !preferenceApplied || preferenceSaving) return
+    const serialized = JSON.stringify(historyViewState)
+    if (lastSavedStateRef.current === null) {
+      lastSavedStateRef.current = serialized
+      return
+    }
+    if (serialized === lastSavedStateRef.current) return
+    const timeout = window.setTimeout(() => {
+      if (suppressPreferenceSaveRef.current) return
+      saveHistoryPreference(historyViewState, {
+        onSuccess: () => { lastSavedStateRef.current = serialized },
+      })
+    }, 700)
+    return () => window.clearTimeout(timeout)
+  }, [authenticated, activeTab, preferenceApplied, preferenceSaving, historyViewState, saveHistoryPreference])
+
+  useEffect(() => {
+    if (!authenticated) {
+      if (requesterScope === 'mine') setRequesterScope('all')
+      if (historyIdentity) setHistoryIdentity('')
+    }
+  }, [authenticated, requesterScope, historyIdentity])
 
   const { data: clustersData } = useClusters()
   const { data: forgeProjects } = useForgeProjects()
@@ -1449,27 +1734,70 @@ export default function Testing() {
     return { historyStartUtc: startUtc, historyEndUtc: endUtc }
   }, [activeTab, historyDate, historyFromTime, historyToTime, tz])
 
+  const historyReady = activeTab !== 'history' || preferenceApplied
   const { data: jobsData, isLoading, isError, error, refetch } = useFournosJobs({
     tab: activeTab === 'live' || activeTab === 'history' ? activeTab : undefined,
     project: filterProject || undefined,
     cluster: filterCluster || undefined,
     status: filterStatus || undefined,
     requester_scope: requesterScope,
+    q: activeTab === 'history' ? debouncedTextFilters.query || undefined : undefined,
+    identity: activeTab === 'history' && authenticated ? debouncedTextFilters.identity || undefined : undefined,
+    failure_outcome: activeTab === 'history' ? historyFailure || undefined : undefined,
+    repository: activeTab === 'history' ? debouncedTextFilters.repository || undefined : undefined,
+    pr_number: activeTab === 'history' ? historyViewState.pr_number ?? undefined : undefined,
+    source_sha: activeTab === 'history' && /^[0-9a-fA-F]{4,64}$/.test(debouncedTextFilters.sourceSha) ? debouncedTextFilters.sourceSha : undefined,
+    forge: activeTab === 'history' ? debouncedTextFilters.forge || undefined : undefined,
+    tags: activeTab === 'history' ? debouncedTextFilters.tags || undefined : undefined,
     start_time: historyStartUtc,
     end_time: historyEndUtc,
     sort_by: activeSort.by || undefined,
     sort_dir: activeSort.dir,
     page,
-    per_page: 50,
-  })
+    per_page: activeTab === 'history' ? historyPerPage : 50,
+  }, (activeTab === 'live' || activeTab === 'history') && historyReady)
 
   const cancelJob = useCancelJob()
   const deleteJob = useDeleteHistoryJob()
   const rerunJob = useRerunJob()
 
   const setTab = (tab: string) => {
-    setSearchParams({ tab })
+    const next = new URLSearchParams(searchParams)
+    next.set('tab', tab)
+    next.delete('page')
+    setSearchParams(next)
     setPage(1)
+  }
+
+  const clearHistoryFilters = () => {
+    setHistoryQuery('')
+    setFilterProject('')
+    setFilterCluster('')
+    setFilterStatus('')
+    setRequesterScope('all')
+    setHistoryIdentity('')
+    setHistoryFailure('')
+    setHistoryRepository('')
+    setHistoryPrNumber('')
+    setHistorySourceSha('')
+    setHistoryForge('')
+    setHistoryTags('')
+    setHistoryDate('')
+    setHistoryFromTime('00:00')
+    setHistoryToTime('23:59')
+    setPage(1)
+  }
+
+  const resetSavedHistoryView = () => {
+    suppressPreferenceSaveRef.current = true
+    resetHistoryPreference(undefined, {
+      onSuccess: () => {
+        applyHistoryView(DEFAULT_HISTORY_VIEW)
+        lastSavedStateRef.current = JSON.stringify(DEFAULT_HISTORY_VIEW)
+        suppressPreferenceSaveRef.current = false
+      },
+      onError: () => { suppressPreferenceSaveRef.current = false },
+    })
   }
 
   return (
@@ -1516,6 +1844,20 @@ export default function Testing() {
       {(activeTab === 'live' || activeTab === 'history') && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2.5">
           <span className="text-xs font-medium uppercase tracking-wide text-gray-400">Filters</span>
+          {activeTab === 'history' && (
+            <label className="relative w-64">
+              <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-2 h-4 w-4 text-gray-400" />
+              <input
+                type="search"
+                value={historyQuery}
+                maxLength={200}
+                onChange={(e) => { setHistoryQuery(e.target.value); setPage(1) }}
+                placeholder="Search run history"
+                aria-label="Search run history"
+                className="w-full rounded-md border-gray-300 py-1.5 pl-8 pr-3 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+              />
+            </label>
+          )}
           <SearchableSelect
             value={filterProject}
             onChange={(v) => { setFilterProject(v); setPage(1) }}
@@ -1553,7 +1895,7 @@ export default function Testing() {
           <SearchableSelect
             value={filterStatus}
             onChange={(v) => { setFilterStatus(v); setPage(1) }}
-            options={ALL_STATUSES}
+            options={activeTab === 'history' ? HISTORY_STATUSES : ALL_STATUSES}
             placeholder="All statuses"
             className="w-44"
           />
@@ -1600,12 +1942,88 @@ export default function Testing() {
               )}
             </>
           )}
-          {(filterProject || filterCluster || filterStatus || historyDate || requesterScope === 'mine') && (
+          {activeTab === 'history' && (
+            <details className="w-full border-t border-gray-200 pt-2">
+              <summary className="cursor-pointer select-none text-xs font-medium text-gray-600 hover:text-gray-800">
+                Provenance and failure filters
+              </summary>
+              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {authenticated && (
+                  <input
+                    type="search"
+                    value={historyIdentity}
+                    maxLength={255}
+                    onChange={(e) => { setHistoryIdentity(e.target.value); setPage(1) }}
+                    placeholder="Owner or requester"
+                    aria-label="Owner or requester"
+                    className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                  />
+                )}
+                <select
+                  value={historyFailure}
+                  onChange={(e) => { setHistoryFailure(e.target.value); setPage(1) }}
+                  aria-label="Failure outcome"
+                  className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                >
+                  <option value="">All failure outcomes</option>
+                  <option value="failed">Failed</option>
+                  <option value="cancelled">Cancelled</option>
+                  <option value="infrastructure_error">Infrastructure error</option>
+                  <option value="unknown">Unknown</option>
+                </select>
+                <input
+                  value={historyRepository}
+                  maxLength={255}
+                  onChange={(e) => { setHistoryRepository(e.target.value); setPage(1) }}
+                  placeholder="Repository (owner/name)"
+                  aria-label="Source repository"
+                  className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                />
+                <input
+                  type="number"
+                  min={1}
+                  value={historyPrNumber}
+                  onChange={(e) => { setHistoryPrNumber(e.target.value); setPage(1) }}
+                  placeholder="PR number"
+                  aria-label="Pull request number"
+                  className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                />
+                <input
+                  value={historySourceSha}
+                  maxLength={64}
+                  onChange={(e) => {
+                    setHistorySourceSha(e.target.value.replace(/[^0-9a-fA-F]/g, '').slice(0, 64))
+                    setPage(1)
+                  }}
+                  placeholder="Requested/submitted SHA"
+                  aria-label="Source commit SHA"
+                  className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                />
+                <input
+                  value={historyForge}
+                  maxLength={255}
+                  onChange={(e) => { setHistoryForge(e.target.value); setPage(1) }}
+                  placeholder="Forge version or image digest"
+                  aria-label="Forge version or image digest"
+                  className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                />
+                <input
+                  value={historyTags}
+                  onChange={(e) => { setHistoryTags(e.target.value); setPage(1) }}
+                  placeholder="Tags (comma-separated)"
+                  aria-label="Tags"
+                  className="rounded-md border-gray-300 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                />
+              </div>
+            </details>
+          )}
+          {(
+            (activeTab === 'live' && (filterProject || filterCluster || filterStatus || requesterScope === 'mine')) ||
+            (activeTab === 'history' && (filterProject || filterCluster || filterStatus || historyDate || requesterScope === 'mine' || historyQuery || historyIdentity || historyFailure || historyRepository || historyPrNumber || historySourceSha || historyForge || historyTags))
+          ) && (
             <button
-              onClick={() => {
-                setFilterProject(''); setFilterCluster(''); setFilterStatus('')
-                setHistoryDate(''); setHistoryFromTime('00:00'); setHistoryToTime('23:59')
-                setRequesterScope('all')
+              onClick={activeTab === 'history' ? clearHistoryFilters : () => {
+                setFilterProject(''); setFilterCluster(''); setFilterStatus(''); setRequesterScope('all'); setPage(1)
               }}
               className="inline-flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-gray-600"
               title="Clear filters"
@@ -1613,8 +2031,31 @@ export default function Testing() {
               <XMarkIcon className="h-3.5 w-3.5" /> Clear
             </button>
           )}
-          <span className="ml-auto text-xs text-gray-400">
+          {activeTab === 'history' && authenticated && (
+            <button
+              type="button"
+              onClick={resetSavedHistoryView}
+              disabled={preferenceResetting || preferenceSaving}
+              className="text-xs font-medium text-gray-400 hover:text-gray-600 disabled:opacity-50"
+            >
+              {preferenceResetting ? 'Resetting...' : 'Reset saved view'}
+            </button>
+          )}
+          {activeTab === 'history' && (
+            <label className="ml-auto flex items-center gap-1 text-xs text-gray-400">
+              Rows
+              <select
+                value={historyPerPage}
+                onChange={(e) => { setHistoryPerPage(Number(e.target.value)); setPage(1) }}
+                className="rounded border-gray-300 py-1 pl-1.5 pr-6 text-xs"
+              >
+                {[25, 50, 100, 200].map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>
+          )}
+          <span className={clsx('text-xs text-gray-400', activeTab !== 'history' && 'ml-auto')}>
             {jobsData?.total ?? 0} {activeTab === 'live' ? 'active' : 'archived'} jobs
+            {activeTab === 'history' && authenticated && preferenceSaving ? ' · Saving view…' : ''}
           </span>
         </div>
       )}
@@ -1669,7 +2110,7 @@ export default function Testing() {
         )}
 
         {activeTab === 'history' && !isError && (
-          isLoading ? (
+          (isLoading || !historyReady) ? (
             <div className="text-center py-12 text-gray-400">Loading history...</div>
           ) : (
             <>
@@ -1681,11 +2122,11 @@ export default function Testing() {
                 onDelete={(name) => { if (confirm(`Delete job "${name}" from history?`)) deleteJob.mutate(name) }}
                 onRerun={(name) => rerunJob.mutate(name)}
               />
-              {(jobsData?.total ?? 0) > 50 && (
+              {(jobsData?.total ?? 0) > historyPerPage && (
                 <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200">
                   <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="text-sm text-gray-500 disabled:opacity-40">Previous</button>
-                  <span className="text-sm text-gray-500">Page {page} of {Math.ceil((jobsData?.total ?? 0) / 50)}</span>
-                  <button disabled={(jobsData?.jobs.length ?? 0) < 50} onClick={() => setPage(p => p + 1)} className="text-sm text-gray-500 disabled:opacity-40">Next</button>
+                  <span className="text-sm text-gray-500">Page {page} of {Math.ceil((jobsData?.total ?? 0) / historyPerPage)}</span>
+                  <button disabled={(jobsData?.jobs.length ?? 0) < historyPerPage} onClick={() => setPage(p => p + 1)} className="text-sm text-gray-500 disabled:opacity-40">Next</button>
                 </div>
               )}
             </>

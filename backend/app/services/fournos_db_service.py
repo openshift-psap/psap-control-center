@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional, Sequence, Tuple
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import Text, and_, cast, func, literal_column, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.fournos_job import FournosJob, FournosJobEvent
+from app.models.fournos_job import (
+    FournosHistoryPreference,
+    FournosJob,
+    FournosJobEvent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +43,56 @@ _SORT_COLUMNS = {
     "duration": FournosJob.duration_seconds,
     "triggered_by": FournosJob.triggered_by_schedule,
 }
+
+_PUBLIC_SEARCH_COLUMNS = (
+    FournosJob.name,
+    FournosJob.project,
+    FournosJob.cluster,
+    FournosJob.pipeline,
+    FournosJob.preset,
+    FournosJob.source_repository,
+    FournosJob.source_pr_url,
+    FournosJob.source_head_branch,
+    FournosJob.source_requested_sha,
+    FournosJob.source_resolved_sha,
+    FournosJob.status,
+    FournosJob.failure_outcome,
+)
+
+_IDENTITY_SEARCH_COLUMNS = (
+    FournosJob.owner,
+    FournosJob.requester_name,
+    FournosJob.requester_email,
+)
+
+
+def _text_search_expression(columns, query: str, *, postgres: bool):
+    """Build indexed PostgreSQL token search with a portable test fallback."""
+    if postgres:
+        empty = literal_column("''")
+        space = literal_column("' '")
+        document = func.coalesce(columns[0], empty)
+        for column in columns[1:]:
+            document = document + space + func.coalesce(column, empty)
+        config = literal_column("'simple'::regconfig")
+        return func.to_tsvector(config, document).op("@@")(
+            func.plainto_tsquery(config, query)
+        )
+
+    tokens = [token.lower() for token in query.split() if token]
+    return and_(
+        *[
+            or_(
+                *[
+                    func.lower(func.coalesce(column, "")).contains(
+                        token, autoescape=True
+                    )
+                    for column in columns
+                ]
+            )
+            for token in tokens
+        ]
+    )
 
 
 async def upsert_job(session: AsyncSession, **kwargs: Any) -> FournosJob:
@@ -107,6 +161,14 @@ async def list_jobs(
     status: Optional[str] = None,
     owner: Optional[str] = None,
     requester_subject: Optional[str] = None,
+    query: Optional[str] = None,
+    identity: Optional[str] = None,
+    failure_outcome: Optional[str] = None,
+    repository: Optional[str] = None,
+    pr_number: Optional[int] = None,
+    source_sha: Optional[str] = None,
+    forge: Optional[str] = None,
+    tags: Optional[Sequence[str]] = None,
     created_after: Optional[datetime] = None,
     created_before: Optional[datetime] = None,
     sort_by: Optional[str] = None,
@@ -114,6 +176,7 @@ async def list_jobs(
     limit: int = 50,
     offset: int = 0,
 ) -> Tuple[Sequence[FournosJob], int]:
+    is_pg = settings.DATABASE_URL.startswith("postgresql")
     filters = [
         FournosJob.status.in_(TERMINAL_STATUSES),
         FournosJob.is_lock.is_(False),
@@ -129,6 +192,74 @@ async def list_jobs(
         filters.append(FournosJob.owner == owner)
     if requester_subject:
         filters.append(FournosJob.requester_subject == requester_subject)
+    if query:
+        filters.append(
+            _text_search_expression(
+                _PUBLIC_SEARCH_COLUMNS, query, postgres=is_pg
+            )
+        )
+    if identity:
+        filters.append(
+            _text_search_expression(
+                _IDENTITY_SEARCH_COLUMNS, identity, postgres=is_pg
+            )
+        )
+    if failure_outcome:
+        filters.append(FournosJob.failure_outcome == failure_outcome)
+    if repository:
+        filters.append(
+            func.lower(FournosJob.source_repository) == repository.lower()
+        )
+    if pr_number:
+        filters.append(FournosJob.source_pr_number == pr_number)
+    if source_sha:
+        normalized_sha = source_sha.lower()
+        filters.append(or_(
+            func.lower(FournosJob.source_requested_sha).startswith(
+                normalized_sha, autoescape=True
+            ),
+            func.lower(FournosJob.source_resolved_sha).startswith(
+                normalized_sha, autoescape=True
+            ),
+        ))
+    if forge:
+        normalized_forge = forge.lower()
+        if is_pg:
+            git_version = func.lower(cast(
+                FournosJob.forge_execution.op("#>>")(
+                    literal_column("'{gitVersions,0,version}'")
+                ),
+                Text,
+            ))
+            image_id = cast(
+                FournosJob.forge_execution.op("#>>")(
+                    literal_column("'{images,0,imageID}'")
+                ),
+                Text,
+            )
+            image_digest = func.lower(func.split_part(
+                image_id, literal_column("'@'"), literal_column("2")
+            ))
+            filters.append(or_(
+                git_version.startswith(normalized_forge, autoescape=True),
+                image_digest.startswith(normalized_forge, autoescape=True),
+            ))
+        else:
+            filters.append(
+                func.lower(cast(FournosJob.forge_execution, Text)).contains(
+                    normalized_forge, autoescape=True
+                )
+            )
+    if tags:
+        if is_pg:
+            filters.append(FournosJob.tags.contains(list(tags)))
+        else:
+            for tag in tags:
+                filters.append(
+                    func.lower(cast(FournosJob.tags, Text)).contains(
+                        tag.lower(), autoescape=True
+                    )
+                )
     if created_after:
         filters.append(FournosJob.created_at >= created_after)
     if created_before:
@@ -138,7 +269,6 @@ async def list_jobs(
     order_by = sort_col.asc() if sort_dir == "asc" else sort_col.desc()
     tie_breakers = (FournosJob.created_at.desc(), FournosJob.name.desc())
 
-    is_pg = settings.DATABASE_URL.startswith("postgresql")
     if is_pg:
         # Postgres: get the page of rows and the total count in a single
         # query via a window function, instead of running the same
@@ -183,6 +313,74 @@ async def list_jobs(
     total = count_result.scalar() or 0
 
     return jobs, total
+
+
+async def get_history_preference(
+    session: AsyncSession, subject: str
+) -> Optional[FournosHistoryPreference]:
+    result = await session.execute(
+        select(FournosHistoryPreference).where(
+            FournosHistoryPreference.subject == subject
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def save_history_preference(
+    session: AsyncSession,
+    *,
+    subject: str,
+    schema_version: int,
+    state: dict,
+) -> FournosHistoryPreference:
+    if settings.DATABASE_URL.startswith("postgresql"):
+        now = datetime.now(timezone.utc)
+        stmt = (
+            pg_insert(FournosHistoryPreference)
+            .values(
+                subject=subject,
+                schema_version=schema_version,
+                state=state,
+                updated_at=now,
+            )
+            .on_conflict_do_update(
+                index_elements=["subject"],
+                set_={
+                    "schema_version": schema_version,
+                    "state": state,
+                    "updated_at": now,
+                },
+            )
+            .returning(FournosHistoryPreference)
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one()
+
+    preference = await get_history_preference(session, subject)
+    if preference is None:
+        preference = FournosHistoryPreference(
+            subject=subject,
+            schema_version=schema_version,
+            state=state,
+        )
+        session.add(preference)
+    else:
+        preference.schema_version = schema_version
+        preference.state = state
+        preference.updated_at = datetime.now(timezone.utc)
+    await session.flush()
+    return preference
+
+
+async def delete_history_preference(
+    session: AsyncSession, subject: str
+) -> bool:
+    preference = await get_history_preference(session, subject)
+    if preference is None:
+        return False
+    await session.delete(preference)
+    await session.flush()
+    return True
 
 
 async def list_jobs_by_schedule(

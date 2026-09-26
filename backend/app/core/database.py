@@ -130,7 +130,7 @@ async def _run_migrations(conn):
                 raise
 
     await _migrate_cluster_costs_multi_month(conn, is_pg)
-    await _create_missing_indexes(conn)
+    await _create_missing_indexes(conn, is_pg)
 
 
 # Indexes added after the tables already existed in deployed DBs — plain
@@ -148,6 +148,7 @@ _INDEXES = [
     ("ix_fournos_jobs_requester_subject", "fournos_jobs", "requester_subject"),
     ("ix_fournos_jobs_requester_email", "fournos_jobs", "requester_email"),
     ("ix_fournos_jobs_source_repository", "fournos_jobs", "source_repository"),
+    ("ix_fournos_jobs_source_repository_lower", "fournos_jobs", "LOWER(source_repository)"),
     ("ix_fournos_jobs_source_pr_number", "fournos_jobs", "source_pr_number"),
     ("ix_fournos_jobs_source_requested_sha", "fournos_jobs", "source_requested_sha"),
     ("ix_fournos_jobs_source_resolved_sha", "fournos_jobs", "source_resolved_sha"),
@@ -162,8 +163,75 @@ _INDEXES = [
     ("ix_fournos_jobs_history", "fournos_jobs", "status, is_lock, trigger_type, completed_at"),
 ]
 
+# PostgreSQL-only indexes for the richer History query contract. Full-text
+# search deliberately excludes owner/requester identity; those fields use a
+# separate authenticated-only vector so public callers cannot probe them.
+_POSTGRES_INDEX_DDLS = [
+    """
+    CREATE INDEX IF NOT EXISTS ix_fournos_jobs_public_search_gin
+    ON fournos_jobs USING GIN (
+      to_tsvector(
+        'simple',
+        COALESCE(name, '') || ' ' ||
+        COALESCE(project, '') || ' ' ||
+        COALESCE(cluster, '') || ' ' ||
+        COALESCE(pipeline, '') || ' ' ||
+        COALESCE(preset, '') || ' ' ||
+        COALESCE(source_repository, '') || ' ' ||
+        COALESCE(source_pr_url, '') || ' ' ||
+        COALESCE(source_head_branch, '') || ' ' ||
+        COALESCE(source_requested_sha, '') || ' ' ||
+        COALESCE(source_resolved_sha, '') || ' ' ||
+        COALESCE(status, '') || ' ' ||
+        COALESCE(failure_outcome, '')
+      )
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_fournos_jobs_identity_search_gin
+    ON fournos_jobs USING GIN (
+      to_tsvector(
+        'simple',
+        COALESCE(owner, '') || ' ' ||
+        COALESCE(requester_name, '') || ' ' ||
+        COALESCE(requester_email, '')
+      )
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_fournos_jobs_tags_gin
+    ON fournos_jobs USING GIN (tags)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_fournos_jobs_forge_version_prefix
+    ON fournos_jobs (
+      LOWER(CAST(forge_execution #>> '{gitVersions,0,version}' AS TEXT))
+      text_pattern_ops
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_fournos_jobs_forge_digest_prefix
+    ON fournos_jobs (
+      LOWER(
+        split_part(
+          CAST(forge_execution #>> '{images,0,imageID}' AS TEXT),
+          '@', 2
+        )
+      ) text_pattern_ops
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_fournos_jobs_requested_sha_prefix
+    ON fournos_jobs (LOWER(source_requested_sha) text_pattern_ops)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_fournos_jobs_resolved_sha_prefix
+    ON fournos_jobs (LOWER(source_resolved_sha) text_pattern_ops)
+    """,
+]
 
-async def _create_missing_indexes(conn):
+
+async def _create_missing_indexes(conn, is_pg: bool):
     for index_name, table, columns in _INDEXES:
         try:
             await conn.execute(text(
@@ -172,6 +240,13 @@ async def _create_missing_indexes(conn):
         except (OperationalError, ProgrammingError) as e:
             logger.error(f"Index creation failed for {index_name}: {e}")
             raise
+    if is_pg:
+        for ddl in _POSTGRES_INDEX_DDLS:
+            try:
+                await conn.execute(text(ddl))
+            except (OperationalError, ProgrammingError) as e:
+                logger.error(f"PostgreSQL History index creation failed: {e}")
+                raise
 
 
 async def _migrate_cluster_costs_multi_month(conn, is_pg: bool):
@@ -224,7 +299,11 @@ async def init_db():
     from app.models.node_history import NodeHistory  # noqa: F401
     from app.models.instance_type_rate import InstanceTypeRate  # noqa: F401
     from app.models.cost_snapshot import CostSnapshot  # noqa: F401
-    from app.models.fournos_job import FournosJob, FournosJobEvent  # noqa: F401
+    from app.models.fournos_job import (  # noqa: F401
+        FournosHistoryPreference,
+        FournosJob,
+        FournosJobEvent,
+    )
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

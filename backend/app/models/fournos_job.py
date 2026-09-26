@@ -147,3 +147,19 @@ class FournosJobEvent(Base):
 
     def __repr__(self):
         return f"<FournosJobEvent({self.phase} @ {self.timestamp})>"
+
+
+class FournosHistoryPreference(Base):
+    """Latest History view saved for one authenticated principal."""
+
+    __tablename__ = "fournos_history_preferences"
+
+    subject = Column(String(255), primary_key=True)
+    schema_version = Column(Integer, nullable=False, default=1)
+    state = Column(JSONB, nullable=False, default=dict)
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
