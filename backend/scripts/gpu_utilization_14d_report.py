@@ -27,9 +27,10 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pandas as pd
 import plotly
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import plotly.express as px
+from plotly.graph_objects import Figure
 
 ROOT = Path(__file__).resolve().parent
 DATA_OUTPUT = ROOT / "gpu-utilization-14d-data.json"
@@ -46,6 +47,11 @@ CLUSTERS = {
                               "nodepalette": ["#0072B2", "#56B4E9"]},
     "psap-h100-diadochos": {"port": DC_PORT, "color": "#D55E00", "color2": "#F4A582", "gpus": 32, "node": "H100", "hostlabel": "Hostname",
                             "nodepalette": ["#D55E00", "#F4A582", "#F9CB9C", "#8B3A00"]},
+}
+
+GPU_PALETTES = {
+    "psap-h200-fire-athena": ["#0072B2", "#009E73", "#D55E00", "#CC79A7", "#E69F00", "#56B4E9", "#F0E442", "#999999", "#7570B3", "#6A51A3", "#B4332F", "#33A02C", "#FB9A99", "#A6761D", "#1F78B4", "#FF7F00"],
+    "psap-h100-diadochos": ["#E31A1C", "#FF7F00", "#FEB24C", "#FDB863", "#E34A33", "#B33626", "#8B0000", "#CC3311", "#FF6655", "#D95319", "#C7254E", "#91278D", "#7741FF", "#6610F2", "#3A87AD", "#2C7BB6", "#21918C", "#21A58E", "#33B5E5", "#4DBDD5", "#00A9AD", "#00BFBD", "#00C2D8", "#00CFFF", "#2CA8FF", "#2D74DA", "#2E44EF", "#3329EE", "#3900B5", "#3E008A", "#4E006E", "#7E2F8E"],
 }
 
 
@@ -144,30 +150,41 @@ def summarize(data: dict) -> list[dict]:
     return rows
 
 
-def line(series: dict, color: str, name: str, dash: str = "solid", yaxis: str = "y") -> go.Scatter:
-    pts = [p for p in series["values"] if p[1] is not None]
-    xs = [datetime.fromtimestamp(t, tz=timezone.utc) for t, _ in pts]
-    ys = [v for _, v in pts]
-    return go.Scatter(x=xs, y=ys, name=name, mode="lines", line=dict(color=color, width=1.6, dash=dash), yaxis=yaxis)
+def to_frame(data: dict, key: str, label_fn) -> pd.DataFrame:
+    """Flatten raw query results into a long-form DataFrame for plotly express."""
+    rows = []
+    for name in cluster_names(data):
+        for series in data[name][key]:
+            label = label_fn(name, series["metric"])
+            for t, v in series["values"]:
+                if v is None:
+                    continue
+                rows.append({
+                    "cluster": name,
+                    "time": datetime.fromtimestamp(t, tz=timezone.utc),
+                    "label": label,
+                    "value": v,
+                })
+    return pd.DataFrame(rows, columns=["cluster", "time", "label", "value"])
 
 
-def chart_cluster(data: dict) -> go.Figure:
-    fig = go.Figure()
-    for name in cluster_names(data):
-        cfg = CLUSTERS[name]
-        series = data[name]["cluster"][0]
-        fig.add_trace(line(series, cfg["color"], f"{name} avg GPU util"))
-    for name in cluster_names(data):
-        cfg = CLUSTERS[name]
-        series = data[name]["active"][0]
-        pts = [p for p in series["values"] if p[1] is not None]
-        fig.add_trace(go.Scatter(
-            x=[datetime.fromtimestamp(t, tz=timezone.utc) for t, _ in pts],
-            y=[v for _, v in pts],
-            name=f"{name} active GPUs",
-            mode="lines", line=dict(color=cfg["color"], width=1.0, dash="dot"),
-            yaxis="y2",
-        ))
+def chart_cluster(data: dict) -> Figure:
+    names = cluster_names(data)
+    cmap = {name: CLUSTERS[name]["color"] for name in names}
+    util = to_frame(data, "cluster", lambda name, _m: name)
+    active = to_frame(data, "active", lambda name, _m: name)
+    fig = px.line(
+        util, x="time", y="value", color="cluster", color_discrete_map=cmap,
+        labels={"value": "Avg GPU utilization %", "cluster": "", "time": ""},
+    )
+    fig_active = px.line(
+        active, x="time", y="value", color="cluster", color_discrete_map=cmap,
+        labels={"value": "", "cluster": "", "time": ""},
+    )
+    fig_active.for_each_trace(
+        lambda t: t.update(yaxis="y2", name=f"{t.name} active GPUs", line_dash="dot")
+    )
+    fig.add_traces(fig_active.data)
     fig.update_layout(
         title="Cluster-level GPU utilization — last 14 days (1h buckets, UTC)",
         yaxis=dict(title="Avg GPU utilization %", range=[0, 105]),
@@ -178,51 +195,62 @@ def chart_cluster(data: dict) -> go.Figure:
     return fig
 
 
-def chart_node(data: dict) -> go.Figure:
-    fig = go.Figure()
+def chart_node(data: dict) -> Figure:
+    cmap, dmap = {}, {}
     for name in cluster_names(data):
         cfg = CLUSTERS[name]
-        for i, series in enumerate(sorted(data[name]["node"], key=lambda s: s["metric"]["host"])):
-            color = cfg["color"] if i == 0 else cfg["color2"]
-            dash = "solid" if i == 0 else "dash"
-            fig.add_trace(line(series, color, f"{node_short(series['metric']['host'])} ({name})", dash=dash))
-    fig.update_layout(
+        hosts = sorted(data[name]["node"], key=lambda s: s["metric"]["host"])
+        for i, s in enumerate(hosts):
+            label = f"{node_short(s['metric']['host'])} ({name})"
+            cmap[label] = cfg["color"] if i == 0 else cfg["color2"]
+            dmap[label] = "solid" if i == 0 else "dash"
+    df = to_frame(data, "node", lambda name, m: f"{node_short(m['host'])} ({name})")
+    fig = px.line(
+        df, x="time", y="value", color="label",
+        color_discrete_map=cmap,
+        labels={"value": "Avg GPU utilization %", "label": "", "time": "", "cluster": None},
         title="Per-node average GPU utilization — last 14 days (1h buckets, UTC)",
-        yaxis=dict(title="Avg GPU utilization %", range=[0, 105]),
+    )
+    fig.for_each_trace(lambda t: t.update(line_dash=dmap[t.name]))
+    fig.update_layout(
+        yaxis=dict(range=[0, 105]),
         legend=dict(orientation="h", y=1.12),
         height=460,
     )
     return fig
 
 
-def chart_gpu(data: dict) -> go.Figure:
+def chart_gpu(data: dict) -> Figure:
     names = cluster_names(data)
-    if len(names) == 1:
-        fig = go.Figure()
-    else:
-        fig = make_subplots(rows=len(names), cols=1, shared_xaxes=True, vertical_spacing=0.10, row_heights=[1 / len(names)] * len(names))
-    palettes = {
-        "psap-h200-fire-athena": ["#0072B2", "#009E73", "#D55E00", "#CC79A7", "#E69F00", "#56B4E9", "#F0E442", "#999999", "#7570B3", "#6A51A3", "#B4332F", "#33A02C", "#FB9A99", "#A6761D", "#1F78B4", "#FF7F00"],
-        "psap-h100-diadochos": ["#E31A1C", "#FF7F00", "#FEB24C", "#FDB863", "#E34A33", "#B33626", "#8B0000", "#CC3311", "#FF6655", "#D95319", "#C7254E", "#91278D", "#7741FF", "#6610F2", "#3A87AD", "#2C7BB6", "#21918C", "#21A58E", "#33B5E5", "#4DBDD5", "#00A9AD", "#00BFBD", "#00C2D8", "#00CFFF", "#2CA8FF", "#2D74DA", "#2E44EF", "#3329EE", "#3900B5", "#3E008A", "#4E006E", "#7E2F8E"],
-    }
-    for row, name in enumerate(names, start=1):
-        cfg = CLUSTERS[name]
-        series_list = sorted(data[name]["gpu"], key=lambda s: (s["metric"]["host"], int(s["metric"]["gpu"])))
-        for i, series in enumerate(series_list):
-            label = f"{node_short(series['metric']['host'])} gpu{series['metric']['gpu']}"
-            if len(names) == 1:
-                fig.add_trace(line(series, palettes[name][i % len(palettes[name])], label))
-            else:
-                fig.add_trace(line(series, palettes[name][i % len(palettes[name])], label), row=row, col=1)
-        if len(names) > 1:
-            fig.update_yaxes(title_text=f"{name} avg util %", range=[0, 105], row=row, col=1)
-        fig.add_annotation(
-            text=f"{name} — {len(series_list)}x {cfg['node']}",
-            xref="paper", yref="paper", x=0.0, y=1.02 - (row - 1) / max(len(names) - 1, 1) * 0.52,
-            showarrow=False, font=dict(size=13, weight="bold"),
+    cmap = {}
+    for name in names:
+        palette = GPU_PALETTES[name]
+        series_list = sorted(
+            data[name]["gpu"], key=lambda s: (s["metric"]["host"], int(s["metric"]["gpu"]))
         )
-    fig.update_layout(
+        for i, s in enumerate(series_list):
+            label = f"{node_short(s['metric']['host'])} gpu{s['metric']['gpu']}"
+            cmap[label] = palette[i % len(palette)]
+    df = to_frame(data, "gpu", lambda name, m: f"{node_short(m['host'])} gpu{m['gpu']}")
+    faceted = len(names) > 1
+    fig = px.line(
+        df, x="time", y="value", color="label", color_discrete_map=cmap,
+        facet_row="cluster" if faceted else None,
+        labels={"value": "Avg GPU utilization %", "label": "", "time": ""},
         title="Per-GPU average utilization — last 14 days (1h buckets, UTC)",
+    )
+    if faceted:
+        for ax in range(2, len(names) + 1):
+            fig.update_layout(**{f"xaxis{ax}_matches": "x", f"xaxis{ax}_visible": False})
+        for row, name in enumerate(names, start=1):
+            fig.update_yaxes(title_text=f"{name} avg util %", range=[0, 105], row=row, col=1)
+        for a in fig.layout.annotations:
+            text = a.text.split("=", 1)[1] if "=" in a.text else a.text
+            if text in CLUSTERS:
+                cfg = CLUSTERS[text]
+                a.text = f"{text} — {cfg['gpus']}x {cfg['node']}"
+                a.font = dict(size=13, weight="bold")
+    fig.update_layout(
         legend=dict(orientation="h", y=1.12),
         height=950,
     )

@@ -5,6 +5,8 @@ import json
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
+from datetime import datetime, timezone
 from unittest import mock
 
 import pytest
@@ -234,6 +236,85 @@ class TestStartForward:
             with pytest.raises(RuntimeError, match="did not become ready"):
                 report.start_forward("/tmp/kc", 9090)
         proc.terminate.assert_called_once_with()
+
+
+class TestToFrame:
+    def test_long_form_drops_none(self):
+        data = _sample_data()
+        data[FA]["node"][0]["values"].append([T0 + 7200, None])
+        df = report.to_frame(
+            data, "node",
+            lambda name, m: f"{report.node_short(m['host'])} ({name})",
+        )
+        assert list(df.columns) == ["cluster", "time", "label", "value"]
+        assert len(df) == 4  # 2 nodes x 2 hourly points, None dropped
+        assert df["value"].notna().all()
+        assert set(df["label"]) == {
+            f"{report.node_short('fa-node-abc')} ({FA})",
+            f"{report.node_short('dc-node-xyz')} ({DC})",
+        }
+        assert df["time"].iloc[0] == datetime.fromtimestamp(T0, tz=timezone.utc)
+        assert set(df["cluster"]) == {FA, DC}
+
+    def test_gpu_labels(self):
+        data = _sample_data()
+        df = report.to_frame(
+            data, "gpu",
+            lambda name, m: f"{report.node_short(m['host'])} gpu{m['gpu']}",
+        )
+        assert set(df["label"]) == {
+            f"{report.node_short('fa-node-abc')} gpu0",
+            f"{report.node_short('fa-node-abc')} gpu1",
+            f"{report.node_short('dc-node-xyz')} gpu0",
+            f"{report.node_short('dc-node-xyz')} gpu1",
+        }
+
+
+class TestCharts:
+    def test_cluster_figure_traces_and_axes(self):
+        fig = report.chart_cluster(_sample_data())
+        assert len(fig.data) == 4  # 2 util + 2 active
+        active = [t for t in fig.data if t.yaxis == "y2"]
+        assert len(active) == 2
+        assert all(t.line.dash == "dot" for t in active)
+        assert all("active GPUs" in t.name for t in active)
+        assert fig.layout.yaxis2.overlaying == "y"
+
+    def test_node_figure_colors_and_dashes(self):
+        data = _sample_data()
+        fig = report.chart_node(data)
+        assert len(fig.data) == 2  # one node per cluster
+        by_name = {t.name: t for t in fig.data}
+        first = report.node_short("fa-node-abc")
+        assert by_name[f"{first} ({FA})"].line.color == report.CLUSTERS[FA]["color"]
+        assert by_name[f"{first} ({FA})"].line.dash == "solid"
+        # a second node in the same cluster gets the secondary color + dash
+        data[FA]["node"].append(_series(host="fa-node-abc2"))
+        fig2 = report.chart_node(data)
+        second = [t for t in fig2.data
+                  if t.name == f"{report.node_short('fa-node-abc2')} ({FA})"][0]
+        assert second.line.color == report.CLUSTERS[FA]["color2"]
+        assert second.line.dash == "dash"
+
+    def test_gpu_figure_facets_and_palette(self):
+        data = _sample_data()
+        fig = report.chart_gpu(data)
+        assert len(fig.data) == 4  # 2 GPUs per cluster
+        assert len(fig.layout.annotations) >= 2  # facet titles
+        texts = {a.text for a in fig.layout.annotations}
+        assert f"{FA} — {report.CLUSTERS[FA]['gpus']}x {report.CLUSTERS[FA]['node']}" in texts
+        assert f"{DC} — {report.CLUSTERS[DC]['gpus']}x {report.CLUSTERS[DC]['node']}" in texts
+        fa_traces = [
+            t for t in fig.data if report.node_short("fa-node-abc") in t.name
+        ]
+        palette = report.GPU_PALETTES[FA]
+        assert {t.line.color for t in fa_traces} == {palette[0], palette[1]}
+
+    def test_gpu_figure_single_cluster_no_facets(self):
+        data = {FA: _sample_data()[FA], "_meta": {}}
+        fig = report.chart_gpu(data)
+        assert len(fig.data) == 2
+        assert not any(a.text == FA for a in fig.layout.annotations)
 
 
 class TestRender:
