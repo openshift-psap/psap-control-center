@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Build the 14-day GPU utilization report for psap-h200-fire-athena and psap-h100-diadochos.
+"""Build a multi-day GPU utilization report for caller-specified OpenShift clusters.
 
 Pulls DCGM_FI_DEV_GPU_UTIL / DCGM_FI_DEV_FB_USED from each cluster's OpenShift
 Prometheus through a local kubectl port-forward and renders a self-contained
 Plotly HTML report with cluster-level, per-node, and per-GPU time series.
 
-Prerequisites (run before invoking):
-  kubectl --kubeconfig <fire-athena-kc> -n openshift-monitoring port-forward svc/prometheus-k8s 9090:9091 &
-  kubectl --kubeconfig <diadochos-kc>    -n openshift-monitoring port-forward svc/prometheus-k8s 9093:9091 &
+Cluster topology (name, kubeconfig, port, DCGM hostname label) is entirely
+supplied by the caller, e.g.:
 
-Usage:
-  python3 generate_gpu_utilization_14d_report.py <fire-athena-kubeconfig> <diadochos-kubeconfig>
-  python3 generate_gpu_utilization_14d_report.py --no-fetch   # re-render from saved data
+  python3 gpu_utilization_report.py \
+    --cluster my-cluster-a --kubeconfig /path/a.kc --port 9090 --hostlabel hostname \
+    --cluster my-cluster-b --kubeconfig /path/b.kc --port 9093 --hostlabel Hostname \
+    --days 14 --step 3600 --out-dir /tmp/reports
+
+  python3 gpu_utilization_report.py --no-fetch   # re-render from saved data
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ import subprocess
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -33,41 +35,53 @@ import plotly.express as px
 from plotly.graph_objects import Figure
 
 ROOT = Path(__file__).resolve().parent
-DATA_OUTPUT = ROOT / "gpu-utilization-14d-data.json"
-OUTPUT = ROOT / "gpu-utilization-14d-report.html"
 
-RANGE_DAYS = 14
-STEP_SECONDS = 3600
-FA_PORT = 9090
-DC_PORT = 9093
+DEFAULT_DAYS = 14
+DEFAULT_STEP = 3600
+DEFAULT_PORT = 9090
+DEFAULT_HOSTLABEL = "hostname"
 FB_ACTIVE_THRESHOLD_MIB = 1024
 
-CLUSTERS = {
-    "psap-h200-fire-athena": {"port": FA_PORT, "color": "#0072B2", "color2": "#56B4E9", "gpus": 16, "node": "H200", "hostlabel": "hostname",
-                              "nodepalette": ["#0072B2", "#56B4E9"]},
-    "psap-h100-diadochos": {"port": DC_PORT, "color": "#D55E00", "color2": "#F4A582", "gpus": 32, "node": "H100", "hostlabel": "Hostname",
-                            "nodepalette": ["#D55E00", "#F4A582", "#F9CB9C", "#8B3A00"]},
-}
 
-GPU_PALETTES = {
-    "psap-h200-fire-athena": ["#0072B2", "#009E73", "#D55E00", "#CC79A7", "#E69F00", "#56B4E9", "#F0E442", "#999999", "#7570B3", "#6A51A3", "#B4332F", "#33A02C", "#FB9A99", "#A6761D", "#1F78B4", "#FF7F00"],
-    "psap-h100-diadochos": ["#E31A1C", "#FF7F00", "#FEB24C", "#FDB863", "#E34A33", "#B33626", "#8B0000", "#CC3311", "#FF6655", "#D95319", "#C7254E", "#91278D", "#7741FF", "#6610F2", "#3A87AD", "#2C7BB6", "#21918C", "#21A58E", "#33B5E5", "#4DBDD5", "#00A9AD", "#00BFBD", "#00C2D8", "#00CFFF", "#2CA8FF", "#2D74DA", "#2E44EF", "#3329EE", "#3900B5", "#3E008A", "#4E006E", "#7E2F8E"],
-}
-
-
-def queries_for(name: str) -> dict:
-    h = CLUSTERS[name]["hostlabel"]
+def queries_for(hostlabel: str) -> dict:
     return {
         "cluster": "avg(DCGM_FI_DEV_GPU_UTIL)",
         "active": f"count(DCGM_FI_DEV_FB_USED > {FB_ACTIVE_THRESHOLD_MIB})",
-        "node": f"avg by ({h})(DCGM_FI_DEV_GPU_UTIL)",
-        "gpu": f"avg by ({h}, gpu)(DCGM_FI_DEV_GPU_UTIL)",
+        "node": f"avg by ({hostlabel})(DCGM_FI_DEV_GPU_UTIL)",
+        "gpu": f"avg by ({hostlabel}, gpu)(DCGM_FI_DEV_GPU_UTIL)",
     }
 
 
 def node_short(hostname: str) -> str:
     parts = hostname.rsplit("-", 3)
     return "-".join(parts[-2:]) if len(parts) >= 2 else hostname
+
+
+def parse_clusters(parser: argparse.ArgumentParser, args) -> dict:
+    """Validate the repeated --cluster/--kubeconfig/--port/--hostlabel options."""
+    if not args.cluster:
+        return {}
+    n = len(args.cluster)
+    if len(args.cluster) != len(set(args.cluster)):
+        parser.error("duplicate --cluster name")
+    for flag, values in (
+        ("--kubeconfig", args.kubeconfig),
+        ("--port", args.port),
+        ("--hostlabel", args.hostlabel),
+    ):
+        if values and len(values) != n:
+            parser.error(f"{flag} must be given once per --cluster ({n} needed, got {len(values)})")
+    if n > 1 and not args.port:
+        parser.error("--port is required when passing more than one --cluster")
+    kubeconfigs = args.kubeconfig or [None] * n
+    ports = args.port or [DEFAULT_PORT] * n
+    hostlabels = args.hostlabel or [DEFAULT_HOSTLABEL] * n
+    clusters = {}
+    for name, kc, port, hostlabel in zip(args.cluster, kubeconfigs, ports, hostlabels):
+        if not kc:
+            parser.error(f"--kubeconfig is required for cluster {name}")
+        clusters[name] = {"kubeconfig": kc, "port": port, "hostlabel": hostlabel}
+    return clusters
 
 
 def start_forward(kc: str, port: int) -> subprocess.Popen:
@@ -88,26 +102,25 @@ def start_forward(kc: str, port: int) -> subprocess.Popen:
     raise RuntimeError(f"port-forward on :{port} did not become ready in 45s")
 
 
-def fetch_cluster(name: str, kc: str, forwards: dict) -> dict:
-    port = CLUSTERS[name]["port"]
+def fetch_cluster(name: str, cfg: dict, forwards: dict) -> dict:
+    port = cfg["port"]
     if name not in forwards:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
                 pass  # already reachable, reuse
         except OSError:
-            forwards[name] = start_forward(kc, port)
+            forwards[name] = start_forward(cfg["kubeconfig"], port)
     token = subprocess.run(
-        ["kubectl", "--kubeconfig", kc, "-n", "openshift-monitoring", "create", "token", "prometheus-k8s", "--duration=1800s"],
+        ["kubectl", "--kubeconfig", cfg["kubeconfig"], "-n", "openshift-monitoring", "create", "token", "prometheus-k8s", "--duration=1800s"],
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     end = int(time.time())
-    start = end - RANGE_DAYS * 86400
-    hostlabel = CLUSTERS[name]["hostlabel"]
+    start = end - cfg["days"] * 86400
     result = {}
-    for key, query in queries_for(name).items():
+    for key, query in queries_for(cfg["hostlabel"]).items():
         url = (
             f"https://localhost:{port}/api/v1/query_range?"
-            + urllib.parse.urlencode({"query": query, "start": start, "end": end, "step": STEP_SECONDS})
+            + urllib.parse.urlencode({"query": query, "start": start, "end": end, "step": cfg["step"]})
         )
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
         ctx = ssl._create_unverified_context()
@@ -118,8 +131,8 @@ def fetch_cluster(name: str, kc: str, forwards: dict) -> dict:
         series = []
         for item in payload["data"]["result"]:
             metric = dict(item["metric"])
-            if hostlabel in metric:
-                metric["host"] = metric.pop(hostlabel)
+            if cfg["hostlabel"] in metric:
+                metric["host"] = metric.pop(cfg["hostlabel"])
             vals = [[float(t), None if v == "NaN" else float(v)] for t, v in item["values"]]
             series.append({"metric": metric, "values": vals})
         result[key] = series
@@ -131,23 +144,28 @@ def cluster_names(data: dict) -> list[str]:
     return [k for k in data if k != "_meta"]
 
 
-def summarize(data: dict) -> list[dict]:
+def summarize(data: dict, days: int, step: int) -> list[dict]:
     rows = []
     for name in cluster_names(data):
         util = data[name]["cluster"][0]["values"]
         active = data[name]["active"][0]["values"]
         utils = [v for _, v in util if v is not None]
         counts = [v for _, v in active if v is not None]
-        gpu_hours = sum(counts) * (STEP_SECONDS / 3600)
+        gpus = max(len(data[name]["gpu"]), 1)
+        gpu_hours = sum(counts) * (step / 3600)
         rows.append({
             "cluster": name,
-            "gpus": CLUSTERS[name]["gpus"],
+            "gpus": gpus,
             "avg_util_pct": round(sum(utils) / len(utils), 1),
             "peak_1h_avg_pct": round(max(utils), 1),
             "active_gpu_hours": round(gpu_hours, 0),
-            "pct_window_active": round(100 * gpu_hours / (RANGE_DAYS * 24 * CLUSTERS[name]["gpus"]), 1),
+            "pct_window_active": round(100 * gpu_hours / (days * 24 * gpus), 1),
         })
     return rows
+
+
+def step_label(step: int) -> str:
+    return f"{step // 3600}h" if step % 3600 == 0 else f"{step}s"
 
 
 def to_frame(data: dict, key: str, label_fn) -> pd.DataFrame:
@@ -168,17 +186,16 @@ def to_frame(data: dict, key: str, label_fn) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["cluster", "time", "label", "value"])
 
 
-def chart_cluster(data: dict) -> Figure:
+def chart_cluster(data: dict, days: int, step: int) -> Figure:
     names = cluster_names(data)
-    cmap = {name: CLUSTERS[name]["color"] for name in names}
     util = to_frame(data, "cluster", lambda name, _m: name)
     active = to_frame(data, "active", lambda name, _m: name)
     fig = px.line(
-        util, x="time", y="value", color="cluster", color_discrete_map=cmap,
+        util, x="time", y="value", color="cluster",
         labels={"value": "Avg GPU utilization %", "cluster": "", "time": ""},
     )
     fig_active = px.line(
-        active, x="time", y="value", color="cluster", color_discrete_map=cmap,
+        active, x="time", y="value", color="cluster",
         labels={"value": "", "cluster": "", "time": ""},
     )
     fig_active.for_each_trace(
@@ -186,7 +203,7 @@ def chart_cluster(data: dict) -> Figure:
     )
     fig.add_traces(fig_active.data)
     fig.update_layout(
-        title="Cluster-level GPU utilization — last 14 days (1h buckets, UTC)",
+        title=f"Cluster-level GPU utilization — last {days} days ({step_label(step)} buckets, UTC)",
         yaxis=dict(title="Avg GPU utilization %", range=[0, 105]),
         yaxis2=dict(title="Active GPUs (VRAM > 1 GiB)", overlaying="y", side="right", range=[-2, 40], showgrid=False),
         legend=dict(orientation="h", y=1.12),
@@ -195,23 +212,13 @@ def chart_cluster(data: dict) -> Figure:
     return fig
 
 
-def chart_node(data: dict) -> Figure:
-    cmap, dmap = {}, {}
-    for name in cluster_names(data):
-        cfg = CLUSTERS[name]
-        hosts = sorted(data[name]["node"], key=lambda s: s["metric"]["host"])
-        for i, s in enumerate(hosts):
-            label = f"{node_short(s['metric']['host'])} ({name})"
-            cmap[label] = cfg["color"] if i == 0 else cfg["color2"]
-            dmap[label] = "solid" if i == 0 else "dash"
+def chart_node(data: dict, days: int, step: int) -> Figure:
     df = to_frame(data, "node", lambda name, m: f"{node_short(m['host'])} ({name})")
     fig = px.line(
         df, x="time", y="value", color="label",
-        color_discrete_map=cmap,
-        labels={"value": "Avg GPU utilization %", "label": "", "time": "", "cluster": None},
-        title="Per-node average GPU utilization — last 14 days (1h buckets, UTC)",
+        labels={"value": "Avg GPU utilization %", "label": "", "time": ""},
+        title=f"Per-node average GPU utilization — last {days} days ({step_label(step)} buckets, UTC)",
     )
-    fig.for_each_trace(lambda t: t.update(line_dash=dmap[t.name]))
     fig.update_layout(
         yaxis=dict(range=[0, 105]),
         legend=dict(orientation="h", y=1.12),
@@ -220,35 +227,26 @@ def chart_node(data: dict) -> Figure:
     return fig
 
 
-def chart_gpu(data: dict) -> Figure:
+def chart_gpu(data: dict, days: int, step: int) -> Figure:
     names = cluster_names(data)
-    cmap = {}
-    for name in names:
-        palette = GPU_PALETTES[name]
-        series_list = sorted(
-            data[name]["gpu"], key=lambda s: (s["metric"]["host"], int(s["metric"]["gpu"]))
-        )
-        for i, s in enumerate(series_list):
-            label = f"{node_short(s['metric']['host'])} gpu{s['metric']['gpu']}"
-            cmap[label] = palette[i % len(palette)]
     df = to_frame(data, "gpu", lambda name, m: f"{node_short(m['host'])} gpu{m['gpu']}")
     faceted = len(names) > 1
     fig = px.line(
-        df, x="time", y="value", color="label", color_discrete_map=cmap,
+        df, x="time", y="value", color="label",
         facet_row="cluster" if faceted else None,
         labels={"value": "Avg GPU utilization %", "label": "", "time": ""},
-        title="Per-GPU average utilization — last 14 days (1h buckets, UTC)",
+        title=f"Per-GPU average utilization — last {days} days ({step_label(step)} buckets, UTC)",
     )
     if faceted:
         for ax in range(2, len(names) + 1):
             fig.update_layout(**{f"xaxis{ax}_matches": "x", f"xaxis{ax}_visible": False})
         for row, name in enumerate(names, start=1):
             fig.update_yaxes(title_text=f"{name} avg util %", range=[0, 105], row=row, col=1)
+        counts = df.groupby("cluster")["label"].nunique().to_dict()
         for a in fig.layout.annotations:
             text = a.text.split("=", 1)[1] if "=" in a.text else a.text
-            if text in CLUSTERS:
-                cfg = CLUSTERS[text]
-                a.text = f"{text} — {cfg['gpus']}x {cfg['node']}"
+            if text in counts:
+                a.text = f"{text} — {counts[text]} GPUs"
                 a.font = dict(size=13, weight="bold")
     fig.update_layout(
         legend=dict(orientation="h", y=1.12),
@@ -257,21 +255,21 @@ def chart_gpu(data: dict) -> Figure:
     return fig
 
 
-def render(data: dict) -> None:
-    summaries = summarize(data)
+def render(data: dict, days: int, step: int, out_path: Path) -> None:
+    summaries = summarize(data, days, step)
     rows_html = "".join(
         "<tr><td>{cluster}</td><td>{gpus}</td><td>{avg_util_pct}%</td><td>{peak_1h_avg_pct}%</td>"
         "<td>{active_gpu_hours:.0f}</td><td>{pct_window_active}%</td></tr>".format(**row)
         for row in summaries
     )
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    start = datetime.fromtimestamp(time.time() - RANGE_DAYS * 86400, tz=timezone.utc).strftime("%Y-%m-%d")
+    start = datetime.fromtimestamp(time.time() - days * 86400, tz=timezone.utc).strftime("%Y-%m-%d")
     names = cluster_names(data)
-    cluster_desc = " and ".join(f"<b>{n}</b> ({CLUSTERS[n]['gpus']}x {CLUSTERS[n]['node']})" for n in names)
+    cluster_desc = " and ".join(f"<b>{n}</b> ({len(data[n]['gpu'])} GPUs)" for n in names)
     figures = {
-        "c1": chart_cluster(data),
-        "c2": chart_node(data),
-        "c3": chart_gpu(data),
+        "c1": chart_cluster(data, days, step),
+        "c2": chart_node(data, days, step),
+        "c3": chart_gpu(data, days, step),
     }
     plotly_js = plotly.offline.get_plotlyjs()
     figure_scripts = "\n".join(
@@ -280,12 +278,12 @@ def render(data: dict) -> None:
         for div, fig in figures.items()
     )
     html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>GPU utilization 14d — fire-athena + diadochos</title>
+<html><head><meta charset="utf-8"><title>GPU utilization {days}d report</title>
 <script>{plotly_js}</script>
 </head><body style="font-family: -apple-system, sans-serif; max-width: 1200px; margin: 24px auto; color: #111;">
-<h1>GPU utilization — last {RANGE_DAYS} days</h1>
+<h1>GPU utilization — last {days} days</h1>
 <p>Clusters: {cluster_desc}.
-Window: {start} to now (UTC), 1-hour buckets over 30s DCGM samples.
+Window: {start} to now (UTC), {step_label(step)} buckets.
 "Active GPU" = VRAM usage above {FB_ACTIVE_THRESHOLD_MIB} MiB. Generated {generated}.</p>
 <table border="1" cellspacing="0" cellpadding="6" style="border-collapse: collapse; margin-bottom: 24px;">
 <tr style="background:#eee;"><th>Cluster</th><th>GPUs</th><th>Window avg util</th><th>Peak 1h avg</th><th>Active GPU-hours</th><th>% of GPU-time active</th></tr>
@@ -293,51 +291,70 @@ Window: {start} to now (UTC), 1-hour buckets over 30s DCGM samples.
 </table>
 {figure_scripts}
 </body></html>"""
-    OUTPUT.write_text(html)
-    print(OUTPUT)
+    out_path.write_text(html)
+    print(out_path)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("fa_kc", nargs="?", help="fire-athena kubeconfig path")
-    parser.add_argument("dc_kc", nargs="?", help="diadochos kubeconfig path")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cluster", action="append", metavar="NAME",
+                        help="cluster name; repeat together with --kubeconfig for multiple clusters")
+    parser.add_argument("--kubeconfig", action="append", metavar="PATH",
+                        help="kubeconfig path for the matching --cluster")
+    parser.add_argument("--port", action="append", type=int, metavar="PORT",
+                        help="local port for the matching --cluster Prometheus port-forward")
+    parser.add_argument("--hostlabel", action="append", metavar="LABEL",
+                        help="DCGM hostname metric label for the matching --cluster")
     parser.add_argument("--no-fetch", action="store_true", help="render from saved data JSON")
-    parser.add_argument("--only", choices=sorted(CLUSTERS), help="fetch/render a single cluster only")
+    parser.add_argument("--only", metavar="NAME", help="fetch/render a single cluster only")
+    parser.add_argument("--days", type=int, default=DEFAULT_DAYS, help="look-back window in days")
+    parser.add_argument("--step", type=int, default=DEFAULT_STEP, help="query step in seconds")
+    parser.add_argument("--out-dir", type=Path, default=ROOT, help="directory for data JSON and HTML report")
     args = parser.parse_args()
 
-    pairs = [("psap-h200-fire-athena", args.fa_kc), ("psap-h100-diadochos", args.dc_kc)]
-    if args.only:
-        pairs = [p for p in pairs if p[0] == args.only]
+    days, step = args.days, args.step
+    out_dir = args.out_dir
+    data_path = out_dir / f"gpu-utilization-{days}d-data.json"
+    out_path = out_dir / f"gpu-utilization-{days}d-report.html"
+
+    clusters = parse_clusters(parser, args)
+    for cfg in clusters.values():
+        cfg["days"] = days
+        cfg["step"] = step
 
     if args.no_fetch:
-        data = json.loads(DATA_OUTPUT.read_text())
+        data = json.loads(data_path.read_text())
         if args.only:
             data = {k: v for k, v in data.items() if k == args.only or k == "_meta"}
-        render(data)
+        render(data, days, step, out_path)
         return
 
-    missing = [name for name, kc in pairs if not kc]
-    if missing:
-        parser.error(f"kubeconfig path(s) missing for: {', '.join(missing)}")
+    if not clusters:
+        parser.error("at least one --cluster/--kubeconfig pair is required (or use --no-fetch)")
+    if args.only:
+        clusters = {n: c for n, c in clusters.items() if n == args.only}
+        if not clusters:
+            parser.error(f"--only {args.only} not among the --cluster names")
+
     forwards: dict[str, subprocess.Popen] = {}
     data = {}
     try:
-        for name, kc in pairs:
+        for name, cfg in clusters.items():
             print(f"Fetching {name} ...")
-            data[name] = fetch_cluster(name, kc, forwards)
+            data[name] = fetch_cluster(name, cfg, forwards)
         data["_meta"] = {
             "generated": datetime.now(timezone.utc).isoformat(),
-            "range_days": RANGE_DAYS,
-            "step_seconds": STEP_SECONDS,
+            "days": days,
+            "step_seconds": step,
             "active_threshold_mib": FB_ACTIVE_THRESHOLD_MIB,
         }
-        DATA_OUTPUT.write_text(json.dumps(data, indent=1))
-        print(DATA_OUTPUT)
+        data_path.write_text(json.dumps(data, indent=1))
+        print(data_path)
     finally:
         for proc in forwards.values():
             proc.terminate()
             proc.wait()
-    render(data)
+    render(data, days, step, out_path)
 
 
 if __name__ == "__main__":

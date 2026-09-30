@@ -1,11 +1,11 @@
 """Unit tests for scripts.gpu_utilization_14d_report (offline, mocked I/O)."""
 
+import argparse
 import io
 import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
 from datetime import datetime, timezone
 from unittest import mock
 
@@ -13,10 +13,11 @@ import pytest
 
 import scripts.gpu_utilization_14d_report as report
 
-
-FA = "psap-h200-fire-athena"
-DC = "psap-h100-diadochos"
+# Arbitrary cluster names used as data keys in these tests.
+FA = "cluster-a"
+DC = "cluster-b"
 T0 = 1_700_000_000
+DAYS, STEP = 14, 3600
 
 
 def _series(host=None, gpu=None, values=(50.0, 60.0)):
@@ -27,7 +28,7 @@ def _series(host=None, gpu=None, values=(50.0, 60.0)):
         metric["gpu"] = gpu
     return {
         "metric": metric,
-        "values": [[T0 + i * report.STEP_SECONDS, v] for i, v in enumerate(values)],
+        "values": [[T0 + i * STEP, v] for i, v in enumerate(values)],
     }
 
 
@@ -51,7 +52,14 @@ def _sample_data():
                 _series(host="dc-node-xyz", gpu="1"),
             ],
         },
-        "_meta": {"range_days": report.RANGE_DAYS},
+        "_meta": {"days": DAYS},
+    }
+
+
+def _cfg(port=9090, hostlabel="hostname"):
+    return {
+        "kubeconfig": "/tmp/kc", "port": port, "hostlabel": hostlabel,
+        "days": DAYS, "step": STEP,
     }
 
 
@@ -73,7 +81,7 @@ def _prom_payload():
             "result": [
                 {
                     "metric": {"hostname": "node-abc-123"},
-                    "values": [[T0, "50"], [T0 + 3600, "NaN"]],
+                    "values": [[T0, "50"], [T0 + STEP, "NaN"]],
                 }
             ]
         },
@@ -81,19 +89,18 @@ def _prom_payload():
 
 
 class TestQueriesFor:
-    def test_fire_athena(self):
-        assert report.queries_for(FA) == {
+    def test_queries(self):
+        assert report.queries_for("hostname") == {
             "cluster": "avg(DCGM_FI_DEV_GPU_UTIL)",
-            "active": "count(DCGM_FI_DEV_FB_USED > 1024)",
+            "active": f"count(DCGM_FI_DEV_FB_USED > {report.FB_ACTIVE_THRESHOLD_MIB})",
             "node": "avg by (hostname)(DCGM_FI_DEV_GPU_UTIL)",
             "gpu": "avg by (hostname, gpu)(DCGM_FI_DEV_GPU_UTIL)",
         }
 
-    def test_diadochos_uses_capitalized_hostlabel(self):
-        q = report.queries_for(DC)
+    def test_alternate_hostlabel(self):
+        q = report.queries_for("Hostname")
         assert q["node"] == "avg by (Hostname)(DCGM_FI_DEV_GPU_UTIL)"
         assert q["gpu"] == "avg by (Hostname, gpu)(DCGM_FI_DEV_GPU_UTIL)"
-        assert q["active"] == f"count(DCGM_FI_DEV_FB_USED > {report.FB_ACTIVE_THRESHOLD_MIB})"
 
 
 class TestNodeShort:
@@ -110,6 +117,67 @@ class TestNodeShort:
         assert report.node_short(hostname) == expected
 
 
+class TestParseClusters:
+    def _args(self, **kw):
+        base = {
+            "cluster": None, "kubeconfig": None, "port": None,
+            "hostlabel": None, "no_fetch": False, "only": None,
+            "days": DAYS, "step": STEP, "out_dir": None,
+        }
+        base.update(kw)
+        return argparse.Namespace(**base)
+
+    def test_empty(self):
+        assert report.parse_clusters(argparse.ArgumentParser(), self._args()) == {}
+
+    def test_single_cluster_defaults(self):
+        clusters = report.parse_clusters(
+            argparse.ArgumentParser(),
+            self._args(cluster=["c1"], kubeconfig=["/tmp/a.kc"]),
+        )
+        assert clusters == {"c1": {"kubeconfig": "/tmp/a.kc",
+                                   "port": report.DEFAULT_PORT,
+                                   "hostlabel": report.DEFAULT_HOSTLABEL}}
+
+    def test_multiple_clusters(self):
+        clusters = report.parse_clusters(
+            argparse.ArgumentParser(),
+            self._args(cluster=["c1", "c2"], kubeconfig=["/tmp/a.kc", "/tmp/b.kc"],
+                       port=[9090, 9093], hostlabel=["hostname", "Hostname"]),
+        )
+        assert clusters["c1"]["port"] == 9090
+        assert clusters["c2"]["port"] == 9093
+        assert clusters["c2"]["hostlabel"] == "Hostname"
+
+    def test_duplicate_names_error(self):
+        with pytest.raises(SystemExit):
+            report.parse_clusters(
+                argparse.ArgumentParser(),
+                self._args(cluster=["c1", "c1"], kubeconfig=["/tmp/a.kc", "/tmp/b.kc"]),
+            )
+
+    def test_kubeconfig_count_mismatch_error(self):
+        with pytest.raises(SystemExit):
+            report.parse_clusters(
+                argparse.ArgumentParser(),
+                self._args(cluster=["c1", "c2"], kubeconfig=["/tmp/a.kc"]),
+            )
+
+    def test_missing_kubeconfig_error(self):
+        with pytest.raises(SystemExit):
+            report.parse_clusters(
+                argparse.ArgumentParser(),
+                self._args(cluster=["c1"]),
+            )
+
+    def test_multi_cluster_requires_port(self):
+        with pytest.raises(SystemExit):
+            report.parse_clusters(
+                argparse.ArgumentParser(),
+                self._args(cluster=["c1", "c2"], kubeconfig=["/tmp/a.kc", "/tmp/b.kc"]),
+            )
+
+
 class TestClusterNames:
     def test_excludes_meta(self):
         assert report.cluster_names({"a": {}, "_meta": {}, "b": {}}) == ["a", "b"]
@@ -119,31 +187,31 @@ class TestSummarize:
     def test_math_and_meta_exclusion(self):
         data = {
             FA: {
-                "cluster": [
-                    {"metric": {}, "values": [[1, 50.0], [2, None], [3, 100.0]]}
-                ],
+                "cluster": [{"metric": {}, "values": [[1, 50.0], [2, None], [3, 100.0]]}],
                 "active": [{"metric": {}, "values": [[1, 8.0], [2, 8.0]]}],
+                "gpu": [_series(), _series(), _series(), _series()],
             },
             "_meta": {},
         }
-        rows = report.summarize(data)
+        rows = report.summarize(data, DAYS, STEP)
         assert len(rows) == 1
         row = rows[0]
         assert row["cluster"] == FA
-        assert row["gpus"] == 16
+        assert row["gpus"] == 4  # derived from gpu series count
         assert row["avg_util_pct"] == 75.0
         assert row["peak_1h_avg_pct"] == 100.0
         assert row["active_gpu_hours"] == 16.0
-        total_gpu_hours = report.RANGE_DAYS * 24 * 16
-        assert row["pct_window_active"] == round(100 * 16 / total_gpu_hours, 1)
+        assert row["pct_window_active"] == round(100 * 16 / (DAYS * 24 * 4), 1)
 
 
 class TestFetchCluster:
-    def _run(self, payload=None, forwards=None):
+    def _run(self, payload=None, forwards=None, cfg=None):
         if forwards is None:
             forwards = {FA: mock.Mock()}
         if payload is None:
             payload = _prom_payload()
+        if cfg is None:
+            cfg = _cfg()
         requests = []
 
         def fake_urlopen(req, timeout=None, context=None):
@@ -154,7 +222,7 @@ class TestFetchCluster:
             report.urllib.request, "urlopen", side_effect=fake_urlopen
         ), mock.patch.object(report.json, "load", side_effect=lambda _r: payload):
             run.return_value = mock.Mock(stdout="token-123\n")
-            result = report.fetch_cluster(FA, "/tmp/kc", forwards)
+            result = report.fetch_cluster(FA, cfg, forwards)
         return result, requests
 
     def test_fetches_all_queries_and_normalizes(self):
@@ -162,11 +230,18 @@ class TestFetchCluster:
         assert set(result) == {"cluster", "active", "node", "gpu"}
         assert len(requests) == 4
         assert all(req.headers["Authorization"] == "Bearer token-123" for req in requests)
-        assert all("step=3600" in req.full_url for req in requests)
+        assert all(f"step={STEP}" in req.full_url for req in requests)
+        assert all("https://localhost:9090" in req.full_url for req in requests)
         series = result["cluster"][0]
         assert series["metric"]["host"] == "node-abc-123"
         assert "hostname" not in series["metric"]
-        assert series["values"] == [[T0, 50.0], [T0 + 3600, None]]
+        assert series["values"] == [[T0, 50.0], [T0 + STEP, None]]
+
+    def test_alternate_hostlabel_normalized(self):
+        result, _ = self._run(cfg=_cfg(hostlabel="Hostname"))
+        # metric label "hostname" is absent, so no normalization happens,
+        # but queries used the caller-provided label
+        assert "host" not in result["cluster"][0]["metric"]
 
     def test_reuses_existing_forward(self):
         forwards = {FA: mock.Mock()}
@@ -176,10 +251,11 @@ class TestFetchCluster:
             report.urllib.request, "urlopen",
             side_effect=lambda *a, **k: FakeResponse(_prom_payload()),
         ), mock.patch.object(report.json, "load", side_effect=lambda _r: _prom_payload()):
-            report.fetch_cluster(FA, "/tmp/kc", forwards)
+            report.fetch_cluster(FA, _cfg(), forwards)
         start.assert_not_called()
 
     def test_starts_forward_when_port_unreachable(self):
+        cfg = _cfg(port=9093)
         with mock.patch.object(
             report.socket, "create_connection", side_effect=OSError
         ) as conn, mock.patch.object(
@@ -190,9 +266,9 @@ class TestFetchCluster:
             report.urllib.request, "urlopen",
             side_effect=lambda *a, **k: FakeResponse(_prom_payload()),
         ), mock.patch.object(report.json, "load", side_effect=lambda _r: _prom_payload()):
-            report.fetch_cluster(FA, "/tmp/kc", forwards={})
-        conn.assert_called_once_with(("127.0.0.1", report.FA_PORT), timeout=1)
-        start.assert_called_once_with("/tmp/kc", report.FA_PORT)
+            report.fetch_cluster(FA, cfg, forwards={})
+        conn.assert_called_once_with(("127.0.0.1", 9093), timeout=1)
+        start.assert_called_once_with("/tmp/kc", 9093)
 
     def test_error_status_raises(self):
         payload = {"status": "error", "data": {}}
@@ -241,7 +317,7 @@ class TestStartForward:
 class TestToFrame:
     def test_long_form_drops_none(self):
         data = _sample_data()
-        data[FA]["node"][0]["values"].append([T0 + 7200, None])
+        data[FA]["node"][0]["values"].append([T0 + 2 * STEP, None])
         df = report.to_frame(
             data, "node",
             lambda name, m: f"{report.node_short(m['host'])} ({name})",
@@ -272,7 +348,7 @@ class TestToFrame:
 
 class TestCharts:
     def test_cluster_figure_traces_and_axes(self):
-        fig = report.chart_cluster(_sample_data())
+        fig = report.chart_cluster(_sample_data(), DAYS, STEP)
         assert len(fig.data) == 4  # 2 util + 2 active
         active = [t for t in fig.data if t.yaxis == "y2"]
         assert len(active) == 2
@@ -280,54 +356,42 @@ class TestCharts:
         assert all("active GPUs" in t.name for t in active)
         assert fig.layout.yaxis2.overlaying == "y"
 
-    def test_node_figure_colors_and_dashes(self):
-        data = _sample_data()
-        fig = report.chart_node(data)
+    def test_node_figure(self):
+        fig = report.chart_node(_sample_data(), DAYS, STEP)
         assert len(fig.data) == 2  # one node per cluster
-        by_name = {t.name: t for t in fig.data}
-        first = report.node_short("fa-node-abc")
-        assert by_name[f"{first} ({FA})"].line.color == report.CLUSTERS[FA]["color"]
-        assert by_name[f"{first} ({FA})"].line.dash == "solid"
-        # a second node in the same cluster gets the secondary color + dash
-        data[FA]["node"].append(_series(host="fa-node-abc2"))
-        fig2 = report.chart_node(data)
-        second = [t for t in fig2.data
-                  if t.name == f"{report.node_short('fa-node-abc2')} ({FA})"][0]
-        assert second.line.color == report.CLUSTERS[FA]["color2"]
-        assert second.line.dash == "dash"
+        names = {t.name for t in fig.data}
+        assert f"{report.node_short('fa-node-abc')} ({FA})" in names
+        assert f"{report.node_short('dc-node-xyz')} ({DC})" in names
 
-    def test_gpu_figure_facets_and_palette(self):
+    def test_gpu_figure_facets_and_annotation(self):
         data = _sample_data()
-        fig = report.chart_gpu(data)
+        fig = report.chart_gpu(data, DAYS, STEP)
         assert len(fig.data) == 4  # 2 GPUs per cluster
-        assert len(fig.layout.annotations) >= 2  # facet titles
         texts = {a.text for a in fig.layout.annotations}
-        assert f"{FA} — {report.CLUSTERS[FA]['gpus']}x {report.CLUSTERS[FA]['node']}" in texts
-        assert f"{DC} — {report.CLUSTERS[DC]['gpus']}x {report.CLUSTERS[DC]['node']}" in texts
-        fa_traces = [
-            t for t in fig.data if report.node_short("fa-node-abc") in t.name
-        ]
-        palette = report.GPU_PALETTES[FA]
-        assert {t.line.color for t in fa_traces} == {palette[0], palette[1]}
+        assert f"{FA} — 2 GPUs" in texts
+        assert f"{DC} — 2 GPUs" in texts
 
     def test_gpu_figure_single_cluster_no_facets(self):
         data = {FA: _sample_data()[FA], "_meta": {}}
-        fig = report.chart_gpu(data)
+        fig = report.chart_gpu(data, DAYS, STEP)
         assert len(fig.data) == 2
         assert not any(a.text == FA for a in fig.layout.annotations)
+
+    def test_titles_use_days_and_step(self):
+        fig = report.chart_cluster(_sample_data(), 7, 900)
+        assert "last 7 days" in fig.layout.title.text
+        assert "900s buckets" in fig.layout.title.text
 
 
 class TestRender:
     def _render(self, tmp_path, monkeypatch, data=None):
         out = tmp_path / "report.html"
-        monkeypatch.setattr(report, "OUTPUT", out)
-        monkeypatch.setattr(report, "DATA_OUTPUT", tmp_path / "data.json")
         if data is None:
             data = _sample_data()
         with mock.patch.object(
             report.plotly.offline, "get_plotlyjs", return_value="/*plotlyjs*/"
         ):
-            report.render(data)
+            report.render(data, DAYS, STEP, out)
         return out.read_text()
 
     def test_summary_table_and_figures(self, tmp_path, monkeypatch):
@@ -338,66 +402,77 @@ class TestRender:
             assert f'id="{div}"' in html
             assert f'Plotly.newPlot("{div}"' in html
         assert "/*plotlyjs*/" in html
-        assert f"x {report.CLUSTERS[FA]['node']}" in html
-        assert f"x {report.CLUSTERS[DC]['node']}" in html
+        assert "2 GPUs" in html  # per-cluster GPU count derived from data
 
-    def test_single_cluster_skips_subplots(self, tmp_path, monkeypatch):
+    def test_single_cluster(self, tmp_path, monkeypatch):
         data = {FA: _sample_data()[FA], "_meta": {}}
         html = self._render(tmp_path, monkeypatch, data)
         assert FA in html and DC not in html
 
 
 class TestMain:
-    def _isolate(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(report, "DATA_OUTPUT", tmp_path / "data.json")
-        monkeypatch.setattr(report, "OUTPUT", tmp_path / "report.html")
-        return tmp_path
+    def _fetch_stub(self, fetched):
+        def fake(name, cfg, forwards):
+            fetched.append(name)
+            return _sample_data()[name]
+
+        return fake
 
     def test_fetch_path_writes_data_and_renders(self, tmp_path, monkeypatch, capsys):
-        self._isolate(tmp_path, monkeypatch)
-        monkeypatch.setattr(sys, "argv", ["prog", "/tmp/fa.kc", "/tmp/dc.kc"])
+        monkeypatch.setattr(
+            sys, "argv",
+            ["prog", "--cluster", FA, "--kubeconfig", "/tmp/a.kc",
+             "--cluster", DC, "--kubeconfig", "/tmp/b.kc",
+             "--port", "9090", "--port", "9093",
+             "--out-dir", str(tmp_path)],
+        )
         fetched = []
-        with mock.patch.object(
-            report, "fetch_cluster",
-            side_effect=lambda name, kc, fwd: fetched.append(name) or _sample_data()[name],
-        ):
+        with mock.patch.object(report, "fetch_cluster", self._fetch_stub(fetched)):
             report.main()
         assert fetched == [FA, DC]
-        payload = json.loads((tmp_path / "data.json").read_text())
-        assert payload["_meta"]["range_days"] == report.RANGE_DAYS
-        assert payload["_meta"]["step_seconds"] == report.STEP_SECONDS
-        assert (tmp_path / "report.html").exists()
+        payload = json.loads((tmp_path / f"gpu-utilization-{DAYS}d-data.json").read_text())
+        assert payload["_meta"]["days"] == DAYS
+        assert payload["_meta"]["step_seconds"] == STEP
+        assert (tmp_path / f"gpu-utilization-{DAYS}d-report.html").exists()
 
     def test_only_fetches_selected_cluster(self, tmp_path, monkeypatch):
-        self._isolate(tmp_path, monkeypatch)
-        monkeypatch.setattr(sys, "argv",
-                            ["prog", "/tmp/fa.kc", "/tmp/dc.kc", "--only", DC])
+        monkeypatch.setattr(
+            sys, "argv",
+            ["prog", "--cluster", FA, "--kubeconfig", "/tmp/a.kc",
+             "--cluster", DC, "--kubeconfig", "/tmp/b.kc",
+             "--port", "9090", "--port", "9093",
+             "--only", DC, "--out-dir", str(tmp_path)],
+        )
         fetched = []
-        with mock.patch.object(
-            report, "fetch_cluster",
-            side_effect=lambda name, kc, fwd: fetched.append(name) or _sample_data()[name],
-        ):
+        with mock.patch.object(report, "fetch_cluster", self._fetch_stub(fetched)):
             report.main()
         assert fetched == [DC]
 
+    def test_only_unknown_cluster_errors(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            sys, "argv",
+            ["prog", "--cluster", FA, "--kubeconfig", "/tmp/a.kc",
+             "--only", "nope", "--out-dir", str(tmp_path)],
+        )
+        with pytest.raises(SystemExit):
+            report.main()
+
     def test_no_fetch_renders_saved_data(self, tmp_path, monkeypatch):
-        self._isolate(tmp_path, monkeypatch)
-        (tmp_path / "data.json").write_text(json.dumps(_sample_data()))
-        monkeypatch.setattr(sys, "argv", ["prog", "--no-fetch"])
+        (tmp_path / f"gpu-utilization-{DAYS}d-data.json").write_text(json.dumps(_sample_data()))
+        monkeypatch.setattr(sys, "argv", ["prog", "--no-fetch", "--out-dir", str(tmp_path)])
         report.main()
-        assert (tmp_path / "report.html").exists()
+        assert (tmp_path / f"gpu-utilization-{DAYS}d-report.html").exists()
 
     def test_no_fetch_with_only_filters(self, tmp_path, monkeypatch):
-        self._isolate(tmp_path, monkeypatch)
-        (tmp_path / "data.json").write_text(json.dumps(_sample_data()))
-        monkeypatch.setattr(sys, "argv",
-                            ["prog", "--no-fetch", "--only", FA])
+        (tmp_path / f"gpu-utilization-{DAYS}d-data.json").write_text(json.dumps(_sample_data()))
+        monkeypatch.setattr(
+            sys, "argv", ["prog", "--no-fetch", "--only", FA, "--out-dir", str(tmp_path)]
+        )
         report.main()
-        html = (tmp_path / "report.html").read_text()
+        html = (tmp_path / f"gpu-utilization-{DAYS}d-report.html").read_text()
         assert FA in html and DC not in html
 
-    def test_missing_kubeconfig_errors(self, tmp_path, monkeypatch):
-        self._isolate(tmp_path, monkeypatch)
-        monkeypatch.setattr(sys, "argv", ["prog"])
+    def test_no_clusters_errors(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["prog", "--out-dir", str(tmp_path)])
         with pytest.raises(SystemExit):
             report.main()
