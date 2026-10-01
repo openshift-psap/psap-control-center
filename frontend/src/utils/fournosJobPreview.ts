@@ -11,6 +11,23 @@ import type { PullRequestSelection } from '../types'
 const NAMESPACE = 'fournos-jobs'
 const API_VERSION = 'fournos.dev/v1'
 
+export function mergeMatrixConfigOverrides(
+  pipelineOverrides: Record<string, unknown>,
+  formOverrides: Record<string, string>,
+): Record<string, string> {
+  const normalizedPipeline = Object.fromEntries(
+    Object.entries(pipelineOverrides).map(([key, value]) => [
+      key,
+      Array.isArray(value)
+        ? JSON.stringify(value)
+        : typeof value === 'boolean'
+          ? value ? 'true' : 'false'
+          : value == null ? '' : String(value),
+    ]),
+  )
+  return { ...normalizedPipeline, ...formOverrides }
+}
+
 /** Mirrors fournos_k8s_client.sanitize_job_name(prefix). */
 function sanitizeJobName(prefix: string): string {
   const now = new Date()
@@ -36,6 +53,7 @@ interface SharedInput {
   args: string[]
   configOverrides: Record<string, string>
   gpuType?: string
+  gpuCount?: number
   /** Cron expression, UTC — mutually exclusive with scheduledStartTime. */
   schedule?: string
   /** ISO 8601 UTC — mutually exclusive with schedule. */
@@ -84,7 +102,7 @@ export function buildSingleJobPreview(input: SharedInput): Record<string, unknow
     },
   }
   if (input.gpuType?.trim()) {
-    spec.hardware = { gpuType: input.gpuType.trim(), gpuCount: 1 }
+    spec.hardware = { gpuType: input.gpuType.trim(), gpuCount: input.gpuCount || 1 }
   }
   const env = sourceEnvironment(input)
   if (env) spec.env = env

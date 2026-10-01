@@ -2,10 +2,23 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+_FOURNOS_GPU_TYPE_RE = re.compile(r"^[a-z0-9]+$")
+
+
+def _validate_fournos_gpu_type(value: str) -> str:
+    normalized = value.strip()
+    if normalized and not _FOURNOS_GPU_TYPE_RE.fullmatch(normalized):
+        raise ValueError(
+            "gpu_type must be a lowercase alphanumeric Fournos short name"
+        )
+    return normalized
 
 
 # -- Job schemas --
@@ -390,6 +403,10 @@ class SubmitJobRequest(BaseModel):
     config_overrides: Dict[str, str] = Field(default_factory=dict)
     pull_request: Optional[PullRequestSelection] = None
     pull_sha: str = ""
+    # RHAIIS requires either a pinned commit/release/PR SHA or an explicit
+    # opt-in to the moving main branch. The backend validates this rather
+    # than relying only on the browser form.
+    use_latest_main: bool = False
     priority: str = "manual"
     gpu_type: str = ""
     gpu_count: int = 1
@@ -400,6 +417,11 @@ class SubmitJobRequest(BaseModel):
     schedule: str = ""
     work_items: List[WorkItemReference] = Field(default_factory=list, max_length=20)
     run_group_ids: List[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("gpu_type")
+    @classmethod
+    def validate_gpu_type(cls, value: str) -> str:
+        return _validate_fournos_gpu_type(value)
 
 
 class SubmitJobResponse(BaseModel):
@@ -437,11 +459,17 @@ class SubmitMatrixRequest(BaseModel):
     exclusive: bool = False
     pull_request: Optional[PullRequestSelection] = None
     pull_sha: str = ""
+    use_latest_main: bool = False
     gpu_type: str = ""
     scheduled_start_time: Optional[str] = None
     schedule: str = ""
     work_items: List[WorkItemReference] = Field(default_factory=list, max_length=20)
     run_group_ids: List[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("gpu_type")
+    @classmethod
+    def validate_gpu_type(cls, value: str) -> str:
+        return _validate_fournos_gpu_type(value)
 
 
 class SubmitMatrixResultItem(BaseModel):
@@ -569,6 +597,14 @@ class GitHubPR(BaseModel):
     repository: str
     url: str
     draft: bool = False
+
+
+class GitHubRelease(BaseModel):
+    tag_name: str
+    name: str
+    prerelease: bool = False
+    published_at: Optional[str] = None
+    html_url: str = ""
 
 
 # -- GitHub sync status --
