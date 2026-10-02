@@ -12,18 +12,24 @@ import {
   EyeSlashIcon,
   CheckCircleIcon,
   ExclamationTriangleIcon,
-  ClockIcon,
 } from '@heroicons/react/24/outline'
 import { useDropzone } from 'react-dropzone'
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useClusters, useCreateCluster, useDeleteCluster } from '../hooks/useClusters'
+import {
+  useClusters,
+  useClusterRefreshDisplayPreference,
+  useCreateCluster,
+  useDeleteCluster,
+  useSaveClusterRefreshDisplayPreference,
+} from '../hooks/useClusters'
 import { clusterApi } from '../services/api'
 import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import type { GpuAllocationStatus, ClusterCost } from '../types'
 import GpuDonutChart from '../components/GpuDonutChart'
-import { isAdmin } from '../stores/authStore'
+import ClusterRefreshIndicator from '../components/ClusterRefreshIndicator'
+import { isAdmin, isAuthenticated } from '../stores/authStore'
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime()
@@ -61,13 +67,21 @@ export default function Clusters() {
   const [kubeconfigFile, setKubeconfigFile] = useState<File | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshProgress, setRefreshProgress] = useState<RefreshProgress | null>(null)
-  const [countdown, setCountdown] = useState('')
   const prevLastRefresh = useRef<string | null>(null)
 
   const queryClient = useQueryClient()
   const { data, isLoading, refetch } = useClusters()
   const createCluster = useCreateCluster()
   const deleteCluster = useDeleteCluster()
+  const authenticated = isAuthenticated()
+  const {
+    data: refreshDisplayPreference,
+    isLoading: refreshDisplayPreferenceLoading,
+  } = useClusterRefreshDisplayPreference(authenticated)
+  const saveRefreshDisplayPreference = useSaveClusterRefreshDisplayPreference()
+  const refreshDisplayMode = authenticated && refreshDisplayPreferenceLoading
+    ? 'last_update'
+    : refreshDisplayPreference?.mode ?? 'countdown'
 
   const { data: schedule } = useQuery({
     queryKey: ['cluster-refresh-schedule'],
@@ -84,22 +98,6 @@ export default function Clusters() {
     }
     prevLastRefresh.current = schedule.last_refresh
   }, [schedule?.last_refresh, refetch, queryClient])
-
-  // Tick the countdown every second
-  useEffect(() => {
-    if (!schedule?.next_refresh) { setCountdown(''); return }
-
-    const tick = () => {
-      const diff = Math.max(0, Math.floor((new Date(schedule.next_refresh!).getTime() - Date.now()) / 1000))
-      const m = Math.floor(diff / 60)
-      const s = diff % 60
-      setCountdown(`${m}:${s.toString().padStart(2, '0')}`)
-    }
-
-    tick()
-    const id = setInterval(tick, 1000)
-    return () => clearInterval(id)
-  }, [schedule?.next_refresh])
 
   const serverRefreshing = schedule?.in_progress ?? false
 
@@ -287,22 +285,17 @@ export default function Clusters() {
           <div className="mt-1 flex items-center gap-4 text-sm text-gray-500">
             <span>Manage your OCP clusters and their kubeconfigs</span>
             {schedule && (
-              <span className="flex items-center gap-3 text-xs text-gray-400 border-l border-gray-200 pl-4">
-                <ClockIcon className="h-3.5 w-3.5 flex-shrink-0" />
-                {schedule.last_refresh ? (
-                  <span>Updated {format(new Date(schedule.last_refresh), 'MMM d, HH:mm:ss')}</span>
-                ) : (
-                  <span>No refresh yet</span>
-                )}
-                {schedule.in_progress ? (
-                  <span className="flex items-center gap-1 text-primary-600 font-medium">
-                    <ArrowPathIcon className="h-3 w-3 animate-spin" />
-                    Refreshing...
-                  </span>
-                ) : countdown ? (
-                  <span>Next in <span className="font-mono font-medium text-gray-600">{countdown}</span></span>
-                ) : null}
-              </span>
+              <ClusterRefreshIndicator
+                schedule={schedule}
+                mode={refreshDisplayMode}
+                canSavePreference={authenticated && !refreshDisplayPreferenceLoading}
+                saving={saveRefreshDisplayPreference.isPending}
+                onModeChange={(mode) => {
+                  if (mode !== refreshDisplayMode) {
+                    saveRefreshDisplayPreference.mutate(mode)
+                  }
+                }}
+              />
             )}
           </div>
         </div>

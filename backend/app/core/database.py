@@ -295,6 +295,7 @@ async def init_db():
     from app.models.user import User  # noqa: F401
     from app.models.gpu_pod_history import GpuPodHistory  # noqa: F401
     from app.models.setting import Setting  # noqa: F401
+    from app.models.user_preference import UserPreference  # noqa: F401
     from app.models.cluster_cost import ClusterCost  # noqa: F401
     from app.models.node_history import NodeHistory  # noqa: F401
     from app.models.instance_type_rate import InstanceTypeRate  # noqa: F401
