@@ -150,6 +150,13 @@ export interface ClusterListResponse {
   total: number
 }
 
+export type RefreshDisplayMode = 'countdown' | 'last_update'
+
+export interface RefreshDisplayPreference {
+  mode: RefreshDisplayMode
+  updated_at?: string | null
+}
+
 export interface NodeCostInfo {
   node: string
   instance_name?: string

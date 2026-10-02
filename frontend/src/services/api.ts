@@ -23,6 +23,8 @@ import type {
   HistoryFilterOptionsResponse,
   HistoryViewState,
   AuthConfig,
+  RefreshDisplayMode,
+  RefreshDisplayPreference,
 } from '../types'
 import { createLogger } from '../utils/logger'
 import { clearSession } from '../stores/authStore'
@@ -188,6 +190,18 @@ export const clusterApi = {
     completed: number
   }> => {
     const { data } = await api.get('/clusters/refresh-schedule')
+    return data
+  },
+
+  getRefreshDisplayPreference: async (): Promise<RefreshDisplayPreference> => {
+    const { data } = await api.get('/clusters/refresh-display-preference')
+    return data
+  },
+
+  saveRefreshDisplayPreference: async (
+    mode: RefreshDisplayMode,
+  ): Promise<RefreshDisplayPreference> => {
+    const { data } = await api.put('/clusters/refresh-display-preference', { mode })
     return data
   },
 }
