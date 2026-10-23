@@ -98,30 +98,6 @@ SAMPLE_RESERVATIONS: dict[str, Any] = {
     "total": 2,
 }
 
-SAMPLE_CREATED_RESERVATION: dict[str, Any] = {
-    "id": "99",
-    "title": "alice on gpu-cluster-01",
-    "cluster_id": "1",
-    "cluster_name": "gpu-cluster-01",
-    "user_name": "alice",
-    "user_email": "alice@example.com",
-    "team": "ml-training",
-    "start_time": "2025-06-01T09:00:00Z",
-    "end_time": "2025-06-01T17:00:00Z",
-    "status": "active",
-    "reservation_type": "cluster",
-}
-
-SAMPLE_CANCELLED_RESERVATION: dict[str, Any] = {
-    "id": "10",
-    "title": "alice job",
-    "cluster_id": "1",
-    "cluster_name": "gpu-cluster-01",
-    "user_name": "alice",
-    "status": "cancelled",
-}
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -139,7 +115,4 @@ def mock_client() -> ControlCenterClient:
     client.get_cluster = AsyncMock()
     client.list_reservations = AsyncMock(return_value=SAMPLE_RESERVATIONS)
     client.get_current_reservation = AsyncMock(return_value=SAMPLE_OCCUPANCY_FREE)
-    client.create_reservation = AsyncMock(return_value=(201, SAMPLE_CREATED_RESERVATION))
-    client.cancel_reservation = AsyncMock(return_value=(200, SAMPLE_CANCELLED_RESERVATION))
-    client.hard_delete_reservation = AsyncMock(return_value=204)
     return client

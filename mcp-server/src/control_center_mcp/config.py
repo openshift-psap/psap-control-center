@@ -8,8 +8,6 @@ class Settings(BaseSettings):
 
     Attributes:
         control_center_url: Base URL of the Control Center REST API.
-        admin_username: HTTP Basic Auth username for write operations.
-        admin_password: HTTP Basic Auth password for write operations.
         mcp_host: Host to bind the MCP SSE transport to.
         mcp_port: Port to bind the MCP SSE transport to.
         http_timeout: Timeout in seconds for HTTP requests to the Control Center API.
@@ -17,8 +15,6 @@ class Settings(BaseSettings):
     """
 
     control_center_url: str = "http://localhost:8000"
-    admin_username: str = "admin"
-    admin_password: str = "admin"
     mcp_host: str = "0.0.0.0"
     mcp_port: int = 8080
     http_timeout: float = 30.0

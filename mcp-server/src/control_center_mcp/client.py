@@ -18,9 +18,7 @@ class ControlCenterClient:
     """Thin async wrapper around the Control Center REST API.
 
     A single ``httpx.AsyncClient`` is created on first use and shared
-    across every method call.  Read operations are unauthenticated.
-    Write operations (POST, PUT, DELETE) use HTTP Basic Auth with the
-    configured admin credentials.
+    across every method call. All calls are read-only and unauthenticated.
     """
 
     def __init__(
@@ -56,9 +54,6 @@ class ControlCenterClient:
     def _url(self, path: str) -> str:
         return f"{self.base_url}{API_PREFIX}{path}"
 
-    def _auth(self) -> httpx.BasicAuth:
-        return httpx.BasicAuth(settings.admin_username, settings.admin_password)
-
     # --- cluster endpoints ----------------------------------------------
 
     async def list_clusters(self) -> dict[str, Any]:
@@ -75,7 +70,7 @@ class ControlCenterClient:
         resp.raise_for_status()
         return resp.json()
 
-    # --- reservation endpoints ------------------------------------------
+    # --- cluster occupancy endpoints ------------------------------------
 
     async def list_reservations(self, **params: Any) -> dict[str, Any]:
         """GET /api/v1/reservations (with optional query params)."""
@@ -92,42 +87,3 @@ class ControlCenterClient:
         )
         resp.raise_for_status()
         return resp.json()
-
-    async def create_reservation(self, data: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-        """POST /api/v1/reservations (authenticated).
-
-        Returns ``(status_code, response_body)`` so callers can handle
-        409 Conflict without catching exceptions.
-        """
-        client = self._get_client()
-        resp = await client.post(
-            self._url("/reservations"),
-            json=data,
-            auth=self._auth(),
-        )
-        return resp.status_code, resp.json() if resp.content else {}
-
-    async def cancel_reservation(self, reservation_id: str) -> tuple[int, dict[str, Any]]:
-        """POST /api/v1/reservations/{id}/cancel (authenticated).
-
-        Soft-cancel a reservation.  Returns ``(status_code, response_body)``.
-        """
-        client = self._get_client()
-        resp = await client.post(
-            self._url(f"/reservations/{reservation_id}/cancel"),
-            auth=self._auth(),
-        )
-        return resp.status_code, resp.json() if resp.content else {}
-
-    async def hard_delete_reservation(self, reservation_id: str) -> int:
-        """DELETE /api/v1/reservations/{id} (authenticated).
-
-        Permanently delete a reservation.  This is a destructive operation.
-        Returns the HTTP status code.
-        """
-        client = self._get_client()
-        resp = await client.delete(
-            self._url(f"/reservations/{reservation_id}"),
-            auth=self._auth(),
-        )
-        return resp.status_code
