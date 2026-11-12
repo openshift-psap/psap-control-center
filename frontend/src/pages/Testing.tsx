@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, Fragment, type ComponentType } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback, Fragment, type ComponentType } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Menu, Transition } from '@headlessui/react'
 import {
@@ -373,7 +373,17 @@ function JobsTable({
 
 const VERSION_PROJECTS = ['mcp_gateway']
 
-function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
+function SubmitForm({
+  onSubmitted,
+  initialProject = '',
+  onProjectChange,
+}: {
+  onSubmitted?: (name: string) => void
+  /** Project from the ?project= permalink, if any — see Testing below. */
+  initialProject?: string
+  /** Keeps the URL in sync when the project dropdown changes. */
+  onProjectChange?: (name: string) => void
+}) {
   const { data: projects } = useForgeProjects()
   const { data: pipelines } = usePipelines()
   const { data: githubPRs } = useGithubPRs()
@@ -384,7 +394,9 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   // "Basics" — common to every project, owned here so there is exactly one
   // wizard/step indicator (DynamicSubmitForm only renders steps 2 and 3,
   // driven by the `step` state below, and never its own nested wizard).
-  const [project, setProject] = useState('')
+  // A ?project= permalink pre-selects the project and skips straight to
+  // the forge "Basics" step, so coming back to a project is one click.
+  const [project, setProject] = useState(initialProject)
   const [cluster, setCluster] = useState('')
   const [pipeline, setPipeline] = useState('forge-test-only')
   const [preset, setPreset] = useState('')
@@ -400,8 +412,8 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   // For jobType === 'forge': 2 = Basics, 3 = Project Details, 4 = Review & Submit.
   // For jobType === 'lock': 2 = pick a cluster + inspect/manage its locks.
   // For jobType === 'custom': 2 = coming-soon placeholder.
-  const [jobType, setJobType] = useState<'lock' | 'forge' | 'custom' | ''>('')
-  const [step, setStep] = useState(1)
+  const [jobType, setJobType] = useState<'lock' | 'forge' | 'custom' | ''>(initialProject ? 'forge' : '')
+  const [step, setStep] = useState(initialProject ? 2 : 1)
   const [lockCluster, setLockCluster] = useState('')
   const [lockReason, setLockReason] = useState('')
   const [scheduling, setScheduling] = useState<JobScheduling>({ mode: 'now' })
@@ -466,13 +478,36 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
     )
   }, [githubPRs, prSearch])
 
-  const handleProjectChange = (name: string) => {
+  // Last project value reflected in the URL — distinguishes URL updates
+  // that came from the dropdown itself (which must not re-trigger the
+  // effects below) from external navigation such as browser back/forward.
+  const appliedUrlProjectRef = useRef(initialProject)
+
+  const handleProjectChange = useCallback((name: string) => {
     setProject(name)
     setPreset('')
     setVersion('')
     const proj = projects?.find((p: ForgeProject) => p.name === name)
     if (proj?.cluster) setCluster(proj.cluster)
-  }
+    appliedUrlProjectRef.current = name
+    onProjectChange?.(name)
+  }, [projects, onProjectChange])
+
+  // A ?project= permalink is only honored when it matches a real Forge
+  // project — unknown names silently fall back to the empty selector.
+  useEffect(() => {
+    if (!initialProject || !projects) return
+    if (projects.some((p: ForgeProject) => p.name === initialProject)) return
+    handleProjectChange('')
+  }, [initialProject, projects, handleProjectChange])
+
+  // Follow ?project= permalink changes that did not originate from the
+  // dropdown (browser back/forward): re-apply the URL's project whenever
+  // it disagrees with what was last written.
+  useEffect(() => {
+    if (initialProject === appliedUrlProjectRef.current) return
+    handleProjectChange(initialProject)
+  }, [initialProject, handleProjectChange])
 
   const selectPR = (pr: { number: number; title: string; author: string; head_sha: string; draft: boolean } | null) => {
     if (pr) {
@@ -1433,6 +1468,14 @@ export default function Testing() {
     setPage(1)
   }
 
+  // Project permalink for the Submit tab (?tab=submit&project=<name>):
+  // reading it makes the form deep-linkable back to a given project, and
+  // writing it keeps the address bar shareable as the dropdown changes.
+  const urlProject = searchParams.get('project') || ''
+  const setSubmitProject = (project: string) => {
+    setSearchParams(project ? { tab: 'submit', project } : { tab: 'submit' })
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -1563,7 +1606,11 @@ export default function Testing() {
       {activeTab === 'submit' ? (
         <div className="rounded-xl bg-white shadow-sm border border-gray-200 p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Submit FournosJob</h2>
-          <SubmitForm onSubmitted={() => setTab('live')} />
+          <SubmitForm
+            initialProject={urlProject}
+            onProjectChange={setSubmitProject}
+            onSubmitted={() => setTab('live')}
+          />
         </div>
       ) : (
       <div className="card">
