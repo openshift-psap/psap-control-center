@@ -220,6 +220,15 @@ or permanently delete its archived record.
 
 The custom non-Forge job option is a placeholder and is not yet available.
 
+The submit form is deep-linkable: visiting
+`/testing?tab=submit&project=<name>` opens the form with that project
+already selected and the job-type step skipped, and the address bar stays
+in sync as you change the project dropdown, so you can bookmark or share a
+link straight to a project's form. A permalink that names a project not in the current Forge project list is ignored — the form opens with the project
+selector empty and a notice explaining that the linked project is unknown.
+Browser back and forward move between the projects you visited while the
+form was open.
+
 ### Schedules and Cluster Locks
 
 The **Schedules/Locks** tab has two views:
@@ -267,6 +276,6 @@ Click the Hearth indicator in the sidebar and choose **Disconnect**. This remove
 ## Tips
 
 - **Colors are automatic** — each cluster gets a unique color from a palette. Reservations inherit their cluster's color.
-- **Bookmarks** — cluster detail pages have stable URLs (`/clusters/{id}`), so you can bookmark frequently used clusters.
+- **Bookmarks** — cluster detail pages have stable URLs (`/clusters/{id}`), and the Testing submit form supports project permalinks (`/testing?tab=submit&project={name}`), so you can bookmark frequently used clusters and project submit forms.
 - **API docs** — developers can access the full API at `/docs` (Swagger UI) for scripting or automation.
 - **View-only by default** — share the URL with anyone on the team. They can browse without needing credentials.

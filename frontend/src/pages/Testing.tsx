@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, Fragment, type ComponentType } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback, Fragment, type ComponentType } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Menu, Transition } from '@headlessui/react'
 import {
@@ -373,7 +373,25 @@ function JobsTable({
 
 const VERSION_PROJECTS = ['mcp_gateway']
 
-function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
+function SubmitForm({
+  onSubmitted,
+  initialProject = '',
+  onProjectChange,
+}: {
+  onSubmitted?: (name: string) => void
+  /**
+   * Project from the ?project= permalink, if any — see Testing below.
+   * This is deliberately an "initial value + change listener" hybrid rather
+   * than a fully controlled value/onChange pair (unlike SearchableSelect):
+   * the wizard owns per-project form state (preset, version, cluster, step)
+   * that must reset on every project change, so the selection lives here and
+   * only external permalink navigation (browser back/forward) flows back in
+   * through the single permalink effect below.
+   */
+  initialProject?: string
+  /** Keeps the URL in sync when the project dropdown changes. */
+  onProjectChange?: (name: string) => void
+}) {
   const { data: projects } = useForgeProjects()
   const { data: pipelines } = usePipelines()
   const { data: githubPRs } = useGithubPRs()
@@ -384,7 +402,9 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   // "Basics" — common to every project, owned here so there is exactly one
   // wizard/step indicator (DynamicSubmitForm only renders steps 2 and 3,
   // driven by the `step` state below, and never its own nested wizard).
-  const [project, setProject] = useState('')
+  // A ?project= permalink pre-selects the project and skips straight to
+  // the forge "Basics" step, so coming back to a project is one click.
+  const [project, setProject] = useState(initialProject)
   const [cluster, setCluster] = useState('')
   const [pipeline, setPipeline] = useState('forge-test-only')
   const [preset, setPreset] = useState('')
@@ -395,13 +415,17 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   const [configRaw, setConfigRaw] = useState('')
   const [pullSha, setPullSha] = useState('')
   const [prSearch, setPrSearch] = useState('')
+  // Set when a ?project= permalink names a project that is not in the
+  // synced Forge list — surfaced as a dismissible notice instead of a
+  // silent reset (see the permalink effect below).
+  const [unknownPermalink, setUnknownPermalink] = useState<string | null>(null)
   const [prDropdownOpen, setPrDropdownOpen] = useState(false)
   // step 1 = "what do you want to do" (Lock / Forge Job / Custom Job).
   // For jobType === 'forge': 2 = Basics, 3 = Project Details, 4 = Review & Submit.
   // For jobType === 'lock': 2 = pick a cluster + inspect/manage its locks.
   // For jobType === 'custom': 2 = coming-soon placeholder.
-  const [jobType, setJobType] = useState<'lock' | 'forge' | 'custom' | ''>('')
-  const [step, setStep] = useState(1)
+  const [jobType, setJobType] = useState<'lock' | 'forge' | 'custom' | ''>(initialProject ? 'forge' : '')
+  const [step, setStep] = useState(initialProject ? 2 : 1)
   const [lockCluster, setLockCluster] = useState('')
   const [lockReason, setLockReason] = useState('')
   const [scheduling, setScheduling] = useState<JobScheduling>({ mode: 'now' })
@@ -443,8 +467,16 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   // Any project that publishes a projects/<name>/ui/submit.yaml in Forge
   // gets a fully dynamic form for free — see docs/ui-schema-spec.md. This
   // is the same mechanism for every project, RHAIIS included; there is no
-  // project-specific form or backend code path.
-  const { data: uiSchemaResp, isFetching: isFetchingUiSchema } = useProjectUiSchema(project || undefined)
+  // project-specific form or backend code path. The ?project= permalink is
+  // attacker-controllable, so the raw URL value must not drive any network
+  // call until it has been confirmed against the synced Forge project list
+  // (dropdown selections are valid by construction — the options come from
+  // that same list).
+  const knownProject = useMemo(
+    () => (projects?.some((p: ForgeProject) => p.name === project) ? project : undefined),
+    [projects, project]
+  )
+  const { data: uiSchemaResp, isFetching: isFetchingUiSchema } = useProjectUiSchema(knownProject)
   const dynamicSchema = uiSchemaResp?.found ? uiSchemaResp.ui_schema : null
   const refreshUiSchema = useRefreshProjectUiSchema()
 
@@ -466,13 +498,55 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
     )
   }, [githubPRs, prSearch])
 
-  const handleProjectChange = (name: string) => {
+  // Last permalink value already reflected in the form — distinguishes URL
+  // updates that came from the dropdown itself (which must not re-trigger
+  // the effect below) from external navigation such as browser
+  // back/forward. Starts null so the initial ?project= value is validated
+  // on mount.
+  const appliedUrlProjectRef = useRef<string | null>(null)
+
+  const handleProjectChange = useCallback((name: string, fromUrl = false) => {
     setProject(name)
     setPreset('')
     setVersion('')
     const proj = projects?.find((p: ForgeProject) => p.name === name)
     if (proj?.cluster) setCluster(proj.cluster)
-  }
+    appliedUrlProjectRef.current = name
+    // The URL already holds `name` when the change came from the URL itself
+    // (browser back/forward) — writing it back would push a duplicate
+    // history entry and truncate the forward stack.
+    if (!fromUrl) onProjectChange?.(name)
+  }, [projects, onProjectChange])
+
+  // Single owner of ?project= permalink handling, so validation and
+  // external-change sync can never fight each other. A permalink is only
+  // honored once the Forge project list has loaded and it matches a real
+  // project; unknown names fall back to the empty selector (with a notice)
+  // and strip the stale param from the URL. Externally-changed permalinks
+  // (browser back/forward) are re-applied to the form without rewriting the
+  // URL, preserving the forward stack.
+  useEffect(() => {
+    if (initialProject === appliedUrlProjectRef.current) return
+    if (!projects) return
+    if (initialProject && !projects.some((p: ForgeProject) => p.name === initialProject)) {
+      setUnknownPermalink(initialProject)
+      handleProjectChange('')
+      return
+    }
+    setUnknownPermalink(null)
+    handleProjectChange(initialProject, true)
+  }, [initialProject, projects, handleProjectChange])
+
+  // A permalink skips the "What do you want to do?" step — move focus to
+  // the wizard so keyboard and screen-reader users land on the changed
+  // form instead of the top of the page (once, on mount).
+  const permalinkAnchorRef = useRef<HTMLDivElement | null>(null)
+  const focusedPermalinkRef = useRef(false)
+  useEffect(() => {
+    if (focusedPermalinkRef.current || !initialProject) return
+    focusedPermalinkRef.current = true
+    permalinkAnchorRef.current?.focus()
+  }, [initialProject])
 
   const selectPR = (pr: { number: number; title: string; author: string; head_sha: string; draft: boolean } | null) => {
     if (pr) {
@@ -539,7 +613,16 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
 
   return (
     <div className={clsx('mx-auto space-y-6', outerMaxWidth)}>
-      {step > 1 && <WizardSteps steps={wizardSteps} current={step} />}
+      {/* Screen-reader announcement for project changes — URL-driven ones
+          (browser back/forward) otherwise change the form silently
+          (WCAG 4.1.3 status messages). */}
+      <p aria-live="polite" role="status" className="sr-only">
+        {project ? `Submit form project: ${project}` : ''}
+      </p>
+
+      <div ref={permalinkAnchorRef} tabIndex={-1} className="outline-none">
+        {step > 1 && <WizardSteps steps={wizardSteps} current={step} />}
+      </div>
 
       {step === 1 && (
         <div className="text-center">
@@ -719,13 +802,27 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
 
       {step === 2 && jobType === 'forge' && (
         <div className="rounded-lg border border-gray-200 p-4 space-y-4">
+          {unknownPermalink && (
+            <div className="flex items-start justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+              <p className="text-sm text-amber-800">
+                Project '{unknownPermalink}' from this link is not in the current Forge project list — pick a project below.
+              </p>
+              <button
+                type="button"
+                onClick={() => setUnknownPermalink(null)}
+                className="shrink-0 text-xs font-medium text-amber-600 hover:text-amber-800"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           <div>
             <div className="flex items-center justify-between">
               <label className="block text-sm font-medium text-gray-700">Project</label>
-              {project && (
+              {knownProject && (
                 <button
                   type="button"
-                  onClick={() => refreshUiSchema.mutate(project)}
+                  onClick={() => refreshUiSchema.mutate(knownProject)}
                   disabled={refreshUiSchema.isPending || isFetchingUiSchema}
                   title="Re-fetch this project's ui/submit.yaml from Forge (in case it was just published or updated)"
                   className="inline-flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-indigo-600 disabled:opacity-50"
@@ -1433,6 +1530,17 @@ export default function Testing() {
     setPage(1)
   }
 
+  // Project permalink for the Submit tab (?tab=submit&project=<name>):
+  // reading it makes the form deep-linkable back to a given project, and
+  // writing it keeps the address bar shareable as the dropdown changes.
+  // replace-style navigation keeps the permalink shareable without adding
+  // a history entry per project change (Back should leave the form, not
+  // step back through every project ever selected).
+  const urlProject = searchParams.get('project') || ''
+  const setSubmitProject = useCallback((project: string) => {
+    setSearchParams(project ? { tab: 'submit', project } : { tab: 'submit' }, { replace: true })
+  }, [setSearchParams])
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -1563,7 +1671,11 @@ export default function Testing() {
       {activeTab === 'submit' ? (
         <div className="rounded-xl bg-white shadow-sm border border-gray-200 p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Submit FournosJob</h2>
-          <SubmitForm onSubmitted={() => setTab('live')} />
+          <SubmitForm
+            initialProject={urlProject}
+            onProjectChange={setSubmitProject}
+            onSubmitted={() => setTab('live')}
+          />
         </div>
       ) : (
       <div className="card">

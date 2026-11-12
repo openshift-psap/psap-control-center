@@ -506,12 +506,12 @@ export const fournosApi = {
   },
 
   getProjectUiSchema: async (name: string) => {
-    const { data } = await api.get(`/fournos/projects/${name}/ui-schema`)
+    const { data } = await api.get(`/fournos/projects/${encodeURIComponent(name)}/ui-schema`)
     return data
   },
 
   refreshProjectUiSchema: async (name: string) => {
-    const { data } = await api.post(`/fournos/projects/${name}/ui-schema/refresh`)
+    const { data } = await api.post(`/fournos/projects/${encodeURIComponent(name)}/ui-schema/refresh`)
     return data
   },
 
