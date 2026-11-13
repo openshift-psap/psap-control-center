@@ -5,8 +5,6 @@ import {
   Bars3Icon,
   HomeIcon,
   ServerStackIcon,
-  CalendarDaysIcon,
-  ClipboardDocumentListIcon,
   BeakerIcon,
   ChartBarIcon,
   CurrencyDollarIcon,
@@ -21,14 +19,11 @@ import HearthConnectModal from './HearthConnectModal'
 import { isAuthenticated, isAdmin, getDisplayName, clearSession } from '../stores/authStore'
 import { authApi } from '../services/api'
 import { useHearthStatus, useDisconnectHearth } from '../hooks/useHearth'
-import { useReservations } from '../hooks/useReservations'
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
   { name: 'Clusters', href: '/clusters', icon: ServerStackIcon },
-  { name: 'Reservations', href: '/reservations', icon: ClipboardDocumentListIcon },
-  { name: 'Calendar', href: '/calendar', icon: CalendarDaysIcon },
-  { name: 'Testing', href: '/testing', icon: BeakerIcon, badge: 'Experimental' },
+  { name: 'Testing', href: '/testing', icon: BeakerIcon },
   { name: 'Results', href: '/results', icon: ChartBarIcon, comingSoon: true },
   { name: 'Cost Explorer', href: '/cost-explorer', icon: CurrencyDollarIcon, adminOnly: true },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon, adminOnly: true },
@@ -135,11 +130,6 @@ export default function Layout() {
 
   const { data: hearthStatus } = useHearthStatus()
   const admin = isAdmin()
-  const { data: reservationsData } = useReservations(
-    { status: 'pending' },
-    { enabled: admin },
-  )
-  const pendingCount = admin ? (reservationsData?.reservations?.length ?? 0) : 0
   const filteredNav = navigation.filter(item => !item.adminOnly || admin)
 
   const syncAuth = useCallback(() => setAuthed(isAuthenticated()), [])
@@ -213,11 +203,6 @@ export default function Layout() {
                           >
                             <item.icon className="h-5 w-5 shrink-0" />
                             {item.name}
-                            {item.name === 'Reservations' && pendingCount > 0 && (
-                              <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
-                                {pendingCount} pending
-                              </span>
-                            )}
                             {item.comingSoon && (
                               <span className="ml-auto text-xs text-gray-500 bg-white/10 px-2 py-0.5 rounded-full">
                                 Soon
@@ -275,11 +260,6 @@ export default function Layout() {
                       )}
                     />
                     {item.name}
-                    {item.name === 'Reservations' && pendingCount > 0 && (
-                      <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
-                        {pendingCount} pending
-                      </span>
-                    )}
                     {item.comingSoon && (
                       <span className="ml-auto text-xs text-gray-500 bg-white/10 px-2 py-0.5 rounded-full">
                         Soon

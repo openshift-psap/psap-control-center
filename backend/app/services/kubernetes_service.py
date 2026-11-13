@@ -2,6 +2,7 @@ from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, asdict
+from threading import Lock
 import yaml
 import os
 import httpx
@@ -79,6 +80,13 @@ class KubernetesService:
         self._version_api = None
         self._custom_objects = None
         self._configuration = None
+        # A KubernetesService instance is short-lived (one operation or one
+        # cluster refresh). Share expensive node/pod list responses between
+        # concurrent probes during that operation.
+        self._nodes_snapshot = None
+        self._pods_snapshot = None
+        self._nodes_snapshot_lock = Lock()
+        self._pods_snapshot_lock = Lock()
         self._load_config()
 
     def _load_config(self):
@@ -132,6 +140,28 @@ class KubernetesService:
             self._load_config()
         return self._version_api
 
+    def _list_nodes_snapshot(self):
+        """List nodes once per service instance and share the result safely."""
+        if self._nodes_snapshot is not None:
+            return self._nodes_snapshot
+        with self._nodes_snapshot_lock:
+            if self._nodes_snapshot is None:
+                self._nodes_snapshot = self.core_v1.list_node(
+                    _request_timeout=K8S_API_TIMEOUT
+                )
+        return self._nodes_snapshot
+
+    def _list_pods_snapshot(self):
+        """List pods once per service instance and share the result safely."""
+        if self._pods_snapshot is not None:
+            return self._pods_snapshot
+        with self._pods_snapshot_lock:
+            if self._pods_snapshot is None:
+                self._pods_snapshot = self.core_v1.list_pod_for_all_namespaces(
+                    _request_timeout=K8S_API_TIMEOUT
+                )
+        return self._pods_snapshot
+
     @property
     def custom_objects(self):
         if self._custom_objects is None:
@@ -144,9 +174,7 @@ class KubernetesService:
             version_info = self.version_api.get_code(
                 _request_timeout=K8S_API_TIMEOUT
             )
-            nodes = self.core_v1.list_node(
-                _request_timeout=K8S_API_TIMEOUT
-            )
+            nodes = self._list_nodes_snapshot()
 
             gpu_count = 0
             node_details = []
@@ -259,12 +287,8 @@ class KubernetesService:
 
     def get_resource_usage(self) -> Dict[str, Any]:
         try:
-            nodes = self.core_v1.list_node(
-                _request_timeout=K8S_API_TIMEOUT
-            )
-            pods = self.core_v1.list_pod_for_all_namespaces(
-                _request_timeout=K8S_API_TIMEOUT
-            )
+            nodes = self._list_nodes_snapshot()
+            pods = self._list_pods_snapshot()
             
             total_cpu_capacity = 0
             total_memory_capacity = 0
@@ -487,11 +511,8 @@ class KubernetesService:
         gpu_config = self._load_gpu_config_from_configmap()
         gpu_resource = gpu_config.get("gpu_resource_name", "nvidia.com/gpu")
         gpu_pods: List[GpuPodInfo] = []
-        dra_managed_nodes = set(node_gpus.keys())
         try:
-            pods = self.core_v1.list_pod_for_all_namespaces(
-                _request_timeout=K8S_API_TIMEOUT
-            )
+            pods = self._list_pods_snapshot()
             for pod in pods.items:
                 if pod.status.phase not in ("Running", "Pending"):
                     continue
@@ -510,10 +531,10 @@ class KubernetesService:
                     gpu_req = int(reqs.get(gpu_resource, 0))
                     if gpu_req > 0:
                         pod_total_gpu += gpu_req
-                        # Only increment allocation for nodes NOT already
-                        # tracked by DRA ResourceClaims
-                        if (pod_node and pod_node in node_gpus
-                                and pod_node not in dra_managed_nodes):
+                        # DRA-backed pods are skipped above via resource_claims.
+                        # Traditional GPU requests must still count on nodes
+                        # that also publish DRA ResourceSlices.
+                        if pod_node and pod_node in node_gpus:
                             node_gpus[pod_node].gpu_allocated += gpu_req
                 if pod_total_gpu > 0:
                     gpu_pods.append(GpuPodInfo(
@@ -554,10 +575,8 @@ class KubernetesService:
         status = GpuAllocationStatus(gpu_allocation_mode="legacy")
 
         try:
-            nodes = self.core_v1.list_node(_request_timeout=K8S_API_TIMEOUT)
-            pods = self.core_v1.list_pod_for_all_namespaces(
-                _request_timeout=K8S_API_TIMEOUT
-            )
+            nodes = self._list_nodes_snapshot()
+            pods = self._list_pods_snapshot()
         except Exception as e:
             logger.error(f"Legacy GPU allocation query failed: {e}")
             return status
