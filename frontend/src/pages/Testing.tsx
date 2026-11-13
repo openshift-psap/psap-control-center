@@ -393,14 +393,14 @@ function JobsTable({
       <table className="min-w-full divide-y divide-gray-200">
         <thead className="bg-gray-50">
           <tr>
+            <SortableTh label="Status" sortKey="status" sort={sort} onSort={onSort} large />
             <SortableTh label="Name" sortKey="name" sort={sort} onSort={onSort} large />
+            <SortableTh label="Owner" sortKey="owner" sort={sort} onSort={onSort} large />
             <SortableTh label="Project" sortKey="project" sort={sort} onSort={onSort} large />
             <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase">Preset</th>
             <SortableTh label="Cluster" sortKey="cluster" sort={sort} onSort={onSort} large />
-            <SortableTh label="Status" sortKey="status" sort={sort} onSort={onSort} large />
             {source === 'live' && <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase">Progress</th>}
             <SortableTh label={source === 'live' ? 'Age' : 'Date'} sortKey={source === 'live' ? 'age' : 'date'} sort={sort} onSort={onSort} large />
-            <SortableTh label="Owner" sortKey="owner" sort={sort} onSort={onSort} large />
             {source === 'live' ? (
               <SortableTh label="Triggered By" sortKey="triggered_by" sort={sort} onSort={onSort} large />
             ) : (
@@ -415,6 +415,11 @@ function JobsTable({
           {jobs.map((job) => (
             <tr key={job.name} className="hover:bg-gray-50">
               <td className="px-4 py-3 text-base">
+                <span className={clsx('px-2 py-0.5 rounded-full text-sm font-medium', STATUS_COLORS[job.status] || STATUS_COLORS.Unknown)}>
+                  {job.status}
+                </span>
+              </td>
+              <td className="px-4 py-3 text-base">
                 <Link
                   to={`/testing/jobs/${job.name}`}
                   className="text-indigo-600 hover:text-indigo-800 font-medium"
@@ -422,6 +427,7 @@ function JobsTable({
                   {job.name}
                 </Link>
               </td>
+              <td className="px-4 py-3 text-base text-gray-500">{job.owner || '-'}</td>
               <td className="px-4 py-3 text-base text-gray-900">{job.project || '-'}</td>
               <td className="px-4 py-3 text-base text-gray-700">
                 <code
@@ -432,11 +438,6 @@ function JobsTable({
                 </code>
               </td>
               <td className="px-4 py-3 text-base text-gray-900">{job.cluster || '-'}</td>
-              <td className="px-4 py-3 text-base">
-                <span className={clsx('px-2 py-0.5 rounded-full text-sm font-medium', STATUS_COLORS[job.status] || STATUS_COLORS.Unknown)}>
-                  {job.status}
-                </span>
-              </td>
               {source === 'live' && (
                 <td className="px-4 py-3 text-base">
                   <JobProgressCell job={job} />
@@ -447,7 +448,6 @@ function JobsTable({
                   ? formatAge(job.created_at)
                   : formatHistoryDate(job)}
               </td>
-              <td className="px-4 py-3 text-base text-gray-500">{job.owner || '-'}</td>
               {source === 'live' ? (
                 <td className="px-4 py-3 text-base text-gray-500">
                   {job.trigger_type === 'recurring' && job.triggered_by_schedule ? (
