@@ -1,7 +1,8 @@
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
+from datetime import datetime
 from threading import Lock
 import yaml
 import os
@@ -60,6 +61,7 @@ class GpuAllocationStatus:
     nodes: list = None
     gpu_pods: list = None
     pod_inventory_complete: bool = False
+    observed_at: datetime = field(default_factory=datetime.utcnow)
 
     def __post_init__(self):
         if self.gpu_types is None:
@@ -70,7 +72,9 @@ class GpuAllocationStatus:
             self.gpu_pods = []
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        status = asdict(self)
+        del status["observed_at"]
+        return status
 
 
 class KubernetesService:
@@ -153,14 +157,16 @@ class KubernetesService:
         return self._nodes_snapshot
 
     def _list_pods_snapshot(self):
-        """List pods once per service instance and share the result safely."""
+        """Share the pod list and the UTC time its request started across probes."""
         if self._pods_snapshot is not None:
             return self._pods_snapshot
         with self._pods_snapshot_lock:
             if self._pods_snapshot is None:
-                self._pods_snapshot = self.core_v1.list_pod_for_all_namespaces(
+                observed_at = datetime.utcnow()
+                pods = self.core_v1.list_pod_for_all_namespaces(
                     _request_timeout=K8S_API_TIMEOUT
                 )
+                self._pods_snapshot = (observed_at, pods)
         return self._pods_snapshot
 
     @property
@@ -289,7 +295,7 @@ class KubernetesService:
     def get_resource_usage(self) -> Dict[str, Any]:
         try:
             nodes = self._list_nodes_snapshot()
-            pods = self._list_pods_snapshot()
+            _, pods = self._list_pods_snapshot()
             
             total_cpu_capacity = 0
             total_memory_capacity = 0
@@ -513,7 +519,7 @@ class KubernetesService:
         gpu_resource = gpu_config.get("gpu_resource_name", "nvidia.com/gpu")
         gpu_pods: List[GpuPodInfo] = []
         try:
-            pods = self._list_pods_snapshot()
+            status.observed_at, pods = self._list_pods_snapshot()
             for pod in pods.items:
                 if pod.status.phase not in ("Running", "Pending"):
                     continue
@@ -579,7 +585,7 @@ class KubernetesService:
 
         try:
             nodes = self._list_nodes_snapshot()
-            pods = self._list_pods_snapshot()
+            status.observed_at, pods = self._list_pods_snapshot()
         except Exception as e:
             logger.error(f"Legacy GPU allocation query failed: {e}")
             return status
@@ -670,6 +676,7 @@ class KubernetesService:
         Get GPU allocation status using DRA if available, otherwise fall back
         to legacy node capacity + pod resource counting.
         """
+        started_at = datetime.utcnow()
         try:
             dra_version = self._detect_dra_version()
             if dra_version:
@@ -680,7 +687,7 @@ class KubernetesService:
                 return self._get_gpu_allocation_legacy()
         except Exception as e:
             logger.error(f"get_gpu_allocation failed: {e}")
-            return GpuAllocationStatus()
+            return GpuAllocationStatus(observed_at=started_at)
 
     # ── Namespace + Enforcement helpers ────────────────────────────────────
 

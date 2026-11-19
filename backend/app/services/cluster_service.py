@@ -254,24 +254,30 @@ class ClusterService:
             if isinstance(by_name["info"], Exception):
                 logger.warning(f"get_cluster_info failed: {by_name['info']}")
 
-            cluster.status = cluster_info.get("status", "unknown")
-            cluster.node_count = cluster_info.get("node_count")
-            cluster.cluster_version = cluster_info.get("cluster_version")
-            cluster.api_server_url = cluster_info.get("api_server") or cluster.api_server_url
-            cluster.last_health_check = datetime.utcnow()
-
             gpu_alloc = by_name["gpu"]
             if isinstance(gpu_alloc, Exception):
                 logger.warning(f"GPU allocation probe failed: {gpu_alloc}")
                 cluster.gpu_count = cluster_info.get("gpu_count")
                 cluster.gpu_type = cluster_info.get("gpu_type")
             else:
-                cluster.gpu_allocation_mode = gpu_alloc.gpu_allocation_mode
-                cluster.gpu_count = str(gpu_alloc.total_gpus)
-                cluster.gpu_type = (
-                    gpu_alloc.gpu_types[0].product
-                    if gpu_alloc.gpu_types else None
-                )
+                try:
+                    latest = await record_gpu_snapshot(self.db, cluster_id, gpu_alloc)
+                    # Flush pending history rows before updating the cluster health fields.
+                    await self.db.flush()
+                except Exception as exc:
+                    await self.db.rollback()
+                    await self.db.refresh(cluster)
+                    logger.warning(f"GPU snapshot update failed for cluster {cluster_id}: {exc}")
+                else:
+                    cluster.gpu_allocation_mode = latest["gpu_allocation_mode"]
+                    cluster.gpu_count = str(latest["total_gpus"])
+                    cluster.gpu_type = latest["gpu_types"][0]["product"] if latest["gpu_types"] else None
+
+            cluster.status = cluster_info.get("status", "unknown")
+            cluster.node_count = cluster_info.get("node_count")
+            cluster.cluster_version = cluster_info.get("cluster_version")
+            cluster.api_server_url = cluster_info.get("api_server") or cluster.api_server_url
+            cluster.last_health_check = datetime.utcnow()
 
             if "infra" in by_name:
                 infra_id = by_name["infra"]
@@ -282,8 +288,6 @@ class ClusterService:
                     logger.info(f"Auto-detected infra_id for {cluster.name}: {infra_id}")
 
             await self.db.commit()
-            if not isinstance(gpu_alloc, Exception):
-                await record_gpu_snapshot(self.db, cluster_id, gpu_alloc)
             await self.db.refresh(cluster)
 
             await self._upsert_node_history(
@@ -316,6 +320,7 @@ class ClusterService:
             )
         except Exception as e:
             logger.error("Error refreshing cluster status:", e)
+            await self.db.rollback()
             cluster.status = "error"
             cluster.last_health_check = datetime.utcnow()
             await self.db.commit()

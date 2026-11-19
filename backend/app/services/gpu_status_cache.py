@@ -1,33 +1,42 @@
-"""Short-lived cache for the latest completed per-cluster GPU snapshot."""
+"""Shared per-cluster GPU snapshots, ordered by the time the pod list was read."""
 
-from copy import deepcopy
-from threading import Lock
-from time import monotonic
-from typing import Any, Optional
+from datetime import datetime, timedelta
+
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.gpu_pod_history import ClusterGpuSnapshot
 
 
-# Keep snapshots through the 3-minute refresh cadence plus 3 minutes of grace
-# for a refresh that runs long or fails once.
+# Allow one missed three-minute refresh before the API makes a live read.
 GPU_STATUS_CACHE_TTL_SECONDS = 6 * 60
 
-_lock = Lock()
-_entries: dict[str, tuple[float, dict[str, Any]]] = {}
+
+async def get(db: AsyncSession, cluster_id: str, *, since: datetime | None = None) -> dict | None:
+    if since is None:
+        since = datetime.utcnow() - timedelta(seconds=GPU_STATUS_CACHE_TTL_SECONDS)
+    return await db.scalar(select(ClusterGpuSnapshot.status).where(
+        ClusterGpuSnapshot.cluster_id == cluster_id, ClusterGpuSnapshot.observed_at >= since,
+    ))
 
 
-def store(cluster_id: str, status: dict[str, Any]) -> None:
-    """Store a completed snapshot without retaining mutable caller data."""
-    with _lock:
-        _entries[cluster_id] = (monotonic(), deepcopy(status))
-
-
-def get(cluster_id: str) -> Optional[dict[str, Any]]:
-    """Return a fresh-enough snapshot, or None when a live read is needed."""
-    with _lock:
-        entry = _entries.get(cluster_id)
-        if entry is None:
-            return None
-        created_at, status = entry
-        if monotonic() - created_at > GPU_STATUS_CACHE_TTL_SECONDS:
-            _entries.pop(cluster_id, None)
-            return None
-        return deepcopy(status)
+async def store(db: AsyncSession, cluster_id: str, observed_at: datetime, status: dict) -> dict:
+    """Lock the cluster's snapshot until commit and return the newest observation."""
+    insert = sqlite_insert if db.get_bind().dialect.name == "sqlite" else pg_insert
+    stmt = insert(ClusterGpuSnapshot).values(
+        cluster_id=cluster_id, observed_at=observed_at, status=status,
+    )
+    accepted = await db.scalar(stmt.on_conflict_do_update(
+        index_elements=[ClusterGpuSnapshot.cluster_id],
+        set_={"observed_at": stmt.excluded.observed_at, "status": stmt.excluded.status},
+        where=ClusterGpuSnapshot.observed_at < stmt.excluded.observed_at,
+    ).returning(ClusterGpuSnapshot.cluster_id))
+    if accepted is not None:
+        return status
+    # The TTL controls live reads; even an expired row still orders outstanding writes.
+    winner = await db.execute(
+        select(ClusterGpuSnapshot.status).where(ClusterGpuSnapshot.cluster_id == cluster_id)
+    )
+    return winner.scalar_one()

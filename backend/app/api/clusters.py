@@ -2,6 +2,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
@@ -430,14 +431,21 @@ async def get_gpu_status(
         raise HTTPException(status_code=400, detail="Cluster has no kubeconfig configured")
 
     try:
-        cached = gpu_status_cache.get(cluster_id)
+        cached = await gpu_status_cache.get(db, cluster_id)
         if cached is not None:
             return GpuAllocationStatusSchema.model_validate(cached)
 
         k8s_service = KubernetesService(cluster.kubeconfig_path)
         allocation = await _run_in_thread(k8s_service.get_gpu_allocation)
 
-        snapshot = await record_gpu_snapshot(db, cluster_id, allocation)
+        try:
+            snapshot = await record_gpu_snapshot(db, cluster_id, allocation)
+            await db.commit()
+        except SQLAlchemyError as exc:
+            await db.rollback()
+            logger.warning(f"GPU snapshot write failed for cluster {cluster_id}: {exc}")
+            newer = await gpu_status_cache.get(db, cluster_id, since=allocation.observed_at)
+            snapshot = newer if newer is not None else allocation.to_dict()
         return GpuAllocationStatusSchema.model_validate(snapshot)
     except Exception as e:
         logger.error(f"Failed to fetch GPU status for cluster {cluster_id}: {e}")
