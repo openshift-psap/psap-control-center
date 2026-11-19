@@ -44,19 +44,21 @@ type NavigationItem = {
   badge?: string
 }
 
+const testingHref = '/testing?tab=live'
+
 const navigation: NavigationItem[] = [
   { name: 'Overview', href: '/dashboard', icon: HomeIcon },
   { name: 'Clusters', href: '/clusters', icon: ServerStackIcon },
   { name: 'Reservations', href: '/reservations', icon: ClipboardDocumentListIcon },
   { name: 'Calendar', href: '/calendar', icon: CalendarDaysIcon },
-  { name: 'Fournos Dashboard', href: '/testing?tab=live', icon: BeakerIcon },
+  { name: 'Testing', href: testingHref, icon: BeakerIcon },
   { name: 'Results', href: '/results', icon: ChartBarIcon, comingSoon: true },
   { name: 'Cost Explorer', href: '/cost-explorer', icon: CurrencyDollarIcon, adminOnly: true },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon, adminOnly: true },
 ]
 
-const fournDashboardSubnav = [
-  { id: 'jobs', name: 'Jobs', href: '/testing?tab=live' },
+const testingSubnav = [
+  { id: 'jobs', name: 'Jobs', href: testingHref },
   { id: 'submit', name: 'Submit', href: '/testing?tab=submit' },
   { id: 'cpt', name: 'CPT Jobs', href: '/testing?tab=cpt' },
   { id: 'schedules', name: 'Schedules & Locks', href: '/testing?tab=schedules' },
@@ -256,7 +258,7 @@ export default function Layout() {
   const currentTestingTab = new URLSearchParams(location.search).get('tab') || 'live'
   const isTestingPage = location.pathname === '/testing'
   const isTestingJobDetail = location.pathname.startsWith('/testing/jobs/')
-  const isFournosSubnavActive = (id: (typeof fournDashboardSubnav)[number]['id']) => {
+  const isTestingSubnavActive = (id: (typeof testingSubnav)[number]['id']) => {
     if (id === 'jobs') {
       return isTestingJobDetail || (isTestingPage && (currentTestingTab === 'live' || currentTestingTab === 'history'))
     }
@@ -414,12 +416,12 @@ export default function Layout() {
                               </span>
                             )}
                           </NavLink>
-                          {item.name === 'Fournos Dashboard' && (
+                          {item.href === testingHref && (
                             <ul className="space-y-0.5 pb-2">
-                              {fournDashboardSubnav
+                              {testingSubnav
                                 .filter((subItem) => subItem.id !== 'submit' || authed)
                                 .map((subItem) => {
-                                  const isActive = isFournosSubnavActive(subItem.id)
+                                  const isActive = isTestingSubnavActive(subItem.id)
                                   return (
                                     <li key={subItem.id}>
                                       <NavLink
@@ -441,10 +443,10 @@ export default function Layout() {
                             </ul>
                           )}
                         </li>
-                        {item.name === 'Fournos Dashboard' && (
+                        {item.href === testingHref && (
                           <PerformanceDashboardSection onNavigate={() => setSidebarOpen(false)} />
                         )}
-                        {item.name === 'Fournos Dashboard' && (
+                        {item.href === testingHref && (
                           <PsapToolsSection onNavigate={() => setSidebarOpen(false)} />
                         )}
                         </Fragment>
@@ -509,12 +511,12 @@ export default function Layout() {
                       </span>
                     )}
                   </NavLink>
-                  {item.name === 'Fournos Dashboard' && (
+                  {item.href === testingHref && (
                     <ul className="space-y-0.5 pb-2">
-                      {fournDashboardSubnav
+                      {testingSubnav
                         .filter((subItem) => subItem.id !== 'submit' || authed)
                         .map((subItem) => {
-                          const isActive = isFournosSubnavActive(subItem.id)
+                          const isActive = isTestingSubnavActive(subItem.id)
                           return (
                             <li key={subItem.id}>
                               <NavLink
@@ -535,8 +537,8 @@ export default function Layout() {
                     </ul>
                   )}
                 </li>
-                {item.name === 'Fournos Dashboard' && <PerformanceDashboardSection />}
-                {item.name === 'Fournos Dashboard' && <PsapToolsSection />}
+                {item.href === testingHref && <PerformanceDashboardSection />}
+                {item.href === testingHref && <PsapToolsSection />}
                 </Fragment>
               ))}
             </ul>

@@ -2251,9 +2251,9 @@ export default function Testing() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 font-display">Fournos Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-900 font-display">Testing</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Submit, monitor, and review FournosJob test runs
+            Submit, monitor, and review the team’s test runs.
           </p>
         </div>
         {isJobsTab && (
@@ -2537,7 +2537,7 @@ export default function Testing() {
       {/* Content */}
       {activeTab === 'submit' ? (
         <div className="rounded-xl bg-white shadow-sm border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Submit FournosJob</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Submit a job</h2>
           <SubmitForm onSubmitted={() => setTab('live')} />
         </div>
       ) : (
