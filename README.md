@@ -202,8 +202,8 @@ default.
 | `MLFLOW_BASE_URL` | Optional | Reserved for the planned Results integration |
 | `VITE_LOG_LEVEL` | `INFO` | Frontend build-time log level |
 | `VITE_ENV_BANNER` | Optional | Frontend build-time environment banner |
-| `VITE_PERFORMANCE_DASHBOARD_PRODUCTION_URL` | Optional | Production Performance Dashboard sidebar link |
-| `VITE_PERFORMANCE_DASHBOARD_STAGING_URL` | Optional | Staging Performance Dashboard sidebar link |
+| `VITE_PERFORMANCE_DASHBOARD_PRODUCTION_URL` | Optional | Results → Inference Dashboard sidebar link |
+| `VITE_PERFORMANCE_DASHBOARD_STAGING_URL` | Optional | Results → Inference Dashboard (Staging) sidebar link |
 | `VITE_PSAP_REPORT_HUB_URL` | Optional | PSAP Report Hub sidebar link |
 | `VITE_CONFIGIQ_URL` | Optional | ConfigIQ sidebar link |
 | `VITE_SERVIT_STUDIO_URL` | Optional | Servit Studio sidebar link |

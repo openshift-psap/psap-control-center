@@ -92,7 +92,7 @@ You can reserve resources in two ways:
 
 ### Creating a Reservation
 
-1. Go to **Reservations** in the sidebar
+1. Go to **Tools → Reservations** in the sidebar
 2. Click **New Reservation**
 3. Fill in:
    - **Cluster** — select from the dropdown
@@ -173,7 +173,7 @@ The mini weekly calendar at the top of the Reservations page shows hourly slots 
 
 ### Full Calendar Page
 
-Go to **Calendar** in the sidebar for month, week, or day views. Use the **cluster filter** dropdown to show reservations for specific clusters.
+Go to **Tools → Calendar** in the sidebar for month, week, or day views. Use the **cluster filter** dropdown to show reservations for specific clusters.
 
 Reservation colors match their cluster's assigned color for easy identification.
 
