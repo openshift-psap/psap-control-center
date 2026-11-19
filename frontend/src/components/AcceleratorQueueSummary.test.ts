@@ -21,13 +21,15 @@ describe('submission activity prompt', () => {
   })
 
   it('checks recurring schedules across midnight and excludes expired locks', () => {
-    const recurring = (schedule: string, next: string | null, phase = 'Recurring') => ({
-      ...empty, recurring_jobs: [{ schedule, phase, next_scheduled_time: next } as RecurringJob],
+    const recurring = (schedule: string, next: string | null, phase = 'Recurring', dispatch_pending = false) => ({
+      ...empty, recurring_jobs: [{ schedule, phase, next_scheduled_time: next, dispatch_pending } as RecurringJob],
     })
     expect(hasUpcomingClusterActivity(recurring('*/15 * * * *', '2026-10-26T22:15:00Z'), now)).toBe(true)
     expect(hasUpcomingClusterActivity(recurring('0 1 * * *', '2026-10-27T01:00:00Z'), now)).toBe(true)
     expect(hasUpcomingClusterActivity(recurring('0 3 * * *', '2026-10-27T03:00:00Z'), now)).toBe(false)
     expect(hasUpcomingClusterActivity(recurring('0 23 1 * *', '2026-11-01T23:00:00Z'), now)).toBe(false)
+    expect(hasUpcomingClusterActivity(recurring('0 23 1 * *', '2026-11-01T23:00:00Z', 'Recurring', true), now)).toBe(true)
+    expect(hasUpcomingClusterActivity(recurring('0 23 1 * *', null, 'Stopped', true), now)).toBe(false)
     expect(hasUpcomingClusterActivity(recurring('0 1 * * *', null, 'Stopped'), now)).toBe(false)
     const lock = (start: string, until: string | null, phase = 'Running') => ({
       ...empty, locks: [{ created_at: start, lock_until: until, phase } as ClusterLock],

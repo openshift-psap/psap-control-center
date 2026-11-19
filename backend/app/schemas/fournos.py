@@ -542,6 +542,7 @@ class RecurringJobResponse(BaseModel):
     phase: str = ""
     message: str = ""
     next_scheduled_time: datetime | None = None
+    dispatch_pending: bool = False
     calendar_starts: dict[str, list[str]] = Field(default_factory=dict)
     last_scheduled_time: Optional[str] = None
     created_at: str = ""

@@ -270,10 +270,10 @@ def _public_job_metadata(metadata: dict) -> dict:
     return public_metadata
 
 
-def _public_job_spec(spec: dict, *, include_lock_owner: bool) -> dict:
+def _public_job_spec(spec: dict, *, include_lock_owner: bool, archived_lock: bool = False) -> dict:
     """Run owners are public. A standalone cluster lock keeps its holder private."""
     public_spec = dict(spec or {})
-    if not include_lock_owner and k8s.is_lock_only(public_spec):
+    if not include_lock_owner and (archived_lock or k8s.is_lock_only(public_spec)):
         public_spec.pop("owner", None)
     return public_spec
 
@@ -523,14 +523,21 @@ def _forge_execution_summary(execution: Optional[dict]) -> dict:
     }
 
 
-def _db_job_to_summary(job, *, include_work_items: bool) -> dict:
+def _archived_job_owner(job, *, include_lock_owner: bool) -> str:
+    # Older imports can have a bare lockUntil in the spec without the is_lock flag.
+    if not include_lock_owner and (job.is_lock or k8s.is_lock_only(job.fjob_spec or {})):
+        return ""
+    return job.owner or ""
+
+
+def _db_job_to_summary(job, *, signed_in: bool) -> dict:
     return {
         "name": job.name,
         "project": job.project,
         "preset": job.preset,
         "cluster": job.cluster,
         "pipeline": job.pipeline,
-        "owner": job.owner or "",
+        "owner": _archived_job_owner(job, include_lock_owner=signed_in),
         "status": job.status,
         "message": job.message,
         "created_at": job.created_at.isoformat() if job.created_at else "",
@@ -551,7 +558,7 @@ def _db_job_to_summary(job, *, include_work_items: bool) -> dict:
         **_forge_execution_summary(job.forge_execution),
         "forge_provenance_state": job.forge_provenance_state or "pending",
         "work_items": (
-            db_svc.serialize_work_items(job) if include_work_items else []
+            db_svc.serialize_work_items(job) if signed_in else []
         ),
         "run_groups": db_svc.serialize_run_groups(job),
     }
@@ -711,10 +718,14 @@ def _parse_iso_utc(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-# Sortable-column keys shared by every jobs-table column header on the
-# frontend (Live Jobs + History use these; "date" and "duration" only make
-# sense for history, since a live job has no completed_at/duration yet —
-# see the fallback to created_at below).
+def _trigger_sort_key(summary: dict) -> str:
+    trigger = summary.get("trigger_type")
+    if trigger == "recurring":
+        return (summary.get("triggered_by_schedule") or "").lower()
+    return {"deferred": "deferred", "recurring-parent": "recurring template"}.get(trigger, "")
+
+
+# Sort keys used by the shared Live Jobs and History table headers.
 _LIVE_SORT_KEYS = {
     "name": lambda s: (s.get("name") or "").lower(),
     "project": lambda s: (s.get("project") or "").lower(),
@@ -723,7 +734,7 @@ _LIVE_SORT_KEYS = {
     "owner": lambda s: (s.get("owner") or "").lower(),
     "date": lambda s: s.get("created_at") or "",
     "age": lambda s: s.get("created_at") or "",
-    "triggered_by": lambda s: (s.get("triggered_by_schedule") or "").lower(),
+    "triggered_by": _trigger_sort_key,
 }
 
 
@@ -911,7 +922,7 @@ async def list_jobs(
                 offset=(page - 1) * per_page,
             )
         summaries = [
-            _db_job_to_summary(j, include_work_items=current_user is not None) for j in db_jobs
+            _db_job_to_summary(j, signed_in=current_user is not None) for j in db_jobs
         ]
 
     return {
@@ -1438,7 +1449,7 @@ async def get_job(job_name: str, request: Request, response: Response):
             **fjob,
             "metadata": _public_job_metadata(fjob.get("metadata", {})),
             "spec": _public_job_spec(
-                fjob.get("spec", {}), include_lock_owner=current_user is not None
+                fjob.get("spec", {}), include_lock_owner=current_user is not None, archived_lock=db_job.is_lock
             ),
         },
         "pods": [],
@@ -3133,7 +3144,7 @@ async def github_sync_refresh(_=Depends(require_auth)):
 # Center-managed CronJobs — this reads/writes real FournosJob objects only.
 
 def _recurring_job_to_response(
-    job: dict, *, as_of: datetime | None = None, calendar_date: date | None = None,
+    job: dict, *, include_lock_owner: bool, as_of: datetime | None = None, calendar_date: date | None = None,
     calendar_view: str = "day", zone: ZoneInfo | None = None,
 ) -> dict:
     meta = job.get("metadata", {})
@@ -3143,11 +3154,16 @@ def _recurring_job_to_response(
     schedule = spec.get("schedule", "")
     phase = status.get("phase", "")
     next_time = None
+    dispatch_pending = False
     starts = {}
     if schedule and phase.lower() not in {"succeeded", "failed", "stopped", "cancelled", "canceled", "completed"}:
         created = _parse_iso_utc(meta.get("creationTimestamp"))
         now = as_of or datetime.now(timezone.utc)
-        next_time = recurring_schedule.next_start(schedule, max(now, created) if created else now)
+        annotations = meta.get("annotations") or {}
+        next_time, dispatch_pending = recurring_schedule.dispatch_state(
+            schedule, now, created, _parse_iso_utc(status.get("lastScheduledTime")),
+            annotations.get(k8s.ANNOTATION_TRIGGER_NOW, "").lower() == "true",
+        )
         if calendar_date and zone:
             starts = recurring_schedule.calendar_starts(schedule, calendar_date, calendar_view, zone, created)
     return {
@@ -3156,10 +3172,11 @@ def _recurring_job_to_response(
         "cluster": spec.get("cluster", ""),
         "pipeline": spec.get("pipeline", ""),
         "preset": " ".join(forge.get("args", [])),
-        "owner": spec.get("owner") or "",
+        "owner": _public_job_spec(spec, include_lock_owner=include_lock_owner).get("owner") or "",
         "schedule": schedule,
         "phase": phase,
         "next_scheduled_time": next_time,
+        "dispatch_pending": dispatch_pending,
         "calendar_starts": starts,
         "message": status.get("message", ""),
         "last_scheduled_time": status.get("lastScheduledTime"),
@@ -3168,13 +3185,15 @@ def _recurring_job_to_response(
 
 
 @router.get("/recurring-jobs", response_model=List[RecurringJobResponse])
-async def list_recurring_jobs(cluster: str = Query("")):
+async def list_recurring_jobs(request: Request, response: Response, cluster: str = Query("")):
+    response.headers["Cache-Control"] = "private, no-store"
+    include_lock_owner = get_current_user(request) is not None
     jobs = await asyncio.to_thread(k8s.list_recurring_jobs)
     if cluster:
         jobs = [j for j in jobs if j.get("spec", {}).get("cluster") == cluster]
     return _sort_latest(
         [
-            _recurring_job_to_response(j)
+            _recurring_job_to_response(j, include_lock_owner=include_lock_owner)
             for j in jobs
         ],
         "last_scheduled_time",
@@ -3186,7 +3205,7 @@ async def list_recurring_jobs(cluster: str = Query("")):
     "/recurring-jobs/{name}/children",
     response_model=List[ScheduleChildJobResponse],
 )
-async def recurring_job_children(name: str):
+async def recurring_job_children(name: str, request: Request, response: Response):
     """Child jobs spawned by this recurring template, newest first.
 
     Sourced from the Control Center's own DB (populated by the watcher from
@@ -3194,13 +3213,15 @@ async def recurring_job_children(name: str):
     "Triggered By" link on the History tab and the click-through from the
     Schedules tab.
     """
+    response.headers["Cache-Control"] = "private, no-store"
+    include_lock_owner = get_current_user(request) is not None
     async with AsyncSessionLocal() as session:
         jobs = await db_svc.list_jobs_by_schedule(session, name)
     return [
         {
             "name": j.name,
             "status": j.status,
-            "owner": j.owner or "",
+            "owner": _archived_job_owner(j, include_lock_owner=include_lock_owner),
             "trigger_type": j.trigger_type or "recurring",
             "duration_seconds": j.duration_seconds,
             "mlflow_url": j.mlflow_url or "",
@@ -3255,7 +3276,8 @@ def _cluster_lock_to_response(job: dict, *, include_owner: bool = True) -> dict:
 
 
 @router.get("/cluster-locks", response_model=List[ClusterLockResponse])
-async def list_cluster_locks(request: Request, cluster: str = Query("")):
+async def list_cluster_locks(request: Request, response: Response, cluster: str = Query("")):
+    response.headers["Cache-Control"] = "private, no-store"
     include_owner = get_current_user(request) is not None
     locks = await asyncio.to_thread(k8s.list_cluster_locks, None, cluster or None)
     return _sort_latest(
@@ -3317,7 +3339,7 @@ async def delete_cluster_lock(name: str, _=Depends(require_admin)):
 
 @router.get("/clusters/{cluster}/overview", response_model=ClusterOverviewResponse)
 async def cluster_overview(
-    cluster: str, request: Request, calendar_date: date | None = None,
+    cluster: str, request: Request, response: Response, calendar_date: date | None = None,
     calendar_view: Literal["day", "month"] = "day", calendar_timezone: str = "UTC",
 ):
     """Backs the Submit page's live cluster activity and scheduling views.
@@ -3326,6 +3348,8 @@ async def cluster_overview(
     running-job summary stays consistent with the Live Jobs and Schedules
     tabs.
     """
+    response.headers["Cache-Control"] = "private, no-store"
+    include_owner = get_current_user(request) is not None
     zone = None
     if calendar_date:
         try:
@@ -3344,15 +3368,15 @@ async def cluster_overview(
         jobs = [job for job in all_jobs if job.get("spec", {}).get("cluster") == cluster]
         recurring = [
             _recurring_job_to_response(
-                job, as_of=as_of, calendar_date=calendar_date, calendar_view=calendar_view, zone=zone,
+                job, include_lock_owner=include_owner, as_of=as_of, calendar_date=calendar_date,
+                calendar_view=calendar_view, zone=zone,
             )
             for job in jobs if job.get("spec", {}).get("schedule")
         ]
-        locks = [job for job in jobs if k8s.is_lock_only(job.get("spec", {}))]
+        locks = [job for job in jobs if k8s.is_cluster_lock(job.get("spec", {}))]
         return as_of, _visible_live_jobs(jobs), recurring, locks
 
     as_of, current, recurring_rows, locks = await asyncio.to_thread(read_activity)
-    include_owner = get_current_user(request) is not None
     current_summaries = [
         _live_job_to_summary(j) for j in current
     ]

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional, Sequence, Tuple
 from uuid import uuid4
 
-from sqlalchemy import Text, and_, cast, delete, func, literal_column, or_, select
+from sqlalchemy import Text, and_, case, cast, delete, func, literal_column, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,7 +45,12 @@ _SORT_COLUMNS = {
     # values do not float to the top of a descending PostgreSQL result.
     "date": func.coalesce(FournosJob.completed_at, FournosJob.created_at),
     "duration": FournosJob.duration_seconds,
-    "triggered_by": FournosJob.triggered_by_schedule,
+    "triggered_by": case(
+        (FournosJob.trigger_type == "recurring", func.lower(func.coalesce(FournosJob.triggered_by_schedule, ""))),
+        (FournosJob.trigger_type == "deferred", "deferred"),
+        (FournosJob.trigger_type == "recurring-parent", "recurring template"),
+        else_="",
+    ),
 }
 
 _PUBLIC_SEARCH_COLUMNS = (

@@ -1,3 +1,4 @@
+from collections import Counter
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from typing import Dict, Any, List, Optional
@@ -21,6 +22,15 @@ DRA_GPU_DRIVER_NAMES = ["gpu.nvidia.com", "gpu.intel.com", "gpu.amd.com"]
 DRA_CONFIGMAP_NAME = "gpu-fleet-viewer-config"
 DRA_CONFIGMAP_NAMESPACE = "gpu-fleet-viewer"
 K8S_API_TIMEOUT = 120
+
+
+def _extended_claim_pod_uid(metadata: dict) -> str | None:
+    """The scheduler gives its generated extended-resource claim a Pod controller owner."""
+    if (metadata.get("annotations") or {}).get("resource.kubernetes.io/extended-resource-claim") == "true":
+        for owner in metadata.get("ownerReferences") or []:
+            if owner.get("kind") == "Pod" and owner.get("controller"):
+                return owner.get("uid")
+    return None
 
 
 @dataclass
@@ -488,15 +498,20 @@ class KubernetesService:
             logger.info("DRA API present but no GPU driver ResourceSlices found, falling back to legacy")
             return self._get_gpu_allocation_legacy()
 
-        # Count allocations from DRA ResourceClaims
+        # A scheduler-generated claim can satisfy the pod's extended GPU request.
+        # Track only those devices for deduplication. Explicit device claims
+        # (including network devices) are independent of container requests.
+        covered_gpu_requests = Counter()
         try:
             claims = self.custom_objects.list_cluster_custom_object(
                 group=DRA_API_GROUP, version=dra_version, plural="resourceclaims",
                 _request_timeout=K8S_API_TIMEOUT,
             )
             for claim in claims.get("items", []):
-                alloc = claim.get("status", {}).get("allocation", {})
+                claim_status = claim.get("status", {})
+                alloc = claim_status.get("allocation", {})
                 devices = alloc.get("devices", {}).get("results", [])
+                extended_pod_uid = _extended_claim_pod_uid(claim.get("metadata", {}))
                 for result in devices:
                     req_driver = result.get("driver", "")
                     if req_driver and req_driver not in DRA_GPU_DRIVER_NAMES:
@@ -507,14 +522,15 @@ class KubernetesService:
                                 or pool_name.endswith(
                                     f"-{node_name}")):
                             info.gpu_allocated += 1
+                            if extended_pod_uid:
+                                covered_gpu_requests[(node_name, extended_pod_uid)] += 1
                             break
         except ApiException:
             logger.warning("Could not list ResourceClaims; allocation counts may be incomplete")
         except Exception as e:
             logger.warning(f"Error counting DRA allocations: {e}")
 
-        # Also count traditional pod-level nvidia.com/gpu resource requests
-        # (workloads not using DRA still request GPUs the classic way)
+        # Record pods with conventional GPU requests even when they also use claims.
         gpu_config = self._load_gpu_config_from_configmap()
         gpu_resource = gpu_config.get("gpu_resource_name", "nvidia.com/gpu")
         gpu_pods: List[GpuPodInfo] = []
@@ -522,11 +538,6 @@ class KubernetesService:
             status.observed_at, pods = self._list_pods_snapshot()
             for pod in pods.items:
                 if pod.status.phase not in ("Running", "Pending"):
-                    continue
-                pod_claims = getattr(
-                    pod.spec, "resource_claims", None
-                )
-                if pod_claims:
                     continue
                 pod_node = pod.spec.node_name
                 pod_total_gpu = 0
@@ -538,12 +549,10 @@ class KubernetesService:
                     gpu_req = int(reqs.get(gpu_resource, 0))
                     if gpu_req > 0:
                         pod_total_gpu += gpu_req
-                        # DRA-backed pods are skipped above via resource_claims.
-                        # Traditional GPU requests must still count on nodes
-                        # that also publish DRA ResourceSlices.
-                        if pod_node and pod_node in node_gpus:
-                            node_gpus[pod_node].gpu_allocated += gpu_req
                 if pod_total_gpu > 0:
+                    if pod_node in node_gpus:
+                        covered = covered_gpu_requests[(pod_node, pod.metadata.uid)]
+                        node_gpus[pod_node].gpu_allocated += max(0, pod_total_gpu - covered)
                     gpu_pods.append(GpuPodInfo(
                         name=pod.metadata.name,
                         namespace=pod.metadata.namespace,

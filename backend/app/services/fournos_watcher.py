@@ -445,7 +445,7 @@ def _extract_forge_fields(job: dict) -> dict:
         } if cpt_run_metadata else {}),
         "triggered_by_schedule": schedule_name or None,
         "trigger_type": trigger_type,
-        "is_lock": bool(spec.get("lockOnly")),
+        "is_lock": k8s_client.is_lock_only(spec),
     }
 
 

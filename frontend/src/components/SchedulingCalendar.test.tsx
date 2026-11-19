@@ -11,7 +11,7 @@ it('renders every projected start in day view and requests the first daily start
   const overview = vi.spyOn(fournosApi, 'getClusterOverview').mockImplementation(async (cluster, calendar) => ({
     cluster, current_jobs: [], locks: [],
     recurring_jobs: [
-      { name: 'quarter-hour', project: 'demo', schedule: '*/15 * * * *',
+      { name: 'quarter-hour', project: 'demo', schedule: '*/15 * * * *', dispatch_pending: true,
         calendar_starts: { [calendar!.calendar_date]: calendar!.calendar_view === 'day' ? ['10:00', '10:15'] : ['00:00'] } },
       { name: 'monthly', project: 'demo', schedule: '0 12 1 * *', calendar_starts: {} },
     ],
@@ -20,6 +20,7 @@ it('renders every projected start in day view and requests the first daily start
     <SchedulingCalendar cluster="demo" readOnly initialView="day" variant="submit" onApply={() => {}} />
   </QueryClientProvider>)
   expect(await screen.findByText('quarter-hour (10:15, demo)')).toBeInTheDocument()
+  expect(screen.getByText('Awaiting dispatch: quarter-hour')).toBeInTheDocument()
   expect(screen.getByText('quarter-hour (10:00, demo)')).toBeInTheDocument()
   expect(screen.queryByText(/monthly/)).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: '← Month view' }))

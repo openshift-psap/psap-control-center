@@ -174,12 +174,52 @@ def test_public_job_metadata_removes_requester_identity_without_mutation():
     assert fournos.REQUESTER_EMAIL_ANNOTATION in metadata["annotations"]
 
 
+@pytest.mark.parametrize("signed_in", [False, True])
+def test_recurring_lock_visibility_and_parent_classification(monkeypatch, signed_in):
+    parent = {
+        "metadata": {"name": "hold"}, "status": {"phase": "Recurring"},
+        "spec": {"cluster": "demo", "schedule": "0 12 1 * *", "lockOnly": True, "owner": "Holder"},
+    }
+    child = {"metadata": {"name": "hold-1"}, "spec": {"cluster": "demo", "lockOnly": True, "owner": "Holder"}}
+    normal = {
+        "metadata": {"name": "benchmark"}, "spec": {"cluster": "demo", "schedule": "0 1 * * *", "owner": "Runner"},
+    }
+    monkeypatch.setattr(fournos.k8s, "list_fournos_jobs", Mock(return_value=[parent, child, normal]))
+    archived_lock = FournosJob(name="hold-1", owner="Holder", status="Succeeded", fjob_spec={"lockUntil": "later"})
+    archived_run = FournosJob(name="run-1", owner="Runner", status="Succeeded")
+    monkeypatch.setattr(fournos, "AsyncSessionLocal", MagicMock())
+    monkeypatch.setattr(fournos.db_svc, "list_jobs_by_schedule", AsyncMock(return_value=[archived_lock, archived_run]))
+    app = FastAPI()
+    app.include_router(fournos.router)
+    with TestClient(app) as client:
+        if signed_in:
+            client.cookies.set(COOKIE_NAME, create_session_token("viewer", "user"))
+
+        def read(path):
+            response = client.get(f"/fournos/{path}")
+            assert response.status_code == 200, response.text
+            assert response.headers["cache-control"] == "private, no-store"
+            return response.json()
+
+        schedules = read("recurring-jobs")
+        children = read("recurring-jobs/hold/children")
+        overview = read("clusters/demo/overview")
+        assert overview["locks"] == read("cluster-locks")
+        assert [lock["name"] for lock in overview["locks"]] == ["hold-1"]
+        holder = "Holder" if signed_in else ""
+        assert overview["locks"][0]["owner"] == holder
+        for items in (schedules, overview["recurring_jobs"]):
+            assert {row["name"]: row["owner"] for row in items} == {"hold": holder, "benchmark": "Runner"}
+        assert [row["owner"] for row in children] == [holder, "Runner"]
+
+
 def test_public_job_spec_keeps_run_owner_and_hides_standalone_lock_holder():
     spec = {"cluster": "test-cluster", "owner": "Example Person"}
     assert fournos._public_job_spec(spec, include_lock_owner=False) == spec
     lock = {**spec, "lockOnly": True}
     assert "owner" not in fournos._public_job_spec(lock, include_lock_owner=False)
     assert fournos._public_job_spec(lock, include_lock_owner=True) == lock
+    assert "owner" not in fournos._public_job_spec(spec, include_lock_owner=False, archived_lock=True)
     assert lock["owner"] == "Example Person"
 
 

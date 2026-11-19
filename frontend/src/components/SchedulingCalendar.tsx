@@ -420,6 +420,7 @@ export default function SchedulingCalendar(props: SubmitProps | LockProps) {
     props.onApplyLock({ startUtc, untilUtc, label })
   }
 
+  const pendingSchedules = overview?.recurring_jobs.filter(job => job.dispatch_pending) ?? []
   const goToDay = (y: number, m: number, d: number) => {
     setFocusYear(y)
     setFocusMonth(m)
@@ -443,6 +444,11 @@ export default function SchedulingCalendar(props: SubmitProps | LockProps) {
       </div>
 
       {scheduleError && <p role="alert" className="text-sm text-amber-800">Cluster schedule unavailable.</p>}
+      {pendingSchedules.length > 0 && (
+        <p className="text-sm text-amber-800">
+          Awaiting dispatch: {pendingSchedules.map(job => job.name).join(', ')}
+        </p>
+      )}
       {!overview && !scheduleError && <p role="status" className="text-sm text-gray-500">Loading cluster schedule…</p>}
       {holdErrorMsg && (
         <div className="flex items-center justify-between rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">

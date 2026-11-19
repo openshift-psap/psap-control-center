@@ -1,13 +1,16 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api import fournos as fournos_api
 from app.core import database as database_core
+from app.models.fournos_job import FournosJob
 from app.schemas.fournos import HistoryViewState
 from app.services import fournos_db_service as db_service
 
@@ -47,6 +50,42 @@ def test_public_query_uses_non_identity_full_text_vector(monkeypatch):
     assert "source_repository" in where_sql
     assert "requester_email" not in where_sql
     assert "requester_name" not in where_sql
+
+
+@pytest.mark.asyncio
+async def test_trigger_sort_matches_the_visible_labels_across_pages(monkeypatch):
+    url = "sqlite+aiosqlite://"
+    monkeypatch.setattr(db_service.settings, "DATABASE_URL", url)
+    engine = create_async_engine(url)
+    sessions = async_sessionmaker(engine)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(database_core.Base.metadata.create_all)
+        start = datetime(2026, 11, 19, tzinfo=timezone.utc)
+        rows = [
+            ("manual-old", "manual", None), ("zulu", "recurring", "zulu"),
+            ("deferred", "deferred", None), ("alpha", "recurring", "alpha"),
+            ("manual-new", "manual", None),
+        ]
+        async with sessions.begin() as db:
+            for index, (name, trigger, parent) in enumerate(rows):
+                db.add(FournosJob(
+                    name=name, project="fixture", cluster="demo", status="Succeeded",
+                    trigger_type=trigger, triggered_by_schedule=parent, created_at=start + timedelta(minutes=index),
+                ))
+        async with sessions() as db:
+            for direction, expected in [
+                ("asc", ["manual-new", "manual-old", "alpha", "deferred", "zulu"]),
+                ("desc", ["zulu", "deferred", "alpha", "manual-new", "manual-old"]),
+            ]:
+                ordered = []
+                for offset in range(0, len(rows), 2):
+                    page, total = await db_service.list_jobs(db, sort_by="triggered_by", sort_dir=direction, limit=2, offset=offset)
+                    assert total == len(rows)
+                    ordered.extend(job.name for job in page)
+                assert ordered == expected
+    finally:
+        await engine.dispose()
 
 
 def test_authenticated_identity_query_is_separate(monkeypatch):

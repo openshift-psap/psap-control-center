@@ -2,11 +2,34 @@ from datetime import date, datetime, timezone
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import fournos
 from app.services.recurring_schedule import calendar_starts
+
+
+@pytest.mark.parametrize("last_scheduled,created,trigger_now,phase,pending", [
+    ("2026-11-18T10:00:00Z", "2026-11-17T09:00:00Z", False, "Recurring", True),
+    (None, "2026-11-19T09:00:00Z", False, "Recurring", True),
+    ("invalid", "2026-11-19T09:00:00Z", False, "Recurring", True),
+    ("2026-11-19T10:01:00Z", "2026-11-17T09:00:00Z", False, "Recurring", False),
+    (None, "2026-11-19T10:02:00Z", True, "Recurring", True),
+    (None, "2026-11-19T10:02:00Z", True, "Stopped", False),
+])
+def test_recurring_dispatch_state(last_scheduled, created, trigger_now, phase, pending):
+    job = {
+        "metadata": {"creationTimestamp": created, "annotations": {fournos.k8s.ANNOTATION_TRIGGER_NOW: str(trigger_now)}},
+        "spec": {"schedule": "0 10 * * *"},
+        "status": {"phase": phase, "lastScheduledTime": last_scheduled},
+    }
+    now = datetime(2026, 11, 19, 10, 5, tzinfo=timezone.utc)
+    row = fournos._recurring_job_to_response(job, include_lock_owner=False, as_of=now)
+    assert row["dispatch_pending"] is pending
+    assert row["next_scheduled_time"] == (
+        datetime(2026, 11, 20, 10, tzinfo=timezone.utc) if phase == "Recurring" else None
+    )
 
 
 def test_warning_and_calendar_use_the_same_fournos_schedules(monkeypatch):

@@ -316,7 +316,7 @@ export function usePipelines() {
 
 export function useRecurringJobs(cluster?: string) {
   return useQuery<RecurringJob[]>({
-    queryKey: ['fournos-recurring-jobs', cluster],
+    queryKey: ['fournos-recurring-jobs', cluster, getViewerCacheKey()],
     queryFn: () => fournosApi.listRecurringJobs(cluster),
     refetchInterval: 30000,
   })
@@ -324,7 +324,7 @@ export function useRecurringJobs(cluster?: string) {
 
 export function useRecurringJobChildren(name: string | undefined) {
   return useQuery<ScheduleChildJob[]>({
-    queryKey: ['fournos-recurring-job-children', name],
+    queryKey: ['fournos-recurring-job-children', name, getViewerCacheKey()],
     queryFn: () => fournosApi.getRecurringJobChildren(name!),
     enabled: !!name,
     refetchInterval: 10000,
@@ -358,7 +358,7 @@ export function useDeleteRecurringJob() {
 
 export function useClusterLocks(cluster?: string) {
   return useQuery<ClusterLock[]>({
-    queryKey: ['fournos-cluster-locks', cluster],
+    queryKey: ['fournos-cluster-locks', cluster, getViewerCacheKey()],
     queryFn: () => fournosApi.listClusterLocks(cluster),
     refetchInterval: 30000,
   })

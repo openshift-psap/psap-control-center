@@ -15,6 +15,17 @@ def next_start(schedule: str, after: datetime) -> datetime | None:
         return None
 
 
+def dispatch_state(
+    schedule: str, now: datetime, created: datetime | None, last_scheduled: datetime | None,
+    trigger_now: bool,
+) -> tuple[datetime | None, bool]:
+    """Return the next calendar tick and whether Fournos owes a child already."""
+    # The operator advances lastScheduledTime only after creating a child.
+    tick = next_start(schedule, last_scheduled or created or now)
+    overdue = tick is not None and tick <= now
+    return (next_start(schedule, now) if overdue else tick), trigger_now or overdue
+
+
 @lru_cache(maxsize=256)
 def calendar_starts(
     schedule: str, day: date, view: str, zone: ZoneInfo, created_at: datetime | None,

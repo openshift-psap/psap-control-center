@@ -42,7 +42,9 @@ export function hasUpcomingClusterActivity(
   return running.length > 0 || queued.length > 0 || other.length > 0
     || scheduled.some(job => job.scheduled_start_time && Date.parse(job.scheduled_start_time) <= through)
     || overview.recurring_jobs.some(job => {
-      if (!job.next_scheduled_time || TERMINAL_STATUSES.has(job.phase.toLowerCase())) return false
+      if (TERMINAL_STATUSES.has(job.phase.toLowerCase())) return false
+      if (job.dispatch_pending) return true
+      if (!job.next_scheduled_time) return false
       const next = Date.parse(job.next_scheduled_time)
       return next > now && next <= through
     })

@@ -113,6 +113,55 @@ def test_shared_kubernetes_pod_list_keeps_its_first_observation_time():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("driver,extended,claim_pod_uid,allocated", [
+    ("network.example.com", False, "pod-uid", 1),
+    ("gpu.nvidia.com", True, "pod-uid", 1),
+    ("gpu.nvidia.com", True, "another-pod", 2),
+    ("gpu.nvidia.com", False, "pod-uid", 2),
+])
+async def test_mixed_claims_preserve_gpu_history_across_scan_modes(gpu_db, driver, extended, claim_pod_uid, allocated):
+    sessions, cluster_id = gpu_db
+    probe = Mock(spec=KubernetesService)
+    probe._detect_dra_version.return_value = None
+    probe._extract_dra_attribute.side_effect = KubernetesService._extract_dra_attribute
+    probe._load_gpu_config_from_configmap.return_value = {}
+    node = SimpleNamespace(metadata=SimpleNamespace(name="node", labels={}),
+                           status=SimpleNamespace(capacity={"nvidia.com/gpu": "2"}),
+                           spec=SimpleNamespace(unschedulable=False))
+    probe._list_nodes_snapshot.return_value = SimpleNamespace(items=[node])
+    pod = SimpleNamespace(
+        metadata=SimpleNamespace(name="trainer", namespace="test", uid="pod-uid"),
+        status=SimpleNamespace(phase="Running"),
+        spec=SimpleNamespace(node_name="node", resource_claims=[] if extended else [SimpleNamespace(name="extra")],
+                             containers=[SimpleNamespace(resources=SimpleNamespace(requests={"nvidia.com/gpu": "1"}))]),
+    )
+    started = datetime.utcnow() - timedelta(minutes=3)
+    observed = started + timedelta(minutes=3)
+    pods = SimpleNamespace(items=[pod])
+    probe._list_pods_snapshot.side_effect = [(started, pods), (observed, pods)]
+    probe.custom_objects.list_cluster_custom_object.side_effect = [
+        {"items": [{"spec": {"driver": "gpu.nvidia.com", "nodeName": "node", "devices": [{}, {}]}}]},
+        {"items": [{
+            "metadata": {
+                "annotations": {"resource.kubernetes.io/extended-resource-claim": str(extended).lower()},
+                "ownerReferences": [{"kind": "Pod", "controller": True, "uid": claim_pod_uid}],
+            },
+            "status": {"allocation": {"devices": {"results": [{"driver": driver, "pool": "node"}]}}},
+        }]},
+    ]
+    legacy = KubernetesService._get_gpu_allocation_legacy(probe)
+    dra = KubernetesService._get_gpu_allocation_dra(probe, "v1")
+    assert dra.pod_inventory_complete
+    assert dra.gpu_pods == legacy.gpu_pods == [GpuPodInfo("trainer", "test", 1, "node")]
+    assert dra.allocated_gpus == allocated
+    async with sessions.begin() as db:
+        await record_gpu_snapshot(db, cluster_id, legacy)
+        await record_gpu_snapshot(db, cluster_id, dra)
+        row = (await db.scalars(select(GpuPodHistory))).one()
+        assert (row.first_seen, row.last_seen, row.finished_at) == (started, observed, None)
+
+
+@pytest.mark.asyncio
 async def test_delayed_scheduled_refresh_cannot_retire_pod_seen_by_cold_api(monkeypatch, gpu_db):
     sessions, cluster_id = gpu_db
     early = datetime.utcnow() - timedelta(seconds=5)

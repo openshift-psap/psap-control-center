@@ -697,6 +697,7 @@ export interface RecurringJob {
   phase: string
   message: string
   next_scheduled_time: string | null
+  dispatch_pending: boolean
   calendar_starts: Record<string, string[]>
   last_scheduled_time: string | null
   created_at: string
