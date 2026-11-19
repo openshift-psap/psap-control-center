@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Link, MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -58,6 +58,8 @@ describe('History table', () => {
     await waitFor(() => expect(screen.getByLabelText('Source repository')).toHaveValue(state.repository))
     expect(screen.getByLabelText('Owner or requester')).toHaveValue(state.identity)
 
+    // Sign-out before the debounce expires must discard the first account's unsaved edit.
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search run history' }), { target: { value: 'first-user-only' } })
     clearSession()
     rerender(page())
     await waitFor(() => expect(screen.getByLabelText('Source repository')).toHaveValue(''))
@@ -67,7 +69,48 @@ describe('History table', () => {
     rerender(page())
     await waitFor(() => expect(screen.getByLabelText('Source repository')).toHaveValue(otherState.repository))
     expect(screen.getByLabelText('Owner or requester')).toHaveValue(otherState.identity)
+    fireEvent.click(screen.getByRole('tab', { name: 'Live' }))
     expect(save).not.toHaveBeenCalled()
+  })
+
+  it.each(['Live tab', 'sidebar'])('saves the last edit when leaving History immediately through the %s', async navigation => {
+    setSession({ username: 'viewer', role: 'user' })
+    let finishWrite!: () => void
+    const save = vi.spyOn(fournosApi, 'saveHistoryPreference').mockImplementation(state =>
+      new Promise(resolve => { finishWrite = () => resolve({ state, schema_version: 1, updated_at: null }) }))
+    vi.spyOn(fournosApi, 'listJobs').mockResolvedValue({ jobs: [], total: 0, page: 1, per_page: 100 })
+    vi.spyOn(fournosApi, 'getHistoryFilterOptions').mockResolvedValue({
+      identities: [], repositories: [], pr_numbers: [], source_shas: [], forge: [], tags: [], work_item_providers: [], work_item_keys: [],
+    })
+    vi.spyOn(clusterApi, 'list').mockResolvedValue({ clusters: [], total: 0 })
+    vi.spyOn(fournosApi, 'listProjects').mockResolvedValue([])
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/testing?tab=history&q=shared']}>
+      <Link to="/testing?tab=live">Jobs sidebar link</Link>
+      <Testing />
+    </MemoryRouter></QueryClientProvider>)
+
+    const leave = () => fireEvent.click(navigation === 'Live tab'
+      ? screen.getByRole('tab', { name: 'Live' }) : screen.getByRole('link', { name: 'Jobs sidebar link' }))
+    const search = () => screen.getByRole('searchbox', { name: 'Search run history' })
+    expect(search()).toHaveValue('shared')
+    fireEvent.change(search(), { target: { value: 'train' } })
+    fireEvent.change(search(), { target: { value: 'training' } })
+    leave()
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ query: 'training' }))
+    expect(search()).toHaveValue('training')
+    await act(async () => finishWrite())
+    // Clearing the last filter also survives navigation, despite the empty URL.
+    fireEvent.change(search(), { target: { value: '' } })
+    leave()
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2))
+    expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ query: '' }))
+    expect(search()).toHaveValue('')
+    await act(async () => finishWrite())
+    expect(client.getQueryData(['fournos-history-preference', 'local:viewer'])).toMatchObject({ state: { query: '' } })
   })
 
   it('shows the schedule and observed Forge version alongside duration and MLflow', () => {

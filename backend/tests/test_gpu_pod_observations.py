@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 import pytest_asyncio
+from kubernetes import client
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -113,13 +114,19 @@ def test_shared_kubernetes_pod_list_keeps_its_first_observation_time():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("driver,extended,claim_pod_uid,allocated", [
-    ("network.example.com", False, "pod-uid", 1),
-    ("gpu.nvidia.com", True, "pod-uid", 1),
-    ("gpu.nvidia.com", True, "another-pod", 2),
-    ("gpu.nvidia.com", False, "pod-uid", 2),
+@pytest.mark.parametrize("driver,extended,claim_pod_uid,resource,container,request_name,claim_name,allocated", [
+    ("network.example.com", False, "pod-uid", "nvidia.com/gpu", "worker", "gpu", "generated", 1),
+    ("gpu.nvidia.com", True, "pod-uid", "nvidia.com/gpu", "worker", "gpu", "generated", 1),
+    ("gpu.nvidia.com", True, "another-pod", "nvidia.com/gpu", "worker", "gpu", "generated", 2),
+    ("gpu.nvidia.com", False, "pod-uid", "nvidia.com/gpu", "worker", "gpu", "generated", 2),
+    ("gpu.nvidia.com", True, "pod-uid", "deviceclass.resource.kubernetes.io/other-gpu", "worker", "gpu", "generated", 2),
+    ("gpu.nvidia.com", True, "pod-uid", "nvidia.com/gpu", "init", "gpu", "generated", 2),
+    ("gpu.nvidia.com", True, "pod-uid", "nvidia.com/gpu", "worker", "other", "generated", 2),
+    ("gpu.nvidia.com", True, "pod-uid", "nvidia.com/gpu", "worker", "gpu", "another-claim", 2),
 ])
-async def test_mixed_claims_preserve_gpu_history_across_scan_modes(gpu_db, driver, extended, claim_pod_uid, allocated):
+async def test_mixed_claims_preserve_gpu_history_across_scan_modes(
+    gpu_db, driver, extended, claim_pod_uid, resource, container, request_name, claim_name, allocated,
+):
     sessions, cluster_id = gpu_db
     probe = Mock(spec=KubernetesService)
     probe._detect_dra_version.return_value = None
@@ -129,11 +136,24 @@ async def test_mixed_claims_preserve_gpu_history_across_scan_modes(gpu_db, drive
                            status=SimpleNamespace(capacity={"nvidia.com/gpu": "2"}),
                            spec=SimpleNamespace(unschedulable=False))
     probe._list_nodes_snapshot.return_value = SimpleNamespace(items=[node])
-    pod = SimpleNamespace(
-        metadata=SimpleNamespace(name="trainer", namespace="test", uid="pod-uid"),
-        status=SimpleNamespace(phase="Running"),
-        spec=SimpleNamespace(node_name="node", resource_claims=[] if extended else [SimpleNamespace(name="extra")],
-                             containers=[SimpleNamespace(resources=SimpleNamespace(requests={"nvidia.com/gpu": "1"}))]),
+    pod = client.V1Pod(
+        metadata=client.V1ObjectMeta(name="trainer", namespace="test", uid="pod-uid"),
+        status=client.V1PodStatus(
+            phase="Running",
+            extended_resource_claim_status=client.V1PodExtendedResourceClaimStatus(
+                resource_claim_name=claim_name,
+                request_mappings=[client.V1ContainerExtendedResourceRequest(
+                    container_name=container, resource_name=resource, request_name=request_name,
+                )],
+            ) if extended else None,
+        ),
+        spec=client.V1PodSpec(
+            node_name="node",
+            resource_claims=[] if extended else [client.V1PodResourceClaim(name="extra", resource_claim_name="generated")],
+            containers=[client.V1Container(name="worker", resources=client.V1ResourceRequirements(
+                requests={"nvidia.com/gpu": "1", resource: "1"},
+            ))],
+        ),
     )
     started = datetime.utcnow() - timedelta(minutes=3)
     observed = started + timedelta(minutes=3)
@@ -143,10 +163,11 @@ async def test_mixed_claims_preserve_gpu_history_across_scan_modes(gpu_db, drive
         {"items": [{"spec": {"driver": "gpu.nvidia.com", "nodeName": "node", "devices": [{}, {}]}}]},
         {"items": [{
             "metadata": {
+                "name": "generated",
                 "annotations": {"resource.kubernetes.io/extended-resource-claim": str(extended).lower()},
                 "ownerReferences": [{"kind": "Pod", "controller": True, "uid": claim_pod_uid}],
             },
-            "status": {"allocation": {"devices": {"results": [{"driver": driver, "pool": "node"}]}}},
+            "status": {"allocation": {"devices": {"results": [{"driver": driver, "pool": "node", "request": "gpu"}]}}},
         }]},
     ]
     legacy = KubernetesService._get_gpu_allocation_legacy(probe)

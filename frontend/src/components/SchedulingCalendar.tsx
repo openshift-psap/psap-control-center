@@ -5,6 +5,7 @@ import { useClusterOverview, useHoldSlot, useReleaseSlot, useSlotHolds } from '.
 import { getUsername } from '../stores/authStore'
 import { browserTimezone, buildUtcCron, isoToLocalParts, zonedWallTimeToUtcDate } from '../utils/timezone'
 import { slotIndexFor, slotLabel, slotStart, SLOT_MINUTES, SLOTS_PER_DAY } from '../utils/calendarSlots'
+import { isTerminalPhase, upcomingClusterActivity } from '../utils/clusterActivity'
 import type { ClusterOverview, JobScheduling } from '../types'
 
 const WEEKDAY_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -85,8 +86,10 @@ function itemsForDaySorted(overview: ClusterOverview | undefined, y: number, m: 
     }
   }
   for (const lock of overview?.locks ?? []) {
-    if (lock.scheduled_start_time) {
-      const { date, time } = isoToLocalParts(lock.scheduled_start_time, tz)
+    if (isTerminalPhase(lock.phase)) continue
+    const start = lock.scheduled_start_time || (lock.lock_until ? lock.created_at : null)
+    if (start) {
+      const { date, time } = isoToLocalParts(start, tz)
       if (date !== dateKey) continue
       const [h, mi] = time.split(':').map(Number)
       items.push({ hour: h, minute: mi, kind: 'lock' })
@@ -122,6 +125,7 @@ function occupancyForDay(overview: ClusterOverview | undefined, y: number, m: nu
     }
   }
   for (const lock of overview?.locks ?? []) {
+    if (isTerminalPhase(lock.phase)) continue
     const label = `lock-${lock.owner || 'unknown'}-${lock.reason || lock.name}`
     const untilMs = lock.lock_until ? new Date(lock.lock_until).getTime() : null
     if (untilMs === null) {
@@ -420,7 +424,8 @@ export default function SchedulingCalendar(props: SubmitProps | LockProps) {
     props.onApplyLock({ startUtc, untilUtc, label })
   }
 
-  const pendingSchedules = overview?.recurring_jobs.filter(job => job.dispatch_pending) ?? []
+  const activity = readOnly && overview ? upcomingClusterActivity(overview) : null
+  const pendingSchedules = overview?.recurring_jobs.filter(job => job.dispatch_pending && !isTerminalPhase(job.phase)) ?? []
   const goToDay = (y: number, m: number, d: number) => {
     setFocusYear(y)
     setFocusMonth(m)
@@ -444,7 +449,32 @@ export default function SchedulingCalendar(props: SubmitProps | LockProps) {
       </div>
 
       {scheduleError && <p role="alert" className="text-sm text-amber-800">Cluster schedule unavailable.</p>}
-      {pendingSchedules.length > 0 && (
+      {activity && (activity.jobs.length > 0 || activity.locks.length > 0 || activity.recurring.length > 0) && (
+        <section aria-label="Current and upcoming cluster activity" className="rounded-md border border-gray-200 px-3 py-2 text-sm">
+          <h4 className="font-semibold">Active now or due in the next four hours</h4>
+          <ul className="mt-1 space-y-1">
+            {activity.jobs.map(job => (
+              <li key={`job-${job.name}`}>
+                {job.name} · {job.status}
+                {job.scheduled_start_time && ` · ${new Date(job.scheduled_start_time).toLocaleString()}`}
+              </li>
+            ))}
+            {activity.recurring.map(job => (
+              <li key={`recurring-${job.name}`}>
+                {job.dispatch_pending ? `Awaiting dispatch: ${job.name}` : `${job.name} · Recurring`}
+                {!job.dispatch_pending && job.next_scheduled_time && ` · ${new Date(job.next_scheduled_time).toLocaleString()}`}
+              </li>
+            ))}
+            {activity.locks.map(lock => (
+              <li key={`lock-${lock.name}`}>
+                {lock.name} · Cluster lock{lock.reason && ` · ${lock.reason}`}
+                {lock.scheduled_start_time && ` · ${new Date(lock.scheduled_start_time).toLocaleString()}`}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {!readOnly && pendingSchedules.length > 0 && (
         <p className="text-sm text-amber-800">
           Awaiting dispatch: {pendingSchedules.map(job => job.name).join(', ')}
         </p>

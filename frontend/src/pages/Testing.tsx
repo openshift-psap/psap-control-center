@@ -1915,11 +1915,13 @@ export default function Testing() {
   const [preferenceApplied, setPreferenceApplied] = useState(
     !authenticated || historyUrlHasState
   )
-  const lastSavedStateRef = useRef<string | null>(
+  const appliedViewRef = useRef<string | null>(
     historyUrlHasState ? JSON.stringify(initialHistory) : null
   )
   const preferenceAccount = getPreferenceAccount()
   const previousAccountRef = useRef(preferenceAccount)
+  const pendingHistoryEdit = useRef<{ account: string; state: HistoryViewState } | null>(null)
+  const historySaveTimer = useRef<number | undefined>(undefined)
   const observedUrlRef = useRef(searchParams.toString())
   const applyingUrlRef = useRef(false)
   const suppressPreferenceSaveRef = useRef(false)
@@ -1996,9 +1998,26 @@ export default function Testing() {
 
   const preferenceQuery = useHistoryPreference(
     authenticated && activeTab === 'history' && !historyUrlHasState && !preferenceApplied
+    && pendingHistoryEdit.current?.account !== preferenceAccount
   )
   const { mutate: saveHistoryPreference, isPending: preferenceSaving } = useSaveHistoryPreference()
   const { mutate: resetHistoryPreference, isPending: preferenceResetting } = useResetHistoryPreference()
+
+  const flushHistoryEdit = useCallback(() => {
+    if (historySaveTimer.current === undefined) return
+    window.clearTimeout(historySaveTimer.current)
+    historySaveTimer.current = undefined
+    const edit = pendingHistoryEdit.current
+    if (!edit || edit.account !== getPreferenceAccount() || suppressPreferenceSaveRef.current) return
+    saveHistoryPreference(edit, {
+      onSettled: () => { if (pendingHistoryEdit.current === edit) pendingHistoryEdit.current = null },
+    })
+  }, [saveHistoryPreference])
+
+  // A navigation can unmount the form before its debounce expires.
+  useEffect(() => {
+    if (activeTab === 'history') return flushHistoryEdit
+  }, [activeTab, flushHistoryEdit])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -2020,7 +2039,10 @@ export default function Testing() {
 
     const hadAccount = previousAccountRef.current !== null
     previousAccountRef.current = preferenceAccount
-    lastSavedStateRef.current = null
+    window.clearTimeout(historySaveTimer.current)
+    historySaveTimer.current = undefined
+    pendingHistoryEdit.current = null
+    appliedViewRef.current = null
     if (hadAccount) {
       applyHistoryView(DEFAULT_HISTORY_VIEW)
       setPreferenceApplied(!authenticated)
@@ -2042,21 +2064,25 @@ export default function Testing() {
       const urlPage = Number(searchParams.get('page'))
       applyHistoryView(state)
       setPage(Number.isInteger(urlPage) && urlPage > 0 ? urlPage : 1)
-      lastSavedStateRef.current = JSON.stringify(state)
+      appliedViewRef.current = JSON.stringify(state)
       setPreferenceApplied(true)
     } else if (!authenticated) {
-      lastSavedStateRef.current = JSON.stringify(historyViewState)
+      appliedViewRef.current = JSON.stringify(historyViewState)
       setPreferenceApplied(true)
-    } else if (preferenceQuery.data) {
-      applyHistoryView(preferenceQuery.data.state)
-      lastSavedStateRef.current = JSON.stringify(preferenceQuery.data.state)
-      setPreferenceApplied(true)
-    } else if (preferenceQuery.isError) {
-      lastSavedStateRef.current = JSON.stringify(historyViewState)
-      setPreferenceApplied(true)
+    } else {
+      const edit = pendingHistoryEdit.current
+      const state = edit && edit.account === preferenceAccount ? edit.state : preferenceQuery.data?.state
+      if (state) {
+        applyHistoryView(state)
+        appliedViewRef.current = JSON.stringify(state)
+        setPreferenceApplied(true)
+      } else if (preferenceQuery.isError) {
+        appliedViewRef.current = JSON.stringify(historyViewState)
+        setPreferenceApplied(true)
+      }
     }
   }, [
-    activeTab, preferenceApplied, authenticated, historyUrlHasState,
+    activeTab, preferenceApplied, authenticated, preferenceAccount, historyUrlHasState,
     preferenceQuery.data, preferenceQuery.isError, applyHistoryView,
     historyViewState, searchParams,
   ])
@@ -2074,7 +2100,7 @@ export default function Testing() {
       applyingUrlRef.current = true
       applyHistoryView(urlState)
       setPage(normalizedPage)
-      lastSavedStateRef.current = JSON.stringify(urlState)
+      appliedViewRef.current = JSON.stringify(urlState)
     }
   }, [searchParams, activeTab, preferenceApplied, historyViewState, page, applyHistoryView])
 
@@ -2118,21 +2144,16 @@ export default function Testing() {
   }, [activeTab, authenticated, preferenceApplied, historyViewState, page, searchParams, setSearchParams])
 
   useEffect(() => {
-    if (!authenticated || activeTab !== 'history' || !preferenceApplied || preferenceSaving) return
+    if (!preferenceAccount || activeTab !== 'history' || !preferenceApplied || suppressPreferenceSaveRef.current) return
     const serialized = JSON.stringify(historyViewState)
-    if (lastSavedStateRef.current === null) {
-      lastSavedStateRef.current = serialized
-      return
-    }
-    if (serialized === lastSavedStateRef.current) return
-    const timeout = window.setTimeout(() => {
-      if (suppressPreferenceSaveRef.current) return
-      saveHistoryPreference(historyViewState, {
-        onSuccess: () => { lastSavedStateRef.current = serialized },
-      })
-    }, 700)
-    return () => window.clearTimeout(timeout)
-  }, [authenticated, activeTab, preferenceApplied, preferenceSaving, historyViewState, saveHistoryPreference])
+    const previous = appliedViewRef.current
+    appliedViewRef.current = serialized
+    if (previous === null || previous === serialized) return
+
+    pendingHistoryEdit.current = { account: preferenceAccount, state: historyViewState }
+    window.clearTimeout(historySaveTimer.current)
+    historySaveTimer.current = window.setTimeout(flushHistoryEdit, 700)
+  }, [activeTab, preferenceAccount, preferenceApplied, historyViewState, flushHistoryEdit])
 
   useEffect(() => {
     if (!authenticated) {
@@ -2258,10 +2279,13 @@ export default function Testing() {
 
   const resetSavedHistoryView = () => {
     suppressPreferenceSaveRef.current = true
+    window.clearTimeout(historySaveTimer.current)
+    historySaveTimer.current = undefined
+    pendingHistoryEdit.current = null
     resetHistoryPreference(undefined, {
       onSuccess: () => {
         applyHistoryView(DEFAULT_HISTORY_VIEW)
-        lastSavedStateRef.current = JSON.stringify(DEFAULT_HISTORY_VIEW)
+        appliedViewRef.current = JSON.stringify(DEFAULT_HISTORY_VIEW)
         suppressPreferenceSaveRef.current = false
       },
       onError: () => { suppressPreferenceSaveRef.current = false },

@@ -511,7 +511,9 @@ class KubernetesService:
                 claim_status = claim.get("status", {})
                 alloc = claim_status.get("allocation", {})
                 devices = alloc.get("devices", {}).get("results", [])
-                extended_pod_uid = _extended_claim_pod_uid(claim.get("metadata", {}))
+                metadata = claim.get("metadata", {})
+                extended_pod_uid = _extended_claim_pod_uid(metadata)
+                claim_name = metadata.get("name")
                 for result in devices:
                     req_driver = result.get("driver", "")
                     if req_driver and req_driver not in DRA_GPU_DRIVER_NAMES:
@@ -522,8 +524,9 @@ class KubernetesService:
                                 or pool_name.endswith(
                                     f"-{node_name}")):
                             info.gpu_allocated += 1
-                            if extended_pod_uid:
-                                covered_gpu_requests[(node_name, extended_pod_uid)] += 1
+                            if extended_pod_uid and claim_name and result.get("request"):
+                                key = (node_name, extended_pod_uid, claim_name, result["request"])
+                                covered_gpu_requests[key] += 1
                             break
         except ApiException:
             logger.warning("Could not list ResourceClaims; allocation counts may be incomplete")
@@ -540,19 +543,23 @@ class KubernetesService:
                 if pod.status.phase not in ("Running", "Pending"):
                     continue
                 pod_node = pod.spec.node_name
-                pod_total_gpu = 0
-                for ctr in (pod.spec.containers or []):
-                    reqs = (
-                        (ctr.resources.requests or {})
-                        if ctr.resources else {}
-                    )
-                    gpu_req = int(reqs.get(gpu_resource, 0))
-                    if gpu_req > 0:
-                        pod_total_gpu += gpu_req
+                container_requests = {
+                    ctr.name: int((ctr.resources.requests or {}).get(gpu_resource, 0))
+                    for ctr in pod.spec.containers or [] if ctr.resources
+                }
+                pod_total_gpu = sum(container_requests.values())
                 if pod_total_gpu > 0:
                     if pod_node in node_gpus:
-                        covered = covered_gpu_requests[(pod_node, pod.metadata.uid)]
-                        node_gpus[pod_node].gpu_allocated += max(0, pod_total_gpu - covered)
+                        claim_status = pod.status.extended_resource_claim_status
+                        if claim_status:
+                            for mapping in claim_status.request_mappings or []:
+                                if mapping.resource_name != gpu_resource or mapping.container_name not in container_requests:
+                                    continue
+                                key = (pod_node, pod.metadata.uid, claim_status.resource_claim_name, mapping.request_name)
+                                overlap = min(container_requests[mapping.container_name], covered_gpu_requests[key])
+                                container_requests[mapping.container_name] -= overlap
+                                covered_gpu_requests[key] -= overlap
+                        node_gpus[pod_node].gpu_allocated += sum(container_requests.values())
                     gpu_pods.append(GpuPodInfo(
                         name=pod.metadata.name,
                         namespace=pod.metadata.namespace,

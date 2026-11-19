@@ -82,7 +82,7 @@ export function useFournosLiveJobSummary(enabled = true) {
   })
 }
 
-const historyPreferenceKey = () => ['fournos-history-preference', getPreferenceAccount()] as const
+const historyPreferenceKey = (account = getPreferenceAccount()) => ['fournos-history-preference', account] as const
 
 export function useHistoryPreference(enabled: boolean) {
   return useQuery<HistoryPreferenceResponse>({
@@ -106,11 +106,12 @@ export function useHistoryFilterOptions(enabled: boolean) {
 export function useSaveHistoryPreference() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (state: HistoryViewState) => fournosApi.saveHistoryPreference(state),
-    onMutate: historyPreferenceKey,
-    onSuccess: (data, _state, key) => {
-      if (key) qc.setQueryData(key, data)
+    scope: { id: `history-preference-${getPreferenceAccount()}` },
+    mutationFn: ({ account, state }: { account: string; state: HistoryViewState }) => {
+      if (account !== getPreferenceAccount()) throw new Error('The signed-in account changed before saving the History view')
+      return fournosApi.saveHistoryPreference(state)
     },
+    onSuccess: (data, { account }) => qc.setQueryData(historyPreferenceKey(account), data),
     onError: (error) => toast.error(error.message || 'Failed to save History view'),
   })
 }
@@ -119,7 +120,7 @@ export function useResetHistoryPreference() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => fournosApi.resetHistoryPreference(),
-    onMutate: historyPreferenceKey,
+    onMutate: () => historyPreferenceKey(),
     onSuccess: (_data, _variables, key) => {
       if (key) qc.removeQueries({ queryKey: key })
     },

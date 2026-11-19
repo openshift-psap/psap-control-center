@@ -6,7 +6,7 @@ alembic==1.13.1
 python-multipart==0.0.9
 pydantic==2.6.1
 pydantic-settings==2.1.0
-kubernetes==29.0.0
+kubernetes==34.1.0
 google-auth==2.50.0
 pyyaml==6.0.1
 python-jose[cryptography]==3.3.0
