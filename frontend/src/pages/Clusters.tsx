@@ -38,6 +38,8 @@ interface RefreshProgress {
 
 export default function Clusters() {
   const [isAddOpen, setIsAddOpen] = useState(false)
+  const [removeClusterId, setRemoveClusterId] = useState<string | null>(null)
+  const cancelRemoveRef = useRef<HTMLButtonElement>(null)
   const [authMethod, setAuthMethod] = useState<AuthMethod>('kubeconfig')
   const [showPassword, setShowPassword] = useState(false)
   const [newCluster, setNewCluster] = useState({ 
@@ -142,6 +144,7 @@ export default function Clusters() {
   }, [data, refreshing, serverRefreshing, refetch, queryClient])
 
   const clusters = data?.clusters || []
+  const clusterToRemove = clusters.find(cluster => cluster.id === removeClusterId)
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: { 'application/x-yaml': ['.yaml', '.yml'], 'text/plain': ['.kubeconfig'] },
@@ -211,15 +214,10 @@ export default function Clusters() {
     }
   }
 
-  const handleRemove = async (id: string, name: string) => {
-    if (deleteCluster.isPending) return
-    if (window.confirm(`Remove cluster "${name}" from the Control Center?\n\nThis will only remove tracking - the actual cluster will not be affected.`)) {
-      try {
-        await deleteCluster.mutateAsync(id)
-      } catch (error) {
-        // Error is handled by the mutation
-      }
-    }
+  const confirmRemove = () => {
+    if (!clusterToRemove || !isAdmin() || deleteCluster.isPending) return
+    deleteCluster.mutate(clusterToRemove.id)
+    setRemoveClusterId(null)
   }
 
   return (
@@ -358,11 +356,31 @@ export default function Clusters() {
               key={cluster.id}
               cluster={cluster}
               latestCost={data?.latest_costs ? data.latest_costs[cluster.id] ?? null : undefined}
-              onRemove={isAdmin() ? () => handleRemove(cluster.id, cluster.name) : undefined}
+              onRemove={isAdmin() ? () => setRemoveClusterId(cluster.id) : undefined}
               removing={deleteCluster.isPending}
             />
           ))}
         </div>
+      )}
+
+      {clusterToRemove && isAdmin() && (
+        <Dialog open onClose={() => setRemoveClusterId(null)} initialFocus={cancelRemoveRef} className="fixed inset-0 z-[70] overflow-y-auto">
+          <div className="fixed inset-0 bg-black/40" aria-hidden="true" />
+          <div className="relative flex min-h-full items-center justify-center p-4">
+            <Dialog.Panel className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+              <Dialog.Title className="break-words text-lg font-semibold text-gray-900">
+                Remove {clusterToRemove.name}?
+              </Dialog.Title>
+              <Dialog.Description className="mt-2 text-sm text-gray-600">
+                Are you sure you want to remove this cluster from Control Center? This cancels active and scheduled reservations and cleans up namespaces used for reservation enforcement.
+              </Dialog.Description>
+              <div className="mt-6 flex justify-end gap-3">
+                <button type="button" className="btn-secondary" ref={cancelRemoveRef} onClick={() => setRemoveClusterId(null)}>Cancel</button>
+                <button type="button" className="btn-danger" onClick={confirmRemove}>Remove cluster</button>
+              </div>
+            </Dialog.Panel>
+          </div>
+        </Dialog>
       )}
 
       <Transition appear show={isAddOpen} as={Fragment}>

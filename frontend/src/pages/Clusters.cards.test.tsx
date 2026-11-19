@@ -73,8 +73,16 @@ it('groups active pods by namespace and only fetches each history while its pane
   expect(billing).toHaveAttribute('aria-expanded', 'true')
   fireEvent.click(past)
   expect(history).toHaveBeenCalledTimes(1)
-  expect(card.getByRole('link', { name: 'alpha' })).toHaveAttribute('href', '/clusters/alpha')
-  expect(card.queryByRole('button', { name: /Actions for/ })).toBeNull()
+})
+
+it('offers cluster details in the signed-out actions menu and keeps the cluster name as a heading', async () => {
+  renderClusters()
+  const card = within(await screen.findByRole('article', { name: 'beta' }))
+  expect(card.getByRole('heading', { name: 'beta' })).toBeVisible()
+  expect(card.queryByRole('link', { name: 'beta' })).toBeNull()
+  fireEvent.click(card.getByRole('button', { name: 'Actions for beta' }))
+  expect(await card.findByRole('menuitem', { name: 'View cluster' })).toHaveAttribute('href', '/clusters/beta')
+  expect(card.queryByRole('menuitem', { name: 'Remove cluster' })).toBeNull()
 })
 
 it('shows a retry for a failed request and displays archived pods on recovery', async () => {
@@ -89,14 +97,24 @@ it('shows a retry for a failed request and displays archived pods on recovery', 
   expect(card.getByText(/ago$/, { selector: 'time' })).toHaveAttribute('datetime', '2026-09-01T15:00:00Z')
 })
 
-it('keeps removal inside the admin menu and honors a cancelled confirmation', async () => {
+it('only removes the selected cluster after an admin explicitly confirms', async () => {
   const remove = vi.spyOn(clusterApi, 'delete').mockResolvedValue(undefined)
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
   renderClusters(true)
   const card = within(await screen.findByRole('article', { name: 'alpha' }))
-  expect(card.queryByRole('menuitem')).toBeNull()
   fireEvent.click(card.getByRole('button', { name: 'Actions for alpha' }))
   fireEvent.click(await card.findByRole('menuitem', { name: 'Remove cluster' }))
-  await waitFor(() => expect(confirm).toHaveBeenCalledWith(expect.stringContaining('"alpha"')))
+  const dialog = within(await screen.findByRole('dialog', { name: 'Remove alpha?' }))
+  const cancel = dialog.getByRole('button', { name: 'Cancel' })
+  await waitFor(() => expect(cancel).toHaveFocus())
+  fireEvent.click(cancel)
+  expect(screen.queryByRole('dialog')).toBeNull()
   expect(remove).not.toHaveBeenCalled()
+
+  const other = within(screen.getByRole('article', { name: 'beta' }))
+  fireEvent.click(other.getByRole('button', { name: 'Actions for beta' }))
+  fireEvent.click(await other.findByRole('menuitem', { name: 'Remove cluster' }))
+  const nextDialog = within(await screen.findByRole('dialog', { name: 'Remove beta?' }))
+  expect(remove).not.toHaveBeenCalled()
+  fireEvent.click(nextDialog.getByRole('button', { name: 'Remove cluster' }))
+  await waitFor(() => expect(remove.mock.calls.map(([id]) => id)).toEqual(['beta']))
 })
