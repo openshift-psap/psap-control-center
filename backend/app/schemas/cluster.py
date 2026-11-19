@@ -94,9 +94,16 @@ class ClusterResponse(ClusterBase):
         from_attributes = True
 
 
+class ClusterCostSummary(BaseModel):
+    billing_month: str
+    total_cost: float
+    currency: str
+
+
 class ClusterListResponse(BaseModel):
     clusters: List[ClusterResponse]
     total: int
+    latest_costs: Optional[Dict[str, ClusterCostSummary]] = None
 
 
 class NodeCostInfo(BaseModel):

@@ -62,8 +62,10 @@ api.interceptors.response.use(
 )
 
 export const clusterApi = {
-  list: async (activeOnly = false): Promise<ClusterListResponse> => {
-    const { data } = await api.get('/clusters', { params: { active_only: activeOnly } })
+  list: async (activeOnly = false, includeLatestCost = false): Promise<ClusterListResponse> => {
+    const { data } = await api.get('/clusters', {
+      params: { active_only: activeOnly, include_latest_cost: includeLatestCost || undefined },
+    })
     return data
   },
 

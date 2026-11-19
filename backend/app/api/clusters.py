@@ -176,11 +176,16 @@ async def list_clusters(
     skip: int = 0,
     limit: int = 100,
     active_only: bool = False,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    include_latest_cost: bool = False,
 ):
     service = ClusterService(db)
     clusters, total = await service.get_clusters(skip, limit, active_only)
+    latest_costs = None
+    if include_latest_cost:
+        latest_costs = await service.get_latest_cost_summaries([c.id for c in clusters if c.provider == "ibm"])
     return ClusterListResponse(
+        latest_costs=latest_costs,
         clusters=[ClusterResponse.model_validate(c) for c in clusters],
         total=total
     )

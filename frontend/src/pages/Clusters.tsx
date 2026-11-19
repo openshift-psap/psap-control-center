@@ -1,11 +1,9 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from 'react'
-import { Link } from 'react-router-dom'
 import { Dialog, Transition, Tab } from '@headlessui/react'
 import {
   PlusIcon,
   ServerStackIcon,
   ArrowPathIcon,
-  TrashIcon,
   EyeIcon,
   CloudArrowUpIcon,
   KeyIcon,
@@ -14,35 +12,20 @@ import {
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline'
 import { useDropzone } from 'react-dropzone'
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  useClusters,
   useClusterRefreshDisplayPreference,
   useCreateCluster,
   useDeleteCluster,
   useSaveClusterRefreshDisplayPreference,
 } from '../hooks/useClusters'
 import { clusterApi } from '../services/api'
-import { format } from 'date-fns'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
-import type { ClusterCost, GpuAllocationStatus } from '../types'
-import GpuDonutChart from '../components/GpuDonutChart'
+import ClusterCard from '../components/ClusterCard'
 import ClusterListError from '../components/ClusterListError'
 import ClusterRefreshIndicator from '../components/ClusterRefreshIndicator'
 import { isAdmin, isAuthenticated } from '../stores/authStore'
-
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days === 1) return '1 day ago'
-  return `${days} days ago`
-}
 
 type AuthMethod = 'kubeconfig' | 'credentials'
 
@@ -71,7 +54,10 @@ export default function Clusters() {
   const prevLastRefresh = useRef<string | null>(null)
 
   const queryClient = useQueryClient()
-  const { data, isLoading, isError, refetch } = useClusters()
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ['clusters', { activeOnly: false, includeLatestCost: true }],
+    queryFn: () => clusterApi.list(false, true),
+  })
   const createCluster = useCreateCluster()
   const deleteCluster = useDeleteCluster()
   const authenticated = isAuthenticated()
@@ -156,47 +142,6 @@ export default function Clusters() {
   }, [data, refreshing, serverRefreshing, refetch, queryClient])
 
   const clusters = data?.clusters || []
-
-  const clusterCostQueries = useQueries({
-    queries: clusters.map((cluster) => ({
-      queryKey: ['clusterCost', cluster.id],
-      queryFn: () => clusterApi.getCost(cluster.id),
-      enabled: cluster.provider === 'ibm',
-      staleTime: 60_000,
-    })),
-  })
-  const costsByCluster = clusters.reduce<Record<string, ClusterCost[]>>((acc, cluster, index) => {
-    acc[cluster.id] = (clusterCostQueries[index]?.data as ClusterCost[] | undefined) || []
-    return acc
-  }, {})
-
-  const gpuStatusQueries = useQueries({
-    queries: clusters.map((c) => ({
-      queryKey: ['gpu-status', c.id],
-      queryFn: () => clusterApi.getGpuStatus(c.id),
-      enabled: c.status === 'healthy',
-      staleTime: 30_000,
-      refetchInterval: 60_000,
-    })),
-  })
-  const gpuStatusByCluster = clusters.reduce<Record<string, GpuAllocationStatus | undefined>>((acc, c, i) => {
-    acc[c.id] = gpuStatusQueries[i]?.data as GpuAllocationStatus | undefined
-    return acc
-  }, {})
-
-  const gpuHistoryQueries = useQueries({
-    queries: clusters.map((c) => ({
-      queryKey: ['gpu-pod-history', c.id],
-      queryFn: () => clusterApi.getGpuPodHistory(c.id),
-      enabled: c.status === 'healthy',
-      staleTime: 60_000,
-      refetchInterval: 120_000,
-    })),
-  })
-  const gpuHistoryByCluster = clusters.reduce<Record<string, Array<{ name: string; namespace: string; gpu_count: number; node?: string; finished_at: string }>>>((acc, c, i) => {
-    acc[c.id] = (gpuHistoryQueries[i]?.data as { pods: typeof acc[string] } | undefined)?.pods || []
-    return acc
-  }, {})
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: { 'application/x-yaml': ['.yaml', '.yml'], 'text/plain': ['.kubeconfig'] },
@@ -407,199 +352,15 @@ export default function Clusters() {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2 xl:grid-cols-3">
           {clusters.map((cluster) => (
-            <div key={cluster.id} className="card hover:shadow-md transition-shadow">
-              <div className="p-6">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <div
-                      className={`h-12 w-12 rounded-xl flex items-center justify-center ${
-                        cluster.status === 'healthy'
-                          ? 'bg-green-100'
-                          : cluster.status === 'error'
-                          ? 'bg-orange-100'
-                          : 'bg-yellow-100'
-                      }`}
-                    >
-                      <ServerStackIcon
-                        className={`h-6 w-6 ${
-                          cluster.status === 'healthy'
-                            ? 'text-green-600'
-                            : cluster.status === 'error'
-                            ? 'text-orange-600'
-                            : 'text-yellow-600'
-                        }`}
-                      />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-gray-900">{cluster.name}</h3>
-                      <span
-                        className={`badge mt-1 ${
-                          cluster.status === 'healthy'
-                            ? 'badge-success'
-                            : cluster.status === 'error'
-                            ? 'badge-error'
-                            : 'badge-warning'
-                        }`}
-                      >
-                        {cluster.status}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {cluster.description && (
-                  <p className="mt-4 text-sm text-gray-500 line-clamp-2">{cluster.description}</p>
-                )}
-
-                {(() => {
-                  const gpuData = gpuStatusByCluster[cluster.id]
-                  const cTotal = gpuData?.total_gpus ?? parseInt(cluster.gpu_count || '0')
-                  const cUsed = gpuData?.allocated_gpus ?? 0
-                  const gpuNodeCount = gpuData?.gpu_types.reduce(
-                    (total, gpuType) => total + gpuType.node_count,
-                    0,
-                  )
-                  return (
-                    <div className="mt-4 flex items-center gap-4">
-                      {cTotal > 0 && (
-                        <GpuDonutChart used={cUsed} total={cTotal} size={72} strokeWidth={7} />
-                      )}
-                      <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm flex-1">
-                        <div>
-                          <p className="text-gray-500">Cluster nodes</p>
-                          <p className="font-semibold text-gray-900">{cluster.node_count || 'N/A'}</p>
-                        </div>
-                        <div>
-                          <p className="text-gray-500" title="Nodes with at least one detected GPU">GPU nodes</p>
-                          <p className="font-semibold text-gray-900">{gpuNodeCount ?? 'N/A'}</p>
-                        </div>
-                        <div>
-                          <p className="text-gray-500">GPUs used</p>
-                          <p className="font-semibold text-gray-900">
-                            {gpuData ? `${cUsed} / ${cTotal}` : `– / ${cTotal}`}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-gray-500">Version</p>
-                          <p className="font-semibold text-gray-900 truncate">
-                            {cluster.cluster_version || 'N/A'}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-gray-500">Last Check</p>
-                          <p className="font-semibold text-gray-900">
-                            {cluster.last_health_check
-                              ? format(new Date(cluster.last_health_check), 'MMM d, HH:mm')
-                              : 'Never'}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })()}
-
-                {(() => {
-                  const pods = gpuStatusByCluster[cluster.id]?.gpu_pods || []
-                  if (pods.length === 0) return null
-                  return (
-                    <div className="mt-4 pt-4 border-t border-gray-100">
-                      <p className="text-xs font-medium text-gray-500 mb-2">
-                        GPU Workloads ({pods.length})
-                      </p>
-                      <div className="space-y-1.5 max-h-32 overflow-y-auto">
-                        {pods.map((pod) => (
-                          <div key={`${pod.namespace}/${pod.name}`} className="flex items-center justify-between text-xs">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="inline-block h-1.5 w-1.5 rounded-full bg-purple-500 flex-shrink-0" />
-                              <span className="text-gray-500 flex-shrink-0">{pod.namespace}/</span>
-                              <span className="text-gray-800 font-medium truncate">{pod.name}</span>
-                            </div>
-                            <span className="ml-2 flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">
-                              {pod.gpu_count} GPU
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )
-                })()}
-
-                {(() => {
-                  const history = gpuHistoryByCluster[cluster.id] || []
-                  if (history.length === 0) return null
-                  return (
-                    <div className="mt-3 pt-3 border-t border-gray-100/60">
-                      <p className="text-xs font-medium text-gray-400 mb-1.5">
-                        Past GPU Workloads ({history.length})
-                      </p>
-                      <div className="space-y-1 max-h-28 overflow-y-auto">
-                        {history.map((pod) => (
-                          <div key={`${pod.namespace}/${pod.name}`} className="flex items-center justify-between text-xs">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="inline-block h-1.5 w-1.5 rounded-full bg-gray-300 flex-shrink-0" />
-                              <span className="text-gray-400 flex-shrink-0">{pod.namespace}/</span>
-                              <span className="text-gray-500 truncate">{pod.name}</span>
-                            </div>
-                            <div className="ml-2 flex-shrink-0 flex items-center gap-1.5">
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-medium">
-                                {pod.gpu_count} GPU
-                              </span>
-                              <span className="text-gray-400 whitespace-nowrap">{timeAgo(pod.finished_at)}</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )
-                })()}
-
-                {cluster.provider === 'ibm' && (() => {
-                  const costs = costsByCluster[cluster.id] || []
-                  const valid = costs.filter((cost) => !cost.error && cost.total_cost != null)
-                  if (valid.length === 0) {
-                    return (
-                      <div className="mt-4 border-t border-gray-100 pt-4 text-sm text-gray-400">
-                        No billing data
-                      </div>
-                    )
-                  }
-                  return (
-                    <div className="mt-4 space-y-1 border-t border-gray-100 pt-4 text-sm">
-                      {valid.map((cost, index) => (
-                        <div key={`${cost.billing_month || 'latest'}-${index}`} className="flex items-center justify-between">
-                          <span className="text-gray-400">{cost.billing_month || 'Latest'}</span>
-                          <span className="font-semibold text-gray-900">
-                            {cost.total_cost!.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )
-                })()}
-              </div>
-
-              <div className="px-6 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
-                <Link
-                  to={`/clusters/${cluster.id}`}
-                  className="text-sm font-medium text-primary-600 hover:text-primary-700 flex items-center gap-1"
-                >
-                  <EyeIcon className="h-4 w-4" />
-                  View Details
-                </Link>
-                {isAdmin() && (
-                  <button
-                    onClick={() => handleRemove(cluster.id, cluster.name)}
-                    disabled={deleteCluster.isPending}
-                    className="text-sm font-medium text-orange-600 hover:text-orange-700 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                    {deleteCluster.isPending ? 'Removing...' : 'Remove'}
-                  </button>
-                )}
-              </div>
-            </div>
+            <ClusterCard
+              key={cluster.id}
+              cluster={cluster}
+              latestCost={data?.latest_costs ? data.latest_costs[cluster.id] ?? null : undefined}
+              onRemove={isAdmin() ? () => handleRemove(cluster.id, cluster.name) : undefined}
+              removing={deleteCluster.isPending}
+            />
           ))}
         </div>
       )}
