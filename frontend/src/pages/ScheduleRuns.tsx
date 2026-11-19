@@ -76,6 +76,7 @@ export default function ScheduleRuns() {
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job Name</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Owner</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
                   <th className="px-4 py-3" />
@@ -94,6 +95,7 @@ export default function ScheduleRuns() {
                         {run.status}
                       </span>
                     </td>
+                    <td className="px-4 py-3 text-sm text-gray-500">{run.owner || '-'}</td>
                     <td className="px-4 py-3 text-sm text-gray-500">{formatDuration(run.duration_seconds)}</td>
                     <td className="px-4 py-3 text-sm text-gray-500">
                       {run.created_at ? new Date(run.created_at).toLocaleString() : '-'}

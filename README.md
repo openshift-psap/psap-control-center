@@ -18,7 +18,7 @@ oc get route psap-control-center -n <namespace> \
 - **Namespace Enforcement** — GPU reservations automatically provision isolated Kubernetes namespaces with `ResourceQuota` and optional DRA `ResourceClaimTemplate`. Namespaces are cleaned up on completion, cancellation, or deletion.
 - **Calendar Views** — Weekly preview with overlapping reservation display (index-based opacity for distinguishing coexisting reservations), plus full month/week/day calendar.
 - **Hearth Integration** — Discover GPU inventory from `FournosCluster` resources on a shared Hearth/Fournos management cluster.
-- **Fournos Testing (development)** — Monitor live and archived test runs, submit schema-driven Forge jobs, schedule recurring work, and coordinate cluster locks from the Testing tab.
+- **Testing (development)** — Monitor live and archived test runs, submit schema-driven Forge jobs, schedule recurring work, and coordinate cluster locks.
 - **Cost Explorer & Billing** — Compare public, estimated, and actual infrastructure costs using cluster snapshots and uploaded IBM Cloud billing reports.
 - **Slack Notifications** — Configure an incoming webhook for reservation notifications from the admin settings page.
 - **Role-Based Access** — Public read access, signed-in reservation workflows, and administrator-only cluster, integration, billing, and cost management.
@@ -78,9 +78,9 @@ access to the OpenShift API.
 
 ## Testing Tab (Development)
 
-The development branch includes a Fournos-backed Testing workspace. It uses the
-same management-cluster connection as Hearth, while the browser communicates
-with Control Center's API.
+The Testing tab brings the team's test runs into one workspace. Its Fournos
+integration uses the same management-cluster connection as Hearth. The browser
+communicates with Control Center's API.
 
 - **Live Jobs** polls active `FournosJob` resources and opens a detail view with
   pipeline progress, pods, events, and streaming logs.
@@ -90,13 +90,49 @@ with Control Center's API.
   `ui/submit.yaml` schemas, supports standard or matrix submissions, and can run
   immediately, defer a run, or create a recurring schedule. Custom non-Forge
   job definitions remain a planned capability.
+- **Run grouping** associates jobs with reusable, product-neutral experiments,
+  workload families, campaigns, or cohorts. Matrix jobs, recurring children,
+  and reruns retain the selected grouping.
 - **Schedules/Locks** manages recurring jobs and immediate or scheduled cluster
   locks, with cluster activity and child-run views.
 
 Read-only Testing views are public. Submitting work, creating locks, and holding
-calendar slots require a signed-in user. Cancelling or rerunning jobs, deleting
-history, triggering or deleting schedules, and releasing locks require an
-administrator.
+calendar slots require a signed-in user. RHAIIS inference-server logs are
+available only to the recorded job requester or an administrator. Cancelling or
+rerunning jobs, deleting history, triggering or deleting schedules, and
+releasing locks require an administrator.
+
+### Importing existing Fournos history
+
+Control Center's Kubernetes watcher captures FournosJobs going forward. To
+backfill jobs and CPT submissions already archived by Fournos UI, run this
+from the backend environment:
+
+`python -m app.services.fournos_history_backfill`
+
+Set `DATABASE_URL` to the Control Center database and
+`FOURNOS_ARCHIVE_DATABASE_URL` to the Fournos UI database. Use a
+read-only source database account with SELECT access to `jobs`, `cpt_runs`,
+and `cpt_run_jobs`. The import is idempotent, preserves Control Center job
+records, and retains CPT entries whose FournosJob could not be created. On
+startup, the Control Center also backfills the indexed CPT group key for
+existing rows; CPT list pages then load one page of groups and the detail view
+loads only the selected group.
+
+For ongoing capture, configure Control Center's `FOURNOS_NAMESPACE` to the
+same namespace used by the Fournos UI deployment. The watcher performs an
+initial sync, watches job changes, and periodically re-syncs the namespace.
+Fournos UI CPT submissions include grouping metadata in their FournosJob
+annotations so Control Center can track new runs from its own history store.
+CPT read access uses the existing `fournos_jobs` and
+`fournos_cpt_run_job_archive` records; Control Center computes and indexes a
+stable `cpt_group_id` from each record's CPT dimensions. The startup migration
+backfills that key for existing deployments.
+
+New submissions use the Fournos operator's configured TTL unless
+`FOURNOS_DEFAULT_JOB_TTL` is explicitly set. Priority defaults to `manual`,
+including CPT submissions; the requester can select another configured
+priority in the form.
 
 ## Quick Start
 
@@ -158,11 +194,19 @@ default.
 | `FORGE_GITHUB_REF` | `main` | Forge ref used for repository content discovery |
 | `GITHUB_SYNC_INTERVAL_SECONDS` | `3600` | Background Forge metadata refresh interval |
 | `FOURNOS_DEFAULT_PIPELINES` | Built-in list | Fallback comma-separated pipeline names |
+| `FOURNOS_DEFAULT_JOB_TTL` | Unset | Optional TTL override; when unset, Fournos applies its configured default |
+| `WORK_ITEM_ALLOWED_HOSTS` | Empty | Comma-separated Jira hosts allowed for read-only run associations |
+| `WORK_ITEM_JIRA_BASE_URL` | Optional | HTTPS Jira base URL used to expand keys such as `PROJECT-123`; no credentials are stored or used |
 | `BILLING_CSV_STORAGE_PATH` | `./billing_csvs` | Billing report storage directory |
 | `LOG_LEVEL` | `INFO` | Backend log level: ERROR, WARN, INFO, or DEBUG |
 | `MLFLOW_BASE_URL` | Optional | Reserved for the planned Results integration |
 | `VITE_LOG_LEVEL` | `INFO` | Frontend build-time log level |
 | `VITE_ENV_BANNER` | Optional | Frontend build-time environment banner |
+| `VITE_PERFORMANCE_DASHBOARD_PRODUCTION_URL` | Optional | Production Performance Dashboard sidebar link |
+| `VITE_PERFORMANCE_DASHBOARD_STAGING_URL` | Optional | Staging Performance Dashboard sidebar link |
+| `VITE_PSAP_REPORT_HUB_URL` | Optional | PSAP Report Hub sidebar link |
+| `VITE_CONFIGIQ_URL` | Optional | ConfigIQ sidebar link |
+| `VITE_SERVIT_STUDIO_URL` | Optional | Servit Studio sidebar link |
 
 ## Documentation
 

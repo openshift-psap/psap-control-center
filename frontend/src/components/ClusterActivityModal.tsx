@@ -3,11 +3,7 @@ import { Dialog, Transition } from '@headlessui/react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
 import SchedulingCalendar from './SchedulingCalendar'
 
-/** Read-only "what's happening on this cluster" popup — shown on the Submit
- * page when the selected cluster has something running or coming up soon
- * (see hasUpcomingClusterActivity in Testing.tsx), so a user can sanity-check
- * the cluster's schedule before submitting without cluttering the form with
- * an always-on inline calendar. */
+/** Inspect the selected cluster's schedule without holding a time slot. */
 export default function ClusterActivityModal({
   open,
   onClose,
@@ -39,11 +35,11 @@ export default function ClusterActivityModal({
                 <div className="flex items-center justify-between mb-1">
                   <div>
                     <Dialog.Title as="h3" className="text-lg font-semibold text-gray-900">
-                      Heads up — <span className="font-mono">{cluster}</span> has activity coming up
+                      Schedule for <span className="font-mono">{cluster}</span>
                     </Dialog.Title>
                     <p className="mt-0.5 text-xs text-gray-500">Times shown in your local timezone.</p>
                   </div>
-                  <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100">
+                  <button type="button" aria-label="Close schedule" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100">
                     <XMarkIcon className="h-5 w-5 text-gray-500" />
                   </button>
                 </div>

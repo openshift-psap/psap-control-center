@@ -1,12 +1,16 @@
+from collections import Counter
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
+from datetime import datetime
+from threading import Lock
 import yaml
 import os
 import httpx
 import urllib3
 
+from app.core.kubernetes import configure_api_proxy
 from app.utils.logger import create_logger
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -19,6 +23,15 @@ DRA_GPU_DRIVER_NAMES = ["gpu.nvidia.com", "gpu.intel.com", "gpu.amd.com"]
 DRA_CONFIGMAP_NAME = "gpu-fleet-viewer-config"
 DRA_CONFIGMAP_NAMESPACE = "gpu-fleet-viewer"
 K8S_API_TIMEOUT = 120
+
+
+def _extended_claim_pod_uid(metadata: dict) -> str | None:
+    """The scheduler gives its generated extended-resource claim a Pod controller owner."""
+    if (metadata.get("annotations") or {}).get("resource.kubernetes.io/extended-resource-claim") == "true":
+        for owner in metadata.get("ownerReferences") or []:
+            if owner.get("kind") == "Pod" and owner.get("controller"):
+                return owner.get("uid")
+    return None
 
 
 @dataclass
@@ -58,6 +71,8 @@ class GpuAllocationStatus:
     gpu_types: list = None
     nodes: list = None
     gpu_pods: list = None
+    pod_inventory_complete: bool = False
+    observed_at: datetime = field(default_factory=datetime.utcnow)
 
     def __post_init__(self):
         if self.gpu_types is None:
@@ -68,7 +83,9 @@ class GpuAllocationStatus:
             self.gpu_pods = []
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        status = asdict(self)
+        del status["observed_at"]
+        return status
 
 
 class KubernetesService:
@@ -79,6 +96,13 @@ class KubernetesService:
         self._version_api = None
         self._custom_objects = None
         self._configuration = None
+        # A KubernetesService instance is short-lived (one operation or one
+        # cluster refresh). Share expensive node/pod list responses between
+        # concurrent probes during that operation.
+        self._nodes_snapshot = None
+        self._pods_snapshot = None
+        self._nodes_snapshot_lock = Lock()
+        self._pods_snapshot_lock = Lock()
         self._load_config()
 
     def _load_config(self):
@@ -95,30 +119,11 @@ class KubernetesService:
         self._configuration.retries = 1
         self._configuration.verify_ssl = False
 
-        self._apply_proxy_if_needed()
+        configure_api_proxy(self._configuration)
         
         self._api_client = client.ApiClient(configuration=self._configuration)
         self._core_v1 = client.CoreV1Api(self._api_client)
         self._version_api = client.VersionApi(self._api_client)
-
-    def _apply_proxy_if_needed(self):
-        """Set proxy on the K8s client config if HTTPS_PROXY is set and
-        the target host is not excluded by NO_PROXY."""
-        proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-        if not proxy_url:
-            return
-        no_proxy = os.environ.get("NO_PROXY", os.environ.get("no_proxy", ""))
-        host = (self._configuration.host or "").lower()
-        for entry in no_proxy.split(","):
-            entry = entry.strip().lower()
-            if not entry:
-                continue
-            if entry.startswith(".") and host.find(entry) != -1:
-                return
-            if host.find(entry) != -1:
-                return
-        self._configuration.proxy = proxy_url
-        self._configuration.verify_ssl = False
 
     @property
     def core_v1(self):
@@ -132,6 +137,30 @@ class KubernetesService:
             self._load_config()
         return self._version_api
 
+    def _list_nodes_snapshot(self):
+        """List nodes once per service instance and share the result safely."""
+        if self._nodes_snapshot is not None:
+            return self._nodes_snapshot
+        with self._nodes_snapshot_lock:
+            if self._nodes_snapshot is None:
+                self._nodes_snapshot = self.core_v1.list_node(
+                    _request_timeout=K8S_API_TIMEOUT
+                )
+        return self._nodes_snapshot
+
+    def _list_pods_snapshot(self):
+        """Share the pod list and the UTC time its request started across probes."""
+        if self._pods_snapshot is not None:
+            return self._pods_snapshot
+        with self._pods_snapshot_lock:
+            if self._pods_snapshot is None:
+                observed_at = datetime.utcnow()
+                pods = self.core_v1.list_pod_for_all_namespaces(
+                    _request_timeout=K8S_API_TIMEOUT
+                )
+                self._pods_snapshot = (observed_at, pods)
+        return self._pods_snapshot
+
     @property
     def custom_objects(self):
         if self._custom_objects is None:
@@ -144,9 +173,7 @@ class KubernetesService:
             version_info = self.version_api.get_code(
                 _request_timeout=K8S_API_TIMEOUT
             )
-            nodes = self.core_v1.list_node(
-                _request_timeout=K8S_API_TIMEOUT
-            )
+            nodes = self._list_nodes_snapshot()
 
             gpu_count = 0
             node_details = []
@@ -259,12 +286,8 @@ class KubernetesService:
 
     def get_resource_usage(self) -> Dict[str, Any]:
         try:
-            nodes = self.core_v1.list_node(
-                _request_timeout=K8S_API_TIMEOUT
-            )
-            pods = self.core_v1.list_pod_for_all_namespaces(
-                _request_timeout=K8S_API_TIMEOUT
-            )
+            nodes = self._list_nodes_snapshot()
+            _, pods = self._list_pods_snapshot()
             
             total_cpu_capacity = 0
             total_memory_capacity = 0
@@ -457,15 +480,22 @@ class KubernetesService:
             logger.info("DRA API present but no GPU driver ResourceSlices found, falling back to legacy")
             return self._get_gpu_allocation_legacy()
 
-        # Count allocations from DRA ResourceClaims
+        # A scheduler-generated claim can satisfy the pod's extended GPU request.
+        # Track only those devices for deduplication. Explicit device claims
+        # (including network devices) are independent of container requests.
+        covered_gpu_requests = Counter()
         try:
             claims = self.custom_objects.list_cluster_custom_object(
                 group=DRA_API_GROUP, version=dra_version, plural="resourceclaims",
                 _request_timeout=K8S_API_TIMEOUT,
             )
             for claim in claims.get("items", []):
-                alloc = claim.get("status", {}).get("allocation", {})
+                claim_status = claim.get("status", {})
+                alloc = claim_status.get("allocation", {})
                 devices = alloc.get("devices", {}).get("results", [])
+                metadata = claim.get("metadata", {})
+                extended_pod_uid = _extended_claim_pod_uid(metadata)
+                claim_name = metadata.get("name")
                 for result in devices:
                     req_driver = result.get("driver", "")
                     if req_driver and req_driver not in DRA_GPU_DRIVER_NAMES:
@@ -476,46 +506,42 @@ class KubernetesService:
                                 or pool_name.endswith(
                                     f"-{node_name}")):
                             info.gpu_allocated += 1
+                            if extended_pod_uid and claim_name and result.get("request"):
+                                key = (node_name, extended_pod_uid, claim_name, result["request"])
+                                covered_gpu_requests[key] += 1
                             break
         except ApiException:
             logger.warning("Could not list ResourceClaims; allocation counts may be incomplete")
         except Exception as e:
             logger.warning(f"Error counting DRA allocations: {e}")
 
-        # Also count traditional pod-level nvidia.com/gpu resource requests
-        # (workloads not using DRA still request GPUs the classic way)
+        # Record pods with conventional GPU requests even when they also use claims.
         gpu_config = self._load_gpu_config_from_configmap()
         gpu_resource = gpu_config.get("gpu_resource_name", "nvidia.com/gpu")
         gpu_pods: List[GpuPodInfo] = []
-        dra_managed_nodes = set(node_gpus.keys())
         try:
-            pods = self.core_v1.list_pod_for_all_namespaces(
-                _request_timeout=K8S_API_TIMEOUT
-            )
+            status.observed_at, pods = self._list_pods_snapshot()
             for pod in pods.items:
                 if pod.status.phase not in ("Running", "Pending"):
                     continue
-                pod_claims = getattr(
-                    pod.spec, "resource_claims", None
-                )
-                if pod_claims:
-                    continue
                 pod_node = pod.spec.node_name
-                pod_total_gpu = 0
-                for ctr in (pod.spec.containers or []):
-                    reqs = (
-                        (ctr.resources.requests or {})
-                        if ctr.resources else {}
-                    )
-                    gpu_req = int(reqs.get(gpu_resource, 0))
-                    if gpu_req > 0:
-                        pod_total_gpu += gpu_req
-                        # Only increment allocation for nodes NOT already
-                        # tracked by DRA ResourceClaims
-                        if (pod_node and pod_node in node_gpus
-                                and pod_node not in dra_managed_nodes):
-                            node_gpus[pod_node].gpu_allocated += gpu_req
+                container_requests = {
+                    ctr.name: int((ctr.resources.requests or {}).get(gpu_resource, 0))
+                    for ctr in pod.spec.containers or [] if ctr.resources
+                }
+                pod_total_gpu = sum(container_requests.values())
                 if pod_total_gpu > 0:
+                    if pod_node in node_gpus:
+                        claim_status = pod.status.extended_resource_claim_status
+                        if claim_status:
+                            for mapping in claim_status.request_mappings or []:
+                                if mapping.resource_name != gpu_resource or mapping.container_name not in container_requests:
+                                    continue
+                                key = (pod_node, pod.metadata.uid, claim_status.resource_claim_name, mapping.request_name)
+                                overlap = min(container_requests[mapping.container_name], covered_gpu_requests[key])
+                                container_requests[mapping.container_name] -= overlap
+                                covered_gpu_requests[key] -= overlap
+                        node_gpus[pod_node].gpu_allocated += sum(container_requests.values())
                     gpu_pods.append(GpuPodInfo(
                         name=pod.metadata.name,
                         namespace=pod.metadata.namespace,
@@ -526,6 +552,8 @@ class KubernetesService:
             logger.warning(
                 f"Could not list pods for legacy GPU counting: {e}"
             )
+        else:
+            status.pod_inventory_complete = True
 
         # Aggregate into the status object
         unique_nodes_per_type: Dict[str, set] = {}
@@ -554,10 +582,8 @@ class KubernetesService:
         status = GpuAllocationStatus(gpu_allocation_mode="legacy")
 
         try:
-            nodes = self.core_v1.list_node(_request_timeout=K8S_API_TIMEOUT)
-            pods = self.core_v1.list_pod_for_all_namespaces(
-                _request_timeout=K8S_API_TIMEOUT
-            )
+            nodes = self._list_nodes_snapshot()
+            status.observed_at, pods = self._list_pods_snapshot()
         except Exception as e:
             logger.error(f"Legacy GPU allocation query failed: {e}")
             return status
@@ -640,6 +666,7 @@ class KubernetesService:
         status.total_gpus = sum(t.count for t in status.gpu_types)
         status.allocated_gpus = sum(t.allocated for t in status.gpu_types)
         status.free_gpus = status.total_gpus - status.allocated_gpus
+        status.pod_inventory_complete = True
         return status
 
     def get_gpu_allocation(self) -> GpuAllocationStatus:
@@ -647,6 +674,7 @@ class KubernetesService:
         Get GPU allocation status using DRA if available, otherwise fall back
         to legacy node capacity + pod resource counting.
         """
+        started_at = datetime.utcnow()
         try:
             dra_version = self._detect_dra_version()
             if dra_version:
@@ -657,7 +685,7 @@ class KubernetesService:
                 return self._get_gpu_allocation_legacy()
         except Exception as e:
             logger.error(f"get_gpu_allocation failed: {e}")
-            return GpuAllocationStatus()
+            return GpuAllocationStatus(observed_at=started_at)
 
     # ── Namespace + Enforcement helpers ────────────────────────────────────
 

@@ -1,15 +1,56 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { clusterApi } from '../services/api'
-import type { Cluster } from '../types'
+import { getPreferenceAccount } from '../stores/authStore'
+import type { Cluster, RefreshDisplayMode, RefreshDisplayPreference } from '../types'
 import toast from 'react-hot-toast'
 import { createLogger } from '../utils/logger'
 
 const logger = createLogger('Clusters')
 
-export function useClusters(activeOnly = false) {
+export function useClusters(activeOnly = false, enabled = true) {
   return useQuery({
     queryKey: ['clusters', { activeOnly }],
     queryFn: () => clusterApi.list(activeOnly),
+    enabled,
+  })
+}
+
+const refreshPreferenceKey = () => ['cluster-refresh-display-preference', getPreferenceAccount()] as const
+
+export function useClusterRefreshDisplayPreference(enabled = true) {
+  return useQuery<RefreshDisplayPreference>({
+    queryKey: refreshPreferenceKey(),
+    queryFn: clusterApi.getRefreshDisplayPreference,
+    enabled,
+    staleTime: Infinity,
+    retry: 1,
+  })
+}
+
+export function useSaveClusterRefreshDisplayPreference() {
+  const queryClient = useQueryClient()
+
+  return useMutation<
+    RefreshDisplayPreference,
+    Error,
+    RefreshDisplayMode,
+    { key: ReturnType<typeof refreshPreferenceKey>; previous?: RefreshDisplayPreference }
+  >({
+    mutationFn: clusterApi.saveRefreshDisplayPreference,
+    onMutate: async (mode) => {
+      const key = refreshPreferenceKey()
+      await queryClient.cancelQueries({ queryKey: key })
+      const previous = queryClient.getQueryData<RefreshDisplayPreference>(key)
+      queryClient.setQueryData<RefreshDisplayPreference>(key, { ...previous, mode })
+      return { key, previous }
+    },
+    onError: (error, _mode, context) => {
+      if (context) queryClient.setQueryData(context.key, context.previous ?? { mode: 'countdown' })
+      toast.error(`Failed to save refresh display preference: ${error.message}`)
+    },
+    onSuccess: (data, _mode, context) => {
+      if (context) queryClient.setQueryData(context.key, data)
+    },
   })
 }
 

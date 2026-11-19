@@ -2,13 +2,16 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
 from app.core.database import get_db
-from app.core.auth import require_admin
+from app.core.auth import require_admin, require_auth
 from app.services.cluster_service import ClusterService
 from app.services.kubernetes_service import KubernetesService
+from app.services import gpu_status_cache
+from app.services.gpu_pod_history_service import record_gpu_snapshot
 from app.schemas.cluster import (
     ClusterCreate,
     ClusterUpdate,
@@ -18,13 +21,17 @@ from app.schemas.cluster import (
     ClusterCostResponse,
     ClusterCostListResponse,
     GpuAllocationStatus as GpuAllocationStatusSchema,
+    RefreshDisplayPreferenceResponse,
+    RefreshDisplayPreferenceUpdate,
 )
+from app.services import user_preference_service
 from app.utils.logger import create_logger
 
 router = APIRouter()
 logger = create_logger("ClustersAPI")
 
 _k8s_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="k8s-api")
+REFRESH_DISPLAY_PREFERENCE_KEY = "clusters.refresh_display_mode"
 
 
 async def _run_in_thread(fn, *args):
@@ -51,6 +58,54 @@ async def get_refresh_schedule():
         "total": cluster_refresh_state.get("total", 0),
         "completed": cluster_refresh_state.get("completed", 0),
     }
+
+
+@router.get(
+    "/refresh-display-preference",
+    response_model=RefreshDisplayPreferenceResponse,
+)
+async def get_refresh_display_preference(
+    user: dict = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+):
+    preference = await user_preference_service.get_preference(
+        db,
+        subject=str(user["subject"]),
+        preference_key=REFRESH_DISPLAY_PREFERENCE_KEY,
+    )
+    if preference is None:
+        return RefreshDisplayPreferenceResponse(mode="countdown")
+
+    value = preference.value if isinstance(preference.value, dict) else {}
+    mode = value.get("mode")
+    if mode not in {"countdown", "last_update"}:
+        mode = "countdown"
+    return RefreshDisplayPreferenceResponse(
+        mode=mode,
+        updated_at=preference.updated_at,
+    )
+
+
+@router.put(
+    "/refresh-display-preference",
+    response_model=RefreshDisplayPreferenceResponse,
+)
+async def update_refresh_display_preference(
+    body: RefreshDisplayPreferenceUpdate,
+    user: dict = Depends(require_auth),
+    db: AsyncSession = Depends(get_db),
+):
+    preference = await user_preference_service.save_preference(
+        db,
+        subject=str(user["subject"]),
+        preference_key=REFRESH_DISPLAY_PREFERENCE_KEY,
+        value={"mode": body.mode},
+    )
+    await db.commit()
+    return RefreshDisplayPreferenceResponse(
+        mode=body.mode,
+        updated_at=preference.updated_at,
+    )
 
 
 # Static routes must be registered before dynamic /{cluster_id} routes
@@ -365,7 +420,7 @@ async def get_gpu_status(
     cluster_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Get live GPU allocation status via DRA or legacy counting."""
+    """Return the latest cluster-refresh snapshot, falling back to a live read."""
     service = ClusterService(db)
     cluster = await service.get_cluster(cluster_id)
 
@@ -376,40 +431,22 @@ async def get_gpu_status(
         raise HTTPException(status_code=400, detail="Cluster has no kubeconfig configured")
 
     try:
+        cached = await gpu_status_cache.get(db, cluster_id)
+        if cached is not None:
+            return GpuAllocationStatusSchema.model_validate(cached)
+
         k8s_service = KubernetesService(cluster.kubeconfig_path)
         allocation = await _run_in_thread(k8s_service.get_gpu_allocation)
 
-        # Persist GPU pod sightings so we can show history later
-        from app.services.gpu_pod_history_service import sync_gpu_pods
         try:
-            await sync_gpu_pods(db, cluster_id, [
-                {"name": p.name, "namespace": p.namespace, "gpu_count": p.gpu_count, "node": p.node}
-                for p in allocation.gpu_pods
-            ])
-        except Exception as sync_err:
-            logger.warning(f"GPU pod history sync failed: {sync_err}")
-
-        return GpuAllocationStatusSchema(
-            gpu_allocation_mode=allocation.gpu_allocation_mode,
-            dra_available=allocation.dra_available,
-            dra_api_version=allocation.dra_api_version,
-            total_gpus=allocation.total_gpus,
-            allocated_gpus=allocation.allocated_gpus,
-            free_gpus=allocation.free_gpus,
-            gpu_types=[{
-                "product": t.product,
-                "count": t.count,
-                "allocated": t.allocated,
-                "free": t.free,
-                "node_count": t.node_count,
-            } for t in allocation.gpu_types],
-            gpu_pods=[{
-                "name": p.name,
-                "namespace": p.namespace,
-                "gpu_count": p.gpu_count,
-                "node": p.node,
-            } for p in allocation.gpu_pods],
-        )
+            snapshot = await record_gpu_snapshot(db, cluster_id, allocation)
+            await db.commit()
+        except SQLAlchemyError as exc:
+            await db.rollback()
+            logger.warning(f"GPU snapshot write failed for cluster {cluster_id}: {exc}")
+            newer = await gpu_status_cache.get(db, cluster_id, since=allocation.observed_at)
+            snapshot = newer if newer is not None else allocation.to_dict()
+        return GpuAllocationStatusSchema.model_validate(snapshot)
     except Exception as e:
         logger.error(f"Failed to fetch GPU status for cluster {cluster_id}: {e}")
         raise HTTPException(

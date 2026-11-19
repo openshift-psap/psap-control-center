@@ -1,11 +1,21 @@
 from sqlalchemy import (
-    Column, String, Integer, DateTime,
+    Column, String, Integer, DateTime, JSON,
     ForeignKey, UniqueConstraint,
 )
 from datetime import datetime
 import uuid
 
 from app.core.database import Base
+
+
+class ClusterGpuSnapshot(Base):
+    __tablename__ = "cluster_gpu_snapshots"
+
+    cluster_id = Column(String(36), ForeignKey("clusters.id", ondelete="CASCADE"), primary_key=True)
+    observed_at = Column(DateTime, nullable=False)
+    status = Column(JSON, nullable=False)
+    # A newer partial allocation can update the display, but cannot retire pods.
+    pod_inventory_at = Column(DateTime, nullable=True)
 
 
 class GpuPodHistory(Base):

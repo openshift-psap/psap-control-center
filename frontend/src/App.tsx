@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { isAxiosError } from 'axios'
 import { Routes, Route, Navigate, Link } from 'react-router-dom'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
@@ -12,7 +13,7 @@ import ScheduleRuns from './pages/ScheduleRuns'
 import Results from './pages/Results'
 import Settings from './pages/Settings'
 import CostExplorer from './pages/CostExplorer'
-import { isAdmin, setSession } from './stores/authStore'
+import { clearSession, getSession, isAdmin, setSession } from './stores/authStore'
 import { authApi } from './services/api'
 import toast from 'react-hot-toast'
 
@@ -92,6 +93,8 @@ function App() {
       } catch (error) {
         if (code || oauthError) {
           toast.error(error instanceof Error ? error.message : 'Google sign-in failed')
+        } else if (!getSession() && isAxiosError(error) && error.response?.status === 401) {
+          clearSession()
         }
         // No valid session cookie is expected for anonymous visitors.
       }

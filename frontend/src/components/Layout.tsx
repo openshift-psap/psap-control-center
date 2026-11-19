@@ -1,5 +1,15 @@
-import { Fragment, useState, useEffect, useCallback } from 'react'
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
+import {
+  Fragment,
+  useState,
+  useEffect,
+  useId,
+  useCallback,
+  type CSSProperties,
+  type ReactNode,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Dialog, Transition } from '@headlessui/react'
 import {
   Bars3Icon,
@@ -9,30 +19,122 @@ import {
   ClipboardDocumentListIcon,
   BeakerIcon,
   ChartBarIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ArrowTopRightOnSquareIcon,
   CurrencyDollarIcon,
   Cog6ToothIcon,
+  WrenchScrewdriverIcon,
   LockClosedIcon,
   LockOpenIcon,
   FireIcon,
 } from '@heroicons/react/24/outline'
 import clsx from 'clsx'
+import toast from 'react-hot-toast'
+import { version as releaseVersion } from '../../package.json'
 import LoginModal from './LoginModal'
+import { useAuthConfig } from '../hooks/useAuthConfig'
 import HearthConnectModal from './HearthConnectModal'
 import { isAuthenticated, isAdmin, getDisplayName, clearSession } from '../stores/authStore'
 import { authApi } from '../services/api'
 import { useHearthStatus, useDisconnectHearth } from '../hooks/useHearth'
 import { useReservations } from '../hooks/useReservations'
 
-const navigation = [
-  { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
+type NavigationItem = {
+  name: string
+  href: string | null
+  icon: typeof HomeIcon
+  adminOnly?: boolean
+  comingSoon?: boolean
+  badge?: string
+}
+
+const navigation: NavigationItem[] = [
+  { name: 'Overview', href: '/dashboard', icon: HomeIcon },
   { name: 'Clusters', href: '/clusters', icon: ServerStackIcon },
   { name: 'Reservations', href: '/reservations', icon: ClipboardDocumentListIcon },
   { name: 'Calendar', href: '/calendar', icon: CalendarDaysIcon },
-  { name: 'Testing', href: '/testing', icon: BeakerIcon, badge: 'Experimental' },
+  { name: 'Testing', href: null, icon: BeakerIcon },
   { name: 'Results', href: '/results', icon: ChartBarIcon, comingSoon: true },
   { name: 'Cost Explorer', href: '/cost-explorer', icon: CurrencyDollarIcon, adminOnly: true },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon, adminOnly: true },
 ]
+
+const testingSubnav = [
+  { id: 'jobs', name: 'Jobs', href: '/testing?tab=live' },
+  { id: 'submit', name: 'Submit', href: '/testing?tab=submit' },
+  { id: 'cpt', name: 'CPT Jobs', href: '/testing?tab=cpt' },
+  { id: 'schedules', name: 'Schedules & Locks', href: '/testing?tab=schedules' },
+] as const
+
+const performanceDashboardSubnav = [
+  { name: 'Production', href: import.meta.env.VITE_PERFORMANCE_DASHBOARD_PRODUCTION_URL as string | undefined },
+  { name: 'Staging', href: import.meta.env.VITE_PERFORMANCE_DASHBOARD_STAGING_URL as string | undefined },
+].filter((item): item is { name: string; href: string } => Boolean(item.href?.trim()))
+
+const psapToolsSubnav = [
+  { name: 'PSAP Report Hub', href: import.meta.env.VITE_PSAP_REPORT_HUB_URL as string | undefined },
+  { name: 'ConfigIQ', href: import.meta.env.VITE_CONFIGIQ_URL as string | undefined },
+  { name: 'Servit Studio', href: import.meta.env.VITE_SERVIT_STUDIO_URL as string | undefined },
+].filter((item): item is { name: string; href: string } => Boolean(item.href?.trim()))
+
+const SIDEBAR_WIDTH_STORAGE_KEY = 'psap-control-center-sidebar-width'
+const DEFAULT_SIDEBAR_WIDTH = 288
+const MIN_SIDEBAR_WIDTH = 240
+const MAX_SIDEBAR_WIDTH = 480
+
+function clampSidebarWidth(width: number) {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width))
+}
+
+function SidebarTitle() {
+  return (
+    <h1 className="font-display text-xl font-bold text-white lg:text-lg">
+      PSAP Control{' '}
+      <span className="whitespace-nowrap">
+        Center <span className="font-sans text-xs font-medium text-gray-300">v{releaseVersion}</span>
+      </span>
+    </h1>
+  )
+}
+
+const externalSections = [
+  { name: 'Performance Dashboard', icon: ChartBarIcon, links: performanceDashboardSubnav, linkSuffix: ' Performance Dashboard' },
+  { name: 'Tools', icon: WrenchScrewdriverIcon, links: psapToolsSubnav, linkSuffix: '' },
+] as const
+
+type SectionName = 'Testing' | (typeof externalSections)[number]['name']
+
+function SidebarSection({ name, icon: Icon, expanded, onToggle, children }: {
+  name: SectionName
+  icon: typeof HomeIcon
+  expanded: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  const panelId = useId()
+  const Chevron = expanded ? ChevronUpIcon : ChevronDownIcon
+
+  return (
+    <li>
+      <button
+        type="button"
+        aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 border-l-[3px] border-transparent py-3 pl-6 pr-4 text-left text-sm font-medium text-gray-300 hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#73BCF7]"
+      >
+        <Icon className="h-5 w-5 shrink-0 text-gray-500" />
+        {name}
+        <Chevron aria-hidden="true" className="ml-auto h-4 w-4 shrink-0" />
+      </button>
+      <ul id={panelId} hidden={!expanded} className="space-y-0.5 pb-2">
+        {children}
+      </ul>
+    </li>
+  )
+}
 
 function HearthIndicator({
   onConnectClick,
@@ -128,19 +230,52 @@ const envBanner = import.meta.env.VITE_ENV_BANNER as string | undefined
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [expandedSections, setExpandedSections] = useState({
+    Testing: true,
+    'Performance Dashboard': true,
+    Tools: true,
+  })
+  const toggleSection = (name: SectionName) =>
+    setExpandedSections(current => ({ ...current, [name]: !current[name] }))
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH
+
+    try {
+      const savedWidth = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)
+      if (savedWidth === null) return DEFAULT_SIDEBAR_WIDTH
+
+      const parsedWidth = Number(savedWidth)
+      return Number.isFinite(parsedWidth) ? clampSidebarWidth(parsedWidth) : DEFAULT_SIDEBAR_WIDTH
+    } catch {
+      return DEFAULT_SIDEBAR_WIDTH
+    }
+  })
+  const [isSidebarResizing, setIsSidebarResizing] = useState(false)
   const [loginOpen, setLoginOpen] = useState(false)
   const [hearthConnectOpen, setHearthConnectOpen] = useState(false)
   const [authed, setAuthed] = useState(isAuthenticated())
   const location = useLocation()
+  const authConfigQuery = useAuthConfig()
+  const currentTestingTab = new URLSearchParams(location.search).get('tab') || 'live'
+  const isTestingPage = location.pathname === '/testing'
+  const isTestingJobDetail = location.pathname.startsWith('/testing/jobs/')
+  const isTestingSubnavActive = (id: (typeof testingSubnav)[number]['id']) => {
+    if (id === 'jobs') {
+      return isTestingJobDetail || (isTestingPage && ['live', 'history', 'queued'].includes(currentTestingTab))
+    }
+    if (id === 'schedules' && location.pathname.startsWith('/testing/schedules/')) return true
+    return isTestingPage && currentTestingTab === id
+  }
 
   const { data: hearthStatus } = useHearthStatus()
   const admin = isAdmin()
-  const { data: reservationsData } = useReservations(
-    { status: 'pending' },
-    { enabled: admin },
-  )
-  const pendingCount = admin ? (reservationsData?.reservations?.length ?? 0) : 0
-  const filteredNav = navigation.filter(item => !item.adminOnly || admin)
+  const { data: pendingReservations } = useReservations({ status: 'pending' }, { enabled: admin })
+  const pendingCount = admin ? pendingReservations?.total ?? 0 : 0
+  const filteredNav = navigation
+    .filter(item => !item.adminOnly || admin)
+    .map(item => item.href === '/reservations' && pendingCount > 0
+      ? { ...item, badge: `${pendingCount} pending` }
+      : item)
 
   const syncAuth = useCallback(() => setAuthed(isAuthenticated()), [])
 
@@ -149,13 +284,162 @@ export default function Layout() {
     return () => window.removeEventListener('auth-change', syncAuth)
   }, [syncAuth])
 
-  const handleLogout = () => {
-    clearSession()
-    authApi.logout().catch(() => {})
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth))
+    } catch {
+      // Keep the sidebar usable when browser storage is unavailable.
+    }
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    if (!isSidebarResizing) return
+
+    const previousCursor = document.body.style.cursor
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const handlePointerMove = (event: PointerEvent) => {
+      setSidebarWidth(clampSidebarWidth(event.clientX))
+    }
+    const stopResizing = () => setIsSidebarResizing(false)
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopResizing)
+    window.addEventListener('pointercancel', stopResizing)
+
+    return () => {
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousUserSelect
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopResizing)
+      window.removeEventListener('pointercancel', stopResizing)
+    }
+  }, [isSidebarResizing])
+
+  const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    setIsSidebarResizing(true)
+  }
+
+  const resizeSidebarWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault()
+      const direction = event.key === 'ArrowRight' ? 1 : -1
+      setSidebarWidth((width) => clampSidebarWidth(width + direction * 16))
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      setSidebarWidth(event.key === 'Home' ? MIN_SIDEBAR_WIDTH : MAX_SIDEBAR_WIDTH)
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+      clearSession()
+    } catch {
+      toast.error('Sign-out failed. Please try again.')
+    }
+  }
+
+  function renderNavigation(onNavigate?: () => void) {
+    return (
+      <ul className="flex flex-1 flex-col gap-y-0.5">
+        {filteredNav.map(item => {
+          if (item.href !== null) {
+            return (
+              <li key={item.name}>
+                <NavLink
+                  to={item.href}
+                  onClick={onNavigate}
+                  className={({ isActive }) => clsx(
+                    'group flex min-w-0 flex-1 gap-x-3 border-l-[3px] px-6 py-3 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'border-l-[#73BCF7] bg-white/10 text-white lg:[&>svg]:text-[#73BCF7]'
+                      : 'border-l-transparent text-gray-300 hover:bg-white/5 hover:text-white'
+                  )}
+                >
+                  <item.icon className="h-5 w-5 shrink-0 lg:text-gray-500 lg:group-hover:text-gray-300" />
+                  {item.name}
+                  {item.comingSoon && (
+                    <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs text-gray-500">Soon</span>
+                  )}
+                  {item.badge && (
+                    <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                      {item.badge}
+                    </span>
+                  )}
+                </NavLink>
+              </li>
+            )
+          }
+
+          return (
+            <Fragment key={item.name}>
+              <SidebarSection
+                name="Testing"
+                icon={item.icon}
+                expanded={expandedSections.Testing}
+                onToggle={() => toggleSection('Testing')}
+              >
+                {testingSubnav.filter(sub => sub.id !== 'submit' || authed).map(sub => {
+                  const active = isTestingSubnavActive(sub.id)
+                  return (
+                    <li key={sub.id}>
+                      <Link
+                        to={sub.href}
+                        onClick={onNavigate}
+                        aria-current={active ? 'page' : undefined}
+                        className={clsx(
+                          'ml-9 mr-3 flex rounded-md px-3 py-2 text-sm transition-colors',
+                          active ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                        )}
+                      >
+                        {sub.name}
+                      </Link>
+                    </li>
+                  )
+                })}
+              </SidebarSection>
+              {externalSections.filter(section => section.links.length > 0).map(section => (
+                <SidebarSection
+                  key={section.name}
+                  name={section.name}
+                  icon={section.icon}
+                  expanded={expandedSections[section.name]}
+                  onToggle={() => toggleSection(section.name)}
+                >
+                  {section.links.map(external => (
+                    <li key={external.name}>
+                      <a
+                        href={external.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={onNavigate}
+                        aria-label={`${external.name}${section.linkSuffix} (opens in a new tab)`}
+                        className="group ml-9 mr-3 flex items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]"
+                      >
+                        {external.name}
+                        <ArrowTopRightOnSquareIcon className="ml-auto h-4 w-4 shrink-0 text-gray-500 transition-colors group-hover:text-gray-300" />
+                      </a>
+                    </li>
+                  ))}
+                </SidebarSection>
+              ))}
+            </Fragment>
+          )
+        })}
+      </ul>
+    )
   }
 
   return (
-    <div className="min-h-screen bg-[#f0f0f0]">
+    <div
+      className="min-h-screen bg-[#f0f0f0]"
+      style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+    >
       {envBanner && (
         <div className="fixed top-0 inset-x-0 z-[60] bg-amber-500 text-black text-center text-xs font-bold tracking-widest uppercase py-1 select-none">
           {envBanner}
@@ -187,51 +471,14 @@ export default function Layout() {
             >
               <Dialog.Panel className="relative mr-16 flex w-full max-w-xs flex-1">
                 <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-[#212427] px-0 pb-4">
-                  <div className="flex h-16 shrink-0 items-center px-6">
-                    <div className="flex items-center gap-2">
-                      <div className="h-8 w-8 rounded-lg bg-primary-600 flex items-center justify-center">
-                        <span className="text-white font-bold text-sm">P</span>
-                      </div>
-                      <span className="text-xl font-bold text-white font-display">PSAP Control Center</span>
+                  <div className="flex min-h-16 shrink-0 items-center gap-2 px-6">
+                    <div className="h-8 w-8 shrink-0 rounded-lg bg-primary-600 flex items-center justify-center">
+                      <span className="text-white font-bold text-sm">P</span>
                     </div>
+                    <SidebarTitle />
                   </div>
                   <nav className="flex flex-1 flex-col">
-                    <ul className="flex flex-1 flex-col gap-y-0.5">
-                      {filteredNav.map((item) => (
-                        <li key={item.name}>
-                          <NavLink
-                            to={item.href}
-                            onClick={() => setSidebarOpen(false)}
-                            className={({ isActive }) =>
-                              clsx(
-                                'group flex gap-x-3 px-6 py-3 text-sm font-medium transition-colors border-l-[3px]',
-                                isActive
-                                  ? 'bg-white/10 text-white border-l-[#73BCF7]'
-                                  : 'text-gray-300 hover:bg-white/5 hover:text-white border-l-transparent'
-                              )
-                            }
-                          >
-                            <item.icon className="h-5 w-5 shrink-0" />
-                            {item.name}
-                            {item.name === 'Reservations' && pendingCount > 0 && (
-                              <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
-                                {pendingCount} pending
-                              </span>
-                            )}
-                            {item.comingSoon && (
-                              <span className="ml-auto text-xs text-gray-500 bg-white/10 px-2 py-0.5 rounded-full">
-                                Soon
-                              </span>
-                            )}
-                            {item.badge && (
-                              <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                                {item.badge}
-                              </span>
-                            )}
-                          </NavLink>
-                        </li>
-                      ))}
-                    </ul>
+                    {renderNavigation(() => setSidebarOpen(false))}
                   </nav>
                 </div>
               </Dialog.Panel>
@@ -240,74 +487,55 @@ export default function Layout() {
         </Dialog>
       </Transition.Root>
 
-      <div className={clsx('hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col', envBanner && 'lg:top-7')}>
+      <div
+        className={clsx('hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:flex-col', envBanner && 'lg:top-7')}
+        style={{ width: sidebarWidth }}
+      >
         <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-[#212427] px-0 pb-4">
-          <div className="flex h-16 shrink-0 items-center px-6">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-primary-600 flex items-center justify-center">
-                <span className="text-white font-bold text-lg">P</span>
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-white font-display">PSAP Control Center</h1>
-                <p className="text-xs text-gray-400">Cluster Management</p>
-              </div>
+          <div className="flex min-h-16 shrink-0 items-center gap-3 px-6">
+            <div className="h-10 w-10 shrink-0 rounded-xl bg-primary-600 flex items-center justify-center">
+              <span className="text-white font-bold text-lg">P</span>
             </div>
+            <SidebarTitle />
           </div>
           <nav className="flex flex-1 flex-col">
-            <ul className="flex flex-1 flex-col gap-y-0.5">
-              {filteredNav.map((item) => (
-                <li key={item.name}>
-                  <NavLink
-                    to={item.href}
-                    className={({ isActive }) =>
-                      clsx(
-                        'group flex gap-x-3 px-6 py-3 text-sm font-medium transition-all duration-200 border-l-[3px]',
-                        isActive
-                          ? 'bg-white/10 text-white border-l-[#73BCF7]'
-                          : 'text-gray-300 hover:bg-white/5 hover:text-white border-l-transparent'
-                      )
-                    }
-                  >
-                    <item.icon
-                      className={clsx(
-                        'h-5 w-5 shrink-0 transition-colors',
-                        location.pathname.startsWith(item.href) ? 'text-[#73BCF7]' : 'text-gray-500 group-hover:text-gray-300'
-                      )}
-                    />
-                    {item.name}
-                    {item.name === 'Reservations' && pendingCount > 0 && (
-                      <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
-                        {pendingCount} pending
-                      </span>
-                    )}
-                    {item.comingSoon && (
-                      <span className="ml-auto text-xs text-gray-500 bg-white/10 px-2 py-0.5 rounded-full">
-                        Soon
-                      </span>
-                    )}
-                    {item.badge && (
-                      <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                        {item.badge}
-                      </span>
-                    )}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
+            {renderNavigation()}
 
             <div className="mt-auto pt-4 border-t border-white/10 space-y-3 px-6">
               <HearthIndicator onConnectClick={() => setHearthConnectOpen(true)} />
-              <div className="rounded-lg bg-white/5 p-4">
+              <a
+                href="https://github.com/openshift-psap"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block rounded-lg bg-white/5 p-4 transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]"
+              >
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Organization</p>
                 <p className="mt-1 text-sm font-semibold text-white">OpenShift PSAP</p>
                 <p className="text-xs text-gray-400">Performance & Scale for AI Platforms</p>
-              </div>
+              </a>
             </div>
           </nav>
         </div>
+        <div
+          role="separator"
+          aria-label="Resize sidebar"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_SIDEBAR_WIDTH}
+          aria-valuemax={MAX_SIDEBAR_WIDTH}
+          aria-valuenow={sidebarWidth}
+          aria-valuetext={`${sidebarWidth} pixels`}
+          tabIndex={0}
+          onPointerDown={startSidebarResize}
+          onKeyDown={resizeSidebarWithKeyboard}
+          onDoubleClick={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
+          title="Drag to resize sidebar; double-click to reset"
+          className="group absolute right-0 top-0 z-[60] hidden h-full w-2 translate-x-1/2 cursor-col-resize touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#73BCF7] lg:block"
+        >
+          <span className="absolute inset-y-0 left-1/2 w-px bg-transparent transition-colors group-hover:bg-[#73BCF7] group-focus-visible:bg-[#73BCF7]" />
+        </div>
       </div>
 
-      <div className="lg:pl-72">
+      <div className="lg:pl-[var(--sidebar-width)]">
         <div className={clsx('sticky z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-white/10 bg-[#151515] px-4 sm:gap-x-6 sm:px-6 lg:px-8', envBanner ? 'top-7' : 'top-0')}>
           <button
             type="button"
@@ -379,7 +607,14 @@ export default function Layout() {
         </main>
       </div>
 
-      <LoginModal open={loginOpen} onClose={() => setLoginOpen(false)} />
+      <LoginModal
+        open={loginOpen}
+        onClose={() => setLoginOpen(false)}
+        authConfig={authConfigQuery.data}
+        configLoading={authConfigQuery.isPending || authConfigQuery.isFetching}
+        configError={authConfigQuery.isError}
+        onRetryConfig={() => { void authConfigQuery.refetch() }}
+      />
       <HearthConnectModal
         open={hearthConnectOpen}
         configured={hearthStatus?.configured ?? false}
