@@ -634,8 +634,8 @@ async def get_history_filter_options(
 ) -> dict[str, list[Any]]:
     """Discover bounded combobox choices from the complete durable History.
 
-    These are suggestions, not an allow-list. Identity values are only queried
-    for authenticated callers because public History deliberately redacts them.
+    These are suggestions, not an allow-list. Requester identity suggestions are only queried
+    for authenticated callers.
     """
     filters = [
         FournosJob.status.in_(TERMINAL_STATUSES),

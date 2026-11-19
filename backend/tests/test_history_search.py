@@ -189,14 +189,6 @@ def test_identity_search_requires_authentication():
     assert exc_info.value.status_code == 401
 
 
-def test_anonymous_sort_cannot_use_redacted_identity():
-    assert fournos_api._visible_sort_by("owner", None) == ""
-    assert fournos_api._visible_sort_by("date", None) == "date"
-    assert fournos_api._visible_sort_by(
-        "owner", {"subject": "google:1"}
-    ) == "owner"
-
-
 def test_history_search_indexes_cover_public_identity_and_tags():
     ddl = "\n".join(database_core._POSTGRES_INDEX_DDLS)
     assert "ix_fournos_jobs_public_search_gin" in ddl

@@ -702,6 +702,7 @@ export interface RecurringJob {
 
 export interface ScheduleChildJob {
   name: string
+  owner: string
   status: string
   trigger_type: string
   duration_seconds: number | null

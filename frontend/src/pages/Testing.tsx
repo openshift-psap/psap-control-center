@@ -429,7 +429,7 @@ export function JobsTable({
                   {job.name}
                 </Link>
               </td>
-              <td className="px-4 py-3 text-base text-gray-500">{isAuthenticated() ? job.owner || '-' : 'Sign in to view'}</td>
+              <td className="px-4 py-3 text-base text-gray-500">{job.owner || '-'}</td>
               <td className="px-4 py-3 text-base text-gray-900">{job.project || '-'}</td>
               <td className="px-4 py-3 text-base text-gray-700">
                 <code
@@ -1652,6 +1652,7 @@ function RecurringJobsPanel() {
     return sortRows(rows, sort, {
       name: (r) => r.name.toLowerCase(),
       project: (r) => r.project.toLowerCase(),
+      owner: (r) => (r.owner || '').toLowerCase(),
       schedule: (r) => r.schedule,
       cluster: (r) => r.cluster.toLowerCase(),
       phase: (r) => r.phase || '',
@@ -1681,6 +1682,7 @@ function RecurringJobsPanel() {
               <tr>
                 <SortableTh label="Name" sortKey="name" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
                 <SortableTh label="Project" sortKey="project" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
+                <SortableTh label="Owner" sortKey="owner" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
                 <SortableTh label="Schedule (UTC)" sortKey="schedule" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
                 <SortableTh label="Cluster" sortKey="cluster" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
                 <SortableTh label="Phase" sortKey="phase" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
@@ -1697,6 +1699,7 @@ function RecurringJobsPanel() {
                     </Link>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-900">{r.project}</td>
+                  <td className="px-4 py-3 text-sm text-gray-500">{r.owner || '-'}</td>
                   <td className="px-4 py-3 text-sm text-gray-500">
                     <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs">{r.schedule}</code>
                   </td>

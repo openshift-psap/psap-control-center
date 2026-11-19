@@ -547,6 +547,7 @@ class RecurringJobResponse(BaseModel):
 
 class ScheduleChildJobResponse(BaseModel):
     name: str
+    owner: str = ""
     status: str = "Pending"
     trigger_type: str = "recurring"
     duration_seconds: Optional[float] = None

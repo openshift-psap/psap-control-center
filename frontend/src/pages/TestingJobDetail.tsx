@@ -668,7 +668,7 @@ export default function TestingJobDetail() {
           <dl className="grid grid-cols-1 gap-x-8 gap-y-3 text-sm sm:grid-cols-[minmax(9rem,12rem)_minmax(0,1fr)]">
             <dt className="text-gray-500">Display Name</dt><dd className="break-all text-gray-800">{String(spec.displayName || '-')}</dd>
             <dt className="text-gray-500">Namespace</dt><dd className="text-gray-800"><code>{String(meta.namespace || '-')}</code></dd>
-            <dt className="text-gray-500">Owner</dt><dd className="text-gray-800">{String(spec.owner || (isAuthenticated() ? '-' : 'Sign in to view'))}</dd>
+            <dt className="text-gray-500">Owner</dt><dd className="text-gray-800">{String(spec.owner || '-')}</dd>
             <dt className="text-gray-500">Pipeline</dt><dd className="text-gray-800"><code>{String(spec.pipeline || '-')}</code></dd>
             <dt className="text-gray-500">Cluster</dt><dd className="text-gray-800"><code>{String(spec.cluster || '-')}</code></dd>
             <dt className="text-gray-500">Exclusive</dt><dd className="text-gray-800">{spec.exclusive ? 'Yes' : 'No'}</dd>

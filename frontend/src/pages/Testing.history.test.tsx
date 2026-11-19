@@ -85,10 +85,10 @@ describe('History table', () => {
     expect(onSort).toHaveBeenCalledWith('triggered_by')
   })
 
-  it('handles partial provenance and hides previously fetched owners when signed out', () => {
+  it('shows recorded owners and handles missing owners and partial provenance when signed out', () => {
     const jobs = [
       { ...archived, forge_git_version: '', trigger_type: 'deferred' },
-      { ...archived, name: 'older', forge_git_version: '', forge_image_digest: '', forge_provenance_state: 'pending', trigger_type: 'manual' },
+      { ...archived, name: 'older', owner: '', forge_git_version: '', forge_image_digest: '', forge_provenance_state: 'pending', trigger_type: 'manual' },
     ]
     render(<MemoryRouter><JobsTable jobs={jobs} source="history" sort={{ by: 'date', dir: 'desc' }} onSort={vi.fn()} /></MemoryRouter>)
 
@@ -96,7 +96,7 @@ describe('History table', () => {
     expect(within(deferred).getByText('Deferred')).toBeInTheDocument()
     expect(within(deferred).getByTitle('sha256:abcd')).toBeInTheDocument()
     expect(within(older).getByTitle('pending')).toHaveTextContent('-')
-    expect(screen.getAllByText('Sign in to view')).toHaveLength(2)
-    expect(screen.queryByText('Example Owner')).toBeNull()
+    expect(within(deferred).getByText('Example Owner')).toBeInTheDocument()
+    expect(within(older).getAllByRole('cell')[2]).toHaveTextContent('-')
   })
 })
