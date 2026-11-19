@@ -54,6 +54,12 @@ jobs:
 
       - name: Build frontend
         working-directory: frontend
+        env:
+          VITE_PERFORMANCE_DASHBOARD_PRODUCTION_URL: ${{ vars.VITE_PERFORMANCE_DASHBOARD_PRODUCTION_URL }}
+          VITE_PERFORMANCE_DASHBOARD_STAGING_URL: ${{ vars.VITE_PERFORMANCE_DASHBOARD_STAGING_URL }}
+          VITE_PSAP_REPORT_HUB_URL: ${{ vars.VITE_PSAP_REPORT_HUB_URL }}
+          VITE_CONFIGIQ_URL: ${{ vars.VITE_CONFIGIQ_URL }}
+          VITE_SERVIT_STUDIO_URL: ${{ vars.VITE_SERVIT_STUDIO_URL }}
         run: npm ci && npm test && npm run build
 
       - name: Log in to Quay.io
