@@ -100,36 +100,32 @@ export default function ClusterCard({ cluster, latestCost, onRemove, removing }:
         {cTotal > 0 && (
           <GpuDonutChart used={cUsed} total={cTotal} size={72} strokeWidth={7} />
         )}
-        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm flex-1">
+        <dl className="cluster-card-metrics">
           <div>
-            <p className="text-gray-500">Cluster nodes</p>
-            <p className="font-semibold text-gray-900">{cluster.node_count || 'N/A'}</p>
+            <dt>Cluster nodes</dt>
+            <dd>{cluster.node_count || 'N/A'}</dd>
           </div>
           <div>
-            <p className="text-gray-500" title="Nodes with at least one detected GPU">GPU nodes</p>
-            <p className="font-semibold text-gray-900">{gpuNodeCount ?? 'N/A'}</p>
+            <dt title="Nodes with at least one detected GPU">GPU nodes</dt>
+            <dd>{gpuNodeCount ?? 'N/A'}</dd>
           </div>
           <div>
-            <p className="text-gray-500">GPUs used</p>
-            <p className="font-semibold text-gray-900">
-              {gpuData ? `${cUsed} / ${cTotal}` : `– / ${cTotal}`}
-            </p>
+            <dt>GPUs used</dt>
+            <dd>{gpuData ? `${cUsed} / ${cTotal}` : `– / ${cTotal}`}</dd>
           </div>
           <div>
-            <p className="text-gray-500">Version</p>
-            <p className="font-semibold text-gray-900 truncate">
-              {cluster.cluster_version || 'N/A'}
-            </p>
+            <dt>Version</dt>
+            <dd>{cluster.cluster_version || 'N/A'}</dd>
           </div>
-          <div>
-            <p className="text-gray-500">Last Check</p>
-            <p className="font-semibold text-gray-900">
+          <div className="col-span-full">
+            <dt>Last Check</dt>
+            <dd>
               {cluster.last_health_check
                 ? format(new Date(cluster.last_health_check), 'MMM d, HH:mm')
                 : 'Never'}
-            </p>
+            </dd>
           </div>
-        </div>
+        </dl>
       </div>
 
       {gpuData?.gpu_pods.length ? <ActiveGpuWorkloads pods={gpuData.gpu_pods} /> : null}
