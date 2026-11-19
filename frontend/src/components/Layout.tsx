@@ -2,12 +2,14 @@ import {
   Fragment,
   useState,
   useEffect,
+  useId,
   useCallback,
   type CSSProperties,
+  type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Dialog, Transition } from '@headlessui/react'
 import {
   Bars3Icon,
@@ -17,6 +19,8 @@ import {
   ClipboardDocumentListIcon,
   BeakerIcon,
   ChartBarIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
   ArrowTopRightOnSquareIcon,
   CurrencyDollarIcon,
   Cog6ToothIcon,
@@ -96,59 +100,50 @@ function SidebarTitle() {
   )
 }
 
-function PerformanceDashboardSection({ onNavigate }: { onNavigate?: () => void }) {
-  if (performanceDashboardSubnav.length === 0) return null
-  return (
-    <li>
-      <div className="flex items-center gap-x-3 border-l-[3px] border-l-transparent px-6 py-3 text-sm font-medium text-gray-300">
-        <ChartBarIcon className="h-5 w-5 shrink-0 text-gray-500" />
-        <span>Performance Dashboard</span>
-      </div>
-      <ul className="space-y-0.5 pb-2">
-        {performanceDashboardSubnav.map((item) => (
-          <li key={item.name}>
-            <a
-              href={item.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={onNavigate}
-              aria-label={`${item.name} Performance Dashboard (opens in a new tab)`}
-              className="group ml-9 mr-3 flex items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]"
-            >
-              <span>{item.name}</span>
-              <ArrowTopRightOnSquareIcon className="ml-auto h-4 w-4 shrink-0 text-gray-500 transition-colors group-hover:text-gray-300" />
-            </a>
-          </li>
-        ))}
-      </ul>
-    </li>
-  )
-}
+const externalSections = [
+  { name: 'Performance Dashboard', icon: ChartBarIcon, links: performanceDashboardSubnav, linkSuffix: ' Performance Dashboard' },
+  { name: 'Tools', icon: WrenchScrewdriverIcon, links: psapToolsSubnav, linkSuffix: '' },
+] as const
 
-function PsapToolsSection({ onNavigate }: { onNavigate?: () => void }) {
-  if (psapToolsSubnav.length === 0) return null
+type SectionName = 'Testing' | (typeof externalSections)[number]['name']
+
+function SidebarSection({ name, icon: Icon, link, expanded, onToggle, children }: {
+  name: SectionName
+  icon: typeof HomeIcon
+  link?: ReactNode
+  expanded: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  const panelId = useId()
+  const Chevron = expanded ? ChevronUpIcon : ChevronDownIcon
+
   return (
     <li>
-      <div className="flex items-center gap-x-3 border-l-[3px] border-l-transparent px-6 py-3 text-sm font-medium text-gray-300">
-        <WrenchScrewdriverIcon className="h-5 w-5 shrink-0 text-gray-500" />
-        <span>Tools</span>
+      <div className="flex">
+        {link}
+        <button
+          type="button"
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`}
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          onClick={onToggle}
+          className={clsx(
+            'flex items-center gap-3 text-left text-sm font-medium text-gray-300 hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#73BCF7]',
+            link ? 'shrink-0 px-4' : 'w-full border-l-[3px] border-transparent py-3 pl-6 pr-4'
+          )}
+        >
+          {!link && (
+            <>
+              <Icon className="h-5 w-5 shrink-0 text-gray-500" />
+              {name}
+            </>
+          )}
+          <Chevron aria-hidden="true" className="ml-auto h-4 w-4 shrink-0" />
+        </button>
       </div>
-      <ul className="space-y-0.5 pb-2">
-        {psapToolsSubnav.map((item) => (
-          <li key={item.name}>
-            <a
-              href={item.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={onNavigate}
-              aria-label={`${item.name} (opens in a new tab)`}
-              className="group ml-9 mr-3 flex items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]"
-            >
-              <span>{item.name}</span>
-              <ArrowTopRightOnSquareIcon className="ml-auto h-4 w-4 shrink-0 text-gray-500 transition-colors group-hover:text-gray-300" />
-            </a>
-          </li>
-        ))}
+      <ul id={panelId} hidden={!expanded} className="space-y-0.5 pb-2">
+        {children}
       </ul>
     </li>
   )
@@ -248,6 +243,13 @@ const envBanner = import.meta.env.VITE_ENV_BANNER as string | undefined
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [expandedSections, setExpandedSections] = useState({
+    Testing: true,
+    'Performance Dashboard': true,
+    Tools: true,
+  })
+  const toggleSection = (name: SectionName) =>
+    setExpandedSections(current => ({ ...current, [name]: !current[name] }))
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH
 
@@ -354,6 +356,95 @@ export default function Layout() {
     }
   }
 
+  function renderNavigation(onNavigate?: () => void) {
+    return (
+      <ul className="flex flex-1 flex-col gap-y-0.5">
+        {filteredNav.map(item => {
+          const link = (
+            <NavLink
+              to={item.href}
+              onClick={onNavigate}
+              className={({ isActive }) => clsx(
+                'group flex min-w-0 flex-1 gap-x-3 border-l-[3px] px-6 py-3 text-sm font-medium transition-colors',
+                isActive
+                  ? 'border-l-[#73BCF7] bg-white/10 text-white lg:[&>svg]:text-[#73BCF7]'
+                  : 'border-l-transparent text-gray-300 hover:bg-white/5 hover:text-white'
+              )}
+            >
+              <item.icon className="h-5 w-5 shrink-0 lg:text-gray-500 lg:group-hover:text-gray-300" />
+              {item.name}
+              {item.comingSoon && (
+                <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs text-gray-500">Soon</span>
+              )}
+              {item.badge && (
+                <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                  {item.badge}
+                </span>
+              )}
+            </NavLink>
+          )
+          if (item.href !== testingHref) return <li key={item.name}>{link}</li>
+
+          return (
+            <Fragment key={item.name}>
+              <SidebarSection
+                name="Testing"
+                icon={item.icon}
+                link={link}
+                expanded={expandedSections.Testing}
+                onToggle={() => toggleSection('Testing')}
+              >
+                {testingSubnav.filter(sub => sub.id !== 'submit' || authed).map(sub => {
+                  const active = isTestingSubnavActive(sub.id)
+                  return (
+                    <li key={sub.id}>
+                      <Link
+                        to={sub.href}
+                        onClick={onNavigate}
+                        aria-current={active ? 'page' : undefined}
+                        className={clsx(
+                          'ml-9 mr-3 flex rounded-md px-3 py-2 text-sm transition-colors',
+                          active ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                        )}
+                      >
+                        {sub.name}
+                      </Link>
+                    </li>
+                  )
+                })}
+              </SidebarSection>
+              {externalSections.filter(section => section.links.length > 0).map(section => (
+                <SidebarSection
+                  key={section.name}
+                  name={section.name}
+                  icon={section.icon}
+                  expanded={expandedSections[section.name]}
+                  onToggle={() => toggleSection(section.name)}
+                >
+                  {section.links.map(external => (
+                    <li key={external.name}>
+                      <a
+                        href={external.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={onNavigate}
+                        aria-label={`${external.name}${section.linkSuffix} (opens in a new tab)`}
+                        className="group ml-9 mr-3 flex items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]"
+                      >
+                        {external.name}
+                        <ArrowTopRightOnSquareIcon className="ml-auto h-4 w-4 shrink-0 text-gray-500 transition-colors group-hover:text-gray-300" />
+                      </a>
+                    </li>
+                  ))}
+                </SidebarSection>
+              ))}
+            </Fragment>
+          )
+        })}
+      </ul>
+    )
+  }
+
   return (
     <div
       className="min-h-screen bg-[#f0f0f0]"
@@ -397,71 +488,7 @@ export default function Layout() {
                     <SidebarTitle />
                   </div>
                   <nav className="flex flex-1 flex-col">
-                    <ul className="flex flex-1 flex-col gap-y-0.5">
-                      {filteredNav.map((item) => (
-                        <Fragment key={item.name}>
-                        <li>
-                          <NavLink
-                            to={item.href}
-                            onClick={() => setSidebarOpen(false)}
-                            className={({ isActive }) =>
-                              clsx(
-                                'group flex gap-x-3 px-6 py-3 text-sm font-medium transition-colors border-l-[3px]',
-                                isActive
-                                  ? 'bg-white/10 text-white border-l-[#73BCF7]'
-                                  : 'text-gray-300 hover:bg-white/5 hover:text-white border-l-transparent'
-                              )
-                            }
-                          >
-                            <item.icon className="h-5 w-5 shrink-0" />
-                            {item.name}
-                            {item.comingSoon && (
-                              <span className="ml-auto text-xs text-gray-500 bg-white/10 px-2 py-0.5 rounded-full">
-                                Soon
-                              </span>
-                            )}
-                            {item.badge && (
-                              <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                                {item.badge}
-                              </span>
-                            )}
-                          </NavLink>
-                          {item.href === testingHref && (
-                            <ul className="space-y-0.5 pb-2">
-                              {testingSubnav
-                                .filter((subItem) => subItem.id !== 'submit' || authed)
-                                .map((subItem) => {
-                                  const isActive = isTestingSubnavActive(subItem.id)
-                                  return (
-                                    <li key={subItem.id}>
-                                      <NavLink
-                                        to={subItem.href}
-                                        onClick={() => setSidebarOpen(false)}
-                                        aria-current={isActive ? 'page' : undefined}
-                                        className={clsx(
-                                          'ml-9 mr-3 flex rounded-md px-3 py-2 text-sm transition-colors',
-                                          isActive
-                                            ? 'bg-white/10 text-white'
-                                            : 'text-gray-400 hover:bg-white/5 hover:text-white'
-                                        )}
-                                      >
-                                        {subItem.name}
-                                      </NavLink>
-                                    </li>
-                                  )
-                                })}
-                            </ul>
-                          )}
-                        </li>
-                        {item.href === testingHref && (
-                          <PerformanceDashboardSection onNavigate={() => setSidebarOpen(false)} />
-                        )}
-                        {item.href === testingHref && (
-                          <PsapToolsSection onNavigate={() => setSidebarOpen(false)} />
-                        )}
-                        </Fragment>
-                      ))}
-                    </ul>
+                    {renderNavigation(() => setSidebarOpen(false))}
                   </nav>
                 </div>
               </Dialog.Panel>
@@ -482,72 +509,7 @@ export default function Layout() {
             <SidebarTitle />
           </div>
           <nav className="flex flex-1 flex-col">
-            <ul className="flex flex-1 flex-col gap-y-0.5">
-              {filteredNav.map((item) => (
-                <Fragment key={item.name}>
-                <li>
-                  <NavLink
-                    to={item.href}
-                    className={({ isActive }) =>
-                      clsx(
-                        'group flex gap-x-3 px-6 py-3 text-sm font-medium transition-all duration-200 border-l-[3px]',
-                        isActive
-                          ? 'bg-white/10 text-white border-l-[#73BCF7]'
-                          : 'text-gray-300 hover:bg-white/5 hover:text-white border-l-transparent'
-                      )
-                    }
-                  >
-                    <item.icon
-                      className={clsx(
-                        'h-5 w-5 shrink-0 transition-colors',
-                        (location.pathname === item.href.split('?')[0] || location.pathname.startsWith(`${item.href.split('?')[0]}/`))
-                          ? 'text-[#73BCF7]'
-                          : 'text-gray-500 group-hover:text-gray-300'
-                      )}
-                    />
-                    {item.name}
-                    {item.comingSoon && (
-                      <span className="ml-auto text-xs text-gray-500 bg-white/10 px-2 py-0.5 rounded-full">
-                        Soon
-                      </span>
-                    )}
-                    {item.badge && (
-                      <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                        {item.badge}
-                      </span>
-                    )}
-                  </NavLink>
-                  {item.href === testingHref && (
-                    <ul className="space-y-0.5 pb-2">
-                      {testingSubnav
-                        .filter((subItem) => subItem.id !== 'submit' || authed)
-                        .map((subItem) => {
-                          const isActive = isTestingSubnavActive(subItem.id)
-                          return (
-                            <li key={subItem.id}>
-                              <NavLink
-                                to={subItem.href}
-                                aria-current={isActive ? 'page' : undefined}
-                                className={clsx(
-                                  'ml-9 mr-3 flex rounded-md px-3 py-2 text-sm transition-colors',
-                                  isActive
-                                    ? 'bg-white/10 text-white'
-                                    : 'text-gray-400 hover:bg-white/5 hover:text-white'
-                                )}
-                              >
-                                {subItem.name}
-                              </NavLink>
-                            </li>
-                          )
-                        })}
-                    </ul>
-                  )}
-                </li>
-                {item.href === testingHref && <PerformanceDashboardSection />}
-                {item.href === testingHref && <PsapToolsSection />}
-                </Fragment>
-              ))}
-            </ul>
+            {renderNavigation()}
 
             <div className="mt-auto pt-4 border-t border-white/10 space-y-3 px-6">
               <HearthIndicator onConnectClick={() => setHearthConnectOpen(true)} />
