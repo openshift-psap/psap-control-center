@@ -28,6 +28,7 @@ import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import type { ClusterCost, GpuAllocationStatus } from '../types'
 import GpuDonutChart from '../components/GpuDonutChart'
+import ClusterListError from '../components/ClusterListError'
 import ClusterRefreshIndicator from '../components/ClusterRefreshIndicator'
 import { isAdmin, isAuthenticated } from '../stores/authStore'
 
@@ -70,7 +71,7 @@ export default function Clusters() {
   const prevLastRefresh = useRef<string | null>(null)
 
   const queryClient = useQueryClient()
-  const { data, isLoading, refetch } = useClusters()
+  const { data, isLoading, isError, refetch } = useClusters()
   const createCluster = useCreateCluster()
   const deleteCluster = useDeleteCluster()
   const authenticated = isAuthenticated()
@@ -383,12 +384,13 @@ export default function Clusters() {
         </div>
       )}
 
+      {isError && <ClusterListError retry={() => { void refetch() }} />}
       {isLoading ? (
         <div className="card p-12 text-center">
           <ArrowPathIcon className="h-8 w-8 animate-spin mx-auto text-gray-400" />
           <p className="mt-2 text-gray-500">Loading clusters...</p>
         </div>
-      ) : clusters.length === 0 ? (
+      ) : clusters.length === 0 && !isError ? (
         <div className="card p-12 text-center">
           <ServerStackIcon className="h-16 w-16 mx-auto text-gray-300" />
           <h3 className="mt-4 text-lg font-medium text-gray-900">No clusters configured</h3>
