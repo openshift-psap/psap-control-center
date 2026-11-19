@@ -27,6 +27,7 @@ import {
 } from '@heroicons/react/24/outline'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+import { version as releaseVersion } from '../../package.json'
 import LoginModal from './LoginModal'
 import { useAuthConfig } from '../hooks/useAuthConfig'
 import HearthConnectModal from './HearthConnectModal'
@@ -82,6 +83,17 @@ const MAX_SIDEBAR_WIDTH = 480
 
 function clampSidebarWidth(width: number) {
   return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width))
+}
+
+function SidebarTitle() {
+  return (
+    <h1 className="font-display text-2xl font-bold text-white lg:text-xl">
+      PSAP Control{' '}
+      <span className="whitespace-nowrap">
+        Center <span className="font-sans text-xs font-medium text-gray-300">v{releaseVersion}</span>
+      </span>
+    </h1>
+  )
 }
 
 function PerformanceDashboardSection({ onNavigate }: { onNavigate?: () => void }) {
@@ -378,13 +390,11 @@ export default function Layout() {
             >
               <Dialog.Panel className="relative mr-16 flex w-full max-w-xs flex-1">
                 <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-[#212427] px-0 pb-4">
-                  <div className="flex h-16 shrink-0 items-center px-6">
-                    <div className="flex items-center gap-2">
-                      <div className="h-8 w-8 rounded-lg bg-primary-600 flex items-center justify-center">
-                        <span className="text-white font-bold text-sm">P</span>
-                      </div>
-                      <span className="text-2xl font-bold text-white font-display">PSAP Control Center</span>
+                  <div className="flex min-h-16 shrink-0 items-center gap-2 px-6">
+                    <div className="h-8 w-8 shrink-0 rounded-lg bg-primary-600 flex items-center justify-center">
+                      <span className="text-white font-bold text-sm">P</span>
                     </div>
+                    <SidebarTitle />
                   </div>
                   <nav className="flex flex-1 flex-col">
                     <ul className="flex flex-1 flex-col gap-y-0.5">
@@ -465,15 +475,11 @@ export default function Layout() {
         style={{ width: sidebarWidth }}
       >
         <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-[#212427] px-0 pb-4">
-          <div className="flex h-16 shrink-0 items-center px-6">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-primary-600 flex items-center justify-center">
-                <span className="text-white font-bold text-lg">P</span>
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-white font-display">PSAP Control Center</h1>
-              </div>
+          <div className="flex min-h-16 shrink-0 items-center gap-3 px-6">
+            <div className="h-10 w-10 shrink-0 rounded-xl bg-primary-600 flex items-center justify-center">
+              <span className="text-white font-bold text-lg">P</span>
             </div>
+            <SidebarTitle />
           </div>
           <nav className="flex flex-1 flex-col">
             <ul className="flex flex-1 flex-col gap-y-0.5">
