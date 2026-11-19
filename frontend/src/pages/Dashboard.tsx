@@ -19,10 +19,12 @@ import { clusterApi } from '../services/api'
 import { format } from 'date-fns'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import type { HearthCluster, GpuAllocationStatus, ClusterCost } from '../types'
+import ClusterListError from '../components/ClusterListError'
 import GpuDonutChart from '../components/GpuDonutChart'
 
 export default function Dashboard() {
-  const { data: clustersData, isLoading: clustersLoading } = useClusters()
+  const { data: clustersData, isLoading: clustersLoading, isError: clustersError, refetch: refetchClusters } = useClusters()
+  const clusterCountsUnavailable = !clustersData && clustersError
   const { data: reservationsData, isLoading: reservationsLoading } = useReservations()
   const {
     data: liveJobSummary,
@@ -121,14 +123,14 @@ export default function Dashboard() {
   const stats = [
     {
       name: 'Total Clusters',
-      value: clusters.length,
+      value: clusterCountsUnavailable ? '—' : clusters.length,
       icon: ServerStackIcon,
       color: 'bg-blue-500',
       href: '/clusters',
     },
     {
       name: 'Healthy Clusters',
-      value: healthyClusters,
+      value: clusterCountsUnavailable ? '—' : healthyClusters,
       icon: CheckCircleIcon,
       color: 'bg-green-500',
       href: '/clusters',
@@ -189,7 +191,7 @@ export default function Dashboard() {
           className="card p-6 hover:shadow-md transition-shadow"
         >
           <div className="flex items-center gap-4">
-            {clustersLoading || gpuStatusLoading ? (
+            {clusterCountsUnavailable || clustersLoading || gpuStatusLoading ? (
               <div className="bg-purple-500 rounded-lg p-3">
                 <CpuChipIcon className="h-6 w-6 text-white" />
               </div>
@@ -198,8 +200,8 @@ export default function Dashboard() {
             )}
             <div>
               <p className="text-sm font-medium text-gray-500">GPU Utilization</p>
-              {clustersLoading || gpuStatusLoading ? (
-                <p className="text-2xl font-semibold text-gray-900">...</p>
+              {clusterCountsUnavailable || clustersLoading || gpuStatusLoading ? (
+                <p className="text-2xl font-semibold text-gray-900">{clusterCountsUnavailable ? '—' : '...'}</p>
               ) : (
                 <div className="flex items-baseline gap-1.5">
                   <p className="text-2xl font-semibold text-gray-900">{gpuTotals.allocated}</p>
@@ -356,9 +358,10 @@ export default function Dashboard() {
             <h2 className="text-lg font-semibold text-gray-900">Cluster Status</h2>
           </div>
           <div className="divide-y divide-gray-200">
+            {clustersError && <ClusterListError retry={() => { void refetchClusters() }} />}
             {clustersLoading ? (
               <div className="px-6 py-8 text-center text-gray-500">Loading clusters...</div>
-            ) : clusters.length === 0 ? (
+            ) : clusters.length === 0 && !clustersError ? (
               <div className="px-6 py-8 text-center">
                 <ServerStackIcon className="mx-auto h-12 w-12 text-gray-400" />
                 <p className="mt-2 text-sm text-gray-500">No clusters configured</p>

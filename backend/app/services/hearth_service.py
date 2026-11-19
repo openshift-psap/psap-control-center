@@ -1,10 +1,12 @@
 import os
+from threading import Lock
 from typing import List, Optional
 
-from kubernetes import client, config
+from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from app.core.config import settings
+from app.core.kubernetes import management_configuration
 from app.schemas.hearth import (
     HearthClusterResponse,
     HearthCondition,
@@ -32,41 +34,17 @@ def _hearth_kubeconfig_disk_path() -> str:
 
 class HearthService:
     def __init__(self):
+        self._client_lock = Lock()
         self._custom_api: Optional[client.CustomObjectsApi] = None
 
     def _get_api(self) -> client.CustomObjectsApi:
-        if self._custom_api is not None:
+        with self._client_lock:
+            if self._custom_api is None:
+                path = settings.HEARTH_KUBECONFIG_PATH or self._saved_kubeconfig_path()
+                cfg = management_configuration(path)
+                cfg.retries = 0
+                self._custom_api = client.CustomObjectsApi(client.ApiClient(configuration=cfg))
             return self._custom_api
-
-        kubeconfig_path = (
-            settings.HEARTH_KUBECONFIG_PATH
-            or self._saved_kubeconfig_path()
-        )
-
-        try:
-            if kubeconfig_path:
-                cfg = client.Configuration()
-                config.load_kube_config(
-                    config_file=kubeconfig_path,
-                    client_configuration=cfg,
-                )
-                api_client = client.ApiClient(configuration=cfg)
-                self._custom_api = client.CustomObjectsApi(
-                    api_client
-                )
-            else:
-                try:
-                    config.load_incluster_config()
-                except config.ConfigException:
-                    config.load_kube_config()
-                self._custom_api = client.CustomObjectsApi()
-        except Exception as exc:
-            logger.error(
-                "Failed to initialize K8s client for Hearth:", exc
-            )
-            raise
-
-        return self._custom_api
 
     @staticmethod
     def _saved_kubeconfig_path() -> Optional[str]:
@@ -77,7 +55,8 @@ class HearthService:
         """Drop the cached K8s client so the next call rebuilds it.
         Also resets the Fournos K8s client since it shares the same kubeconfig.
         """
-        self._custom_api = None
+        with self._client_lock:
+            self._custom_api = None
         try:
             from app.services.fournos_k8s_client import reset as reset_fournos
             reset_fournos()
@@ -169,6 +148,7 @@ class HearthService:
             version=CRD_VERSION,
             namespace=settings.HEARTH_NAMESPACE,
             plural=FOURNOS_CLUSTER_PLURAL,
+            _request_timeout=settings.FOURNOS_K8S_TIMEOUT,
         )
         return [
             self._parse_cluster(item)
@@ -186,6 +166,7 @@ class HearthService:
                 namespace=settings.HEARTH_NAMESPACE,
                 plural=FOURNOS_CLUSTER_PLURAL,
                 name=name,
+                _request_timeout=settings.FOURNOS_K8S_TIMEOUT,
             )
             return self._parse_cluster(item)
         except ApiException as exc:
@@ -226,11 +207,8 @@ class HearthService:
             )
 
 
-_hearth_service: Optional[HearthService] = None
+_hearth_service = HearthService()
 
 
 def get_hearth_service() -> HearthService:
-    global _hearth_service
-    if _hearth_service is None:
-        _hearth_service = HearthService()
     return _hearth_service

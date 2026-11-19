@@ -10,6 +10,7 @@ import os
 import httpx
 import urllib3
 
+from app.core.kubernetes import configure_api_proxy
 from app.utils.logger import create_logger
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -118,30 +119,11 @@ class KubernetesService:
         self._configuration.retries = 1
         self._configuration.verify_ssl = False
 
-        self._apply_proxy_if_needed()
+        configure_api_proxy(self._configuration)
         
         self._api_client = client.ApiClient(configuration=self._configuration)
         self._core_v1 = client.CoreV1Api(self._api_client)
         self._version_api = client.VersionApi(self._api_client)
-
-    def _apply_proxy_if_needed(self):
-        """Set proxy on the K8s client config if HTTPS_PROXY is set and
-        the target host is not excluded by NO_PROXY."""
-        proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-        if not proxy_url:
-            return
-        no_proxy = os.environ.get("NO_PROXY", os.environ.get("no_proxy", ""))
-        host = (self._configuration.host or "").lower()
-        for entry in no_proxy.split(","):
-            entry = entry.strip().lower()
-            if not entry:
-                continue
-            if entry.startswith(".") and host.find(entry) != -1:
-                return
-            if host.find(entry) != -1:
-                return
-        self._configuration.proxy = proxy_url
-        self._configuration.verify_ssl = False
 
     @property
     def core_v1(self):

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from starlette.concurrency import run_in_threadpool
 
 from app.core.auth import require_admin
 from app.core.config import settings
@@ -18,7 +19,7 @@ logger = create_logger("HearthAPI")
 
 
 @router.get("/status", response_model=HearthStatusResponse)
-async def get_hearth_status():
+def get_hearth_status():
     if not settings.HEARTH_ENABLED:
         return HearthStatusResponse(
             available=False,
@@ -57,7 +58,7 @@ async def connect_hearth(
     service = get_hearth_service()
     service.save_kubeconfig(kubeconfig_content)
 
-    status = service.get_status()
+    status = await run_in_threadpool(service.get_status)
     if status.available:
         return HearthConnectResponse(
             success=True,
@@ -109,7 +110,7 @@ async def connect_hearth_with_credentials(
 
     service = get_hearth_service()
     service.reset()
-    status = service.get_status()
+    status = await run_in_threadpool(service.get_status)
     if status.available:
         return HearthConnectResponse(
             success=True,
@@ -150,7 +151,7 @@ async def disconnect_hearth(
     "/clusters",
     response_model=HearthClusterListResponse,
 )
-async def list_hearth_clusters():
+def list_hearth_clusters():
     if not settings.HEARTH_ENABLED:
         return HearthClusterListResponse(
             clusters=[], total=0, available=False
@@ -175,7 +176,7 @@ async def list_hearth_clusters():
     "/clusters/{cluster_name}",
     response_model=HearthClusterResponse,
 )
-async def get_hearth_cluster(cluster_name: str):
+def get_hearth_cluster(cluster_name: str):
     if not settings.HEARTH_ENABLED:
         raise HTTPException(
             status_code=503,

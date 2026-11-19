@@ -16,10 +16,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional
 
-from kubernetes import client, config, watch
+from kubernetes import client, watch
 from kubernetes.client.rest import ApiException
 
 from app.core.config import settings
+from app.core.kubernetes import management_configuration
 from app.services.failure_details import (
     is_infrastructure_reason,
     normalize_reason,
@@ -72,18 +73,11 @@ def _ensure_loaded() -> None:
             return
         kube_path = settings.HEARTH_KUBECONFIG_PATH or _saved_hearth_kubeconfig()
         try:
-            if kube_path:
-                config.load_kube_config(config_file=kube_path)
-            else:
-                try:
-                    config.load_incluster_config()
-                except config.ConfigException:
-                    config.load_kube_config()
+            configuration = management_configuration(kube_path)
         except Exception:
             logger.warning("K8s config not available — fournos running in offline mode")
             return
 
-        configuration = client.Configuration.get_default_copy()
         timeout = settings.FOURNOS_K8S_TIMEOUT
         configuration.verify_ssl = False
         configuration.connect_timeout = timeout
