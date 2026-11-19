@@ -13,6 +13,8 @@ import {
   Bars3Icon,
   HomeIcon,
   ServerStackIcon,
+  CalendarDaysIcon,
+  ClipboardDocumentListIcon,
   BeakerIcon,
   ChartBarIcon,
   ArrowTopRightOnSquareIcon,
@@ -24,12 +26,14 @@ import {
   FireIcon,
 } from '@heroicons/react/24/outline'
 import clsx from 'clsx'
+import toast from 'react-hot-toast'
 import LoginModal from './LoginModal'
 import { useAuthConfig } from '../hooks/useAuthConfig'
 import HearthConnectModal from './HearthConnectModal'
 import { isAuthenticated, isAdmin, getDisplayName, clearSession } from '../stores/authStore'
 import { authApi } from '../services/api'
 import { useHearthStatus, useDisconnectHearth } from '../hooks/useHearth'
+import { useReservations } from '../hooks/useReservations'
 
 type NavigationItem = {
   name: string
@@ -43,6 +47,8 @@ type NavigationItem = {
 const navigation: NavigationItem[] = [
   { name: 'Overview', href: '/dashboard', icon: HomeIcon },
   { name: 'Clusters', href: '/clusters', icon: ServerStackIcon },
+  { name: 'Reservations', href: '/reservations', icon: ClipboardDocumentListIcon },
+  { name: 'Calendar', href: '/calendar', icon: CalendarDaysIcon },
   { name: 'Fournos Dashboard', href: '/testing?tab=live', icon: BeakerIcon },
   { name: 'Results', href: '/results', icon: ChartBarIcon, comingSoon: true },
   { name: 'Cost Explorer', href: '/cost-explorer', icon: CurrencyDollarIcon, adminOnly: true },
@@ -259,7 +265,13 @@ export default function Layout() {
 
   const { data: hearthStatus } = useHearthStatus()
   const admin = isAdmin()
-  const filteredNav = navigation.filter(item => !item.adminOnly || admin)
+  const { data: pendingReservations } = useReservations({ status: 'pending' }, { enabled: admin })
+  const pendingCount = admin ? pendingReservations?.total ?? 0 : 0
+  const filteredNav = navigation
+    .filter(item => !item.adminOnly || admin)
+    .map(item => item.href === '/reservations' && pendingCount > 0
+      ? { ...item, badge: `${pendingCount} pending` }
+      : item)
 
   const syncAuth = useCallback(() => setAuthed(isAuthenticated()), [])
 
@@ -319,9 +331,13 @@ export default function Layout() {
     }
   }
 
-  const handleLogout = () => {
-    clearSession()
-    authApi.logout().catch(() => {})
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+      clearSession()
+    } catch {
+      toast.error('Sign-out failed. Please try again.')
+    }
   }
 
   return (

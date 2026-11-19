@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { fournosApi } from '../services/api'
+import { getUsername } from '../stores/authStore'
 import type {
   FournosJobListResponse,
   FournosLiveJobSummaryResponse,
@@ -61,7 +62,7 @@ export function useFournosJobs(params: {
   per_page?: number
 } = {}, enabled = true) {
   return useQuery<FournosJobListResponse>({
-    queryKey: ['fournos-jobs', params],
+    queryKey: ['fournos-jobs', params, getUsername()],
     queryFn: () => fournosApi.listJobs(params),
     enabled,
     refetchInterval: params.tab === 'live' ? 5000 : false,
@@ -91,7 +92,7 @@ export function useHistoryPreference(enabled: boolean) {
 
 export function useHistoryFilterOptions(enabled: boolean) {
   return useQuery<HistoryFilterOptionsResponse>({
-    queryKey: ['fournos-history-filter-options'],
+    queryKey: ['fournos-history-filter-options', getUsername()],
     queryFn: () => fournosApi.getHistoryFilterOptions(),
     enabled,
     staleTime: 5 * 60 * 1000,
@@ -123,7 +124,7 @@ export function useResetHistoryPreference() {
 
 export function useFournosJob(name: string | undefined) {
   return useQuery<FournosJobDetailResponse>({
-    queryKey: ['fournos-job', name],
+    queryKey: ['fournos-job', name, getUsername()],
     queryFn: () => fournosApi.getJob(name!),
     enabled: !!name,
     refetchInterval: 5000,
@@ -384,7 +385,7 @@ export function useDeleteClusterLock() {
 
 export function useClusterOverview(cluster: string | undefined) {
   return useQuery<ClusterOverview>({
-    queryKey: ['fournos-cluster-overview', cluster],
+    queryKey: ['fournos-cluster-overview', cluster, getUsername()],
     queryFn: () => fournosApi.getClusterOverview(cluster!),
     enabled: !!cluster,
     refetchInterval: 15000,

@@ -1,11 +1,14 @@
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from app.api import fournos, reservations
+from app.core.auth import COOKIE_NAME, create_session_token
+from app.models.fournos_job import FournosJob, FournosJobWorkItem
 from app.schemas.fournos import CreateClusterLockRequest
 from app.schemas.reservation import ModificationRequestCreate, ReservationUpdate
 
@@ -15,6 +18,34 @@ def _reservation(*, creator="google:owner", user_name="editable-beneficiary"):
         created_by_subject=creator,
         user_name=user_name,
     )
+
+
+@pytest.mark.parametrize("signed_in", [False, True])
+@pytest.mark.parametrize("tab", ["live", "history"])
+def test_job_list_identity_follows_session(monkeypatch, tab, signed_in):
+    owner = "Example Owner"
+    item = {"provider": "jira", "key": "TEST-1", "url": "https://example.org/TEST-1"}
+    live = {"metadata": {"name": "test-job"}, "spec": {"owner": owner}}
+    archived = FournosJob(name="test-job", owner=owner, project="demo", cluster="test",
+                          pipeline="", preset="", status="Succeeded", message="")
+    archived.work_items = [FournosJobWorkItem(**item)]
+    monkeypatch.setattr(fournos, "_get_live_jobs", AsyncMock(return_value=[live]))
+    monkeypatch.setattr(fournos, "AsyncSessionLocal", MagicMock())
+    monkeypatch.setattr(fournos.db_svc, "list_jobs", AsyncMock(return_value=([archived], 1)))
+    monkeypatch.setattr(fournos.db_svc, "get_work_items_by_job_names",
+                        AsyncMock(return_value={"test-job": [item]}))
+    app = FastAPI()
+    app.include_router(fournos.router)
+    with TestClient(app) as client:
+        if signed_in:
+            client.cookies.set(COOKIE_NAME, create_session_token("viewer", "user"))
+        response = client.get("/fournos/runs", params={"tab": tab})
+
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "private, no-store"
+    job, = response.json()["jobs"]
+    assert job["owner"] == (owner if signed_in else "")
+    assert job["work_items"] == ([item] if signed_in else [])
 
 
 def test_reservation_ownership_uses_immutable_subject():

@@ -760,6 +760,7 @@ def _sort_latest(items: List[dict], *date_fields: str) -> List[dict]:
 @router.get("/runs/", response_model=JobListResponse, include_in_schema=False)
 async def list_jobs(
     request: Request,
+    response: Response,
     tab: str = Query("live", regex="^(live|history)$"),
     project: str = Query(""),
     cluster: str = Query(""),
@@ -788,9 +789,8 @@ async def list_jobs(
     per_page: int = Query(50, ge=1, le=200),
 ):
     current_user = get_current_user(request)
-    # Job owner names are part of the public job summary. Owner-specific
-    # filtering and work-item metadata remain restricted to signed-in users.
-    can_filter_owner = current_user is not None
+    response.headers["Cache-Control"] = "private, no-store"
+    include_owner = current_user is not None
     effective_sort_by = _visible_sort_by(sort_by, current_user)
     _validate_identity_search(identity, current_user)
     if (work_item_provider or work_item_key) and current_user is None:
@@ -849,7 +849,7 @@ async def list_jobs(
                 j for j in jobs
                 if j.get("status", {}).get("phase") == status
             ]
-        if owner and can_filter_owner:
+        if owner and include_owner:
             jobs = [
                 j for j in jobs
                 if j.get("spec", {}).get("owner") == owner
@@ -875,7 +875,7 @@ async def list_jobs(
         summaries = [
             _live_job_to_summary(
                 j,
-                include_owner=True,
+                include_owner=include_owner,
                 work_items=work_items_by_name.get(
                     j.get("metadata", {}).get("name", ""), []
                 ),
@@ -897,7 +897,7 @@ async def list_jobs(
                 project=project or None,
                 cluster=cluster or None,
                 status=status or None,
-                owner=(owner or None) if can_filter_owner else None,
+                owner=(owner or None) if include_owner else None,
                 requester_subject=requester_subject,
                 query=q.strip() or None,
                 identity=identity.strip() or None,
@@ -917,7 +917,7 @@ async def list_jobs(
                 offset=(page - 1) * per_page,
             )
         summaries = [
-            _db_job_to_summary(j, include_owner=True) for j in db_jobs
+            _db_job_to_summary(j, include_owner=include_owner) for j in db_jobs
         ]
 
     return {

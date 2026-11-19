@@ -29,6 +29,8 @@ import DynamicSubmitForm, { type MatrixClusterConstraints } from '../components/
 import ClusterCombobox from '../components/ClusterCombobox'
 import ClusterScheduleModal from '../components/ClusterScheduleModal'
 import AcceleratorQueueSummary from '../components/AcceleratorQueueSummary'
+import ClusterActivityModal from '../components/ClusterActivityModal'
+import { hasUpcomingClusterActivity } from '../utils/clusterActivity'
 import SchedulingCalendar from '../components/SchedulingCalendar'
 import { browserTimezone, datetimeLocalToUtcIso } from '../utils/timezone'
 import WizardSteps from '../components/WizardSteps'
@@ -361,7 +363,7 @@ function JobProgressCell({ job }: { job: FournosJobSummary }) {
   )
 }
 
-function JobsTable({
+export function JobsTable({
   jobs,
   source,
   sort,
@@ -401,11 +403,11 @@ function JobsTable({
             <SortableTh label="Cluster" sortKey="cluster" sort={sort} onSort={onSort} large />
             {source === 'live' && <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase">Progress</th>}
             <SortableTh label={source === 'live' ? 'Age' : 'Date'} sortKey={source === 'live' ? 'age' : 'date'} sort={sort} onSort={onSort} large />
-            {source === 'live' ? (
-              <SortableTh label="Triggered By" sortKey="triggered_by" sort={sort} onSort={onSort} large />
-            ) : (
+            <SortableTh label="Triggered By" sortKey="triggered_by" sort={sort} onSort={onSort} large />
+            {source === 'history' && (<>
               <SortableTh label="Duration" sortKey="duration" sort={sort} onSort={onSort} large />
-            )}
+              <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase">Forge used</th>
+            </>)}
             {source === 'live' && <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase">PR</th>}
             {source === 'history' && <th className="px-4 py-3 text-center text-sm font-medium text-gray-500 uppercase">MLflow</th>}
             <th className="px-4 py-3" />
@@ -427,7 +429,7 @@ function JobsTable({
                   {job.name}
                 </Link>
               </td>
-              <td className="px-4 py-3 text-base text-gray-500">{job.owner || '-'}</td>
+              <td className="px-4 py-3 text-base text-gray-500">{isAuthenticated() ? job.owner || '-' : 'Sign in to view'}</td>
               <td className="px-4 py-3 text-base text-gray-900">{job.project || '-'}</td>
               <td className="px-4 py-3 text-base text-gray-700">
                 <code
@@ -448,31 +450,39 @@ function JobsTable({
                   ? formatAge(job.created_at)
                   : formatHistoryDate(job)}
               </td>
-              {source === 'live' ? (
-                <td className="px-4 py-3 text-base text-gray-500">
-                  {job.trigger_type === 'recurring' && job.triggered_by_schedule ? (
-                    <Link
-                      to={`/testing/schedules/${job.triggered_by_schedule}/runs`}
-                      className="inline-flex items-center gap-1 text-indigo-500 hover:text-indigo-700"
-                      title={`Created by recurring job "${job.triggered_by_schedule}"`}
-                    >
-                      <CalendarDaysIcon className="h-3.5 w-3.5" /> {job.triggered_by_schedule}
-                    </Link>
-                  ) : job.trigger_type === 'deferred' ? (
-                    <span className="inline-flex items-center gap-1 text-gray-400">
-                      <ClockIcon className="h-3.5 w-3.5" /> Deferred
-                    </span>
-                  ) : job.trigger_type === 'recurring-parent' ? (
-                    <span className="inline-flex items-center gap-1 text-teal-600">
-                      <CalendarDaysIcon className="h-3.5 w-3.5" /> Recurring template
-                    </span>
-                  ) : (
-                    '-'
+              <td className="px-4 py-3 text-base text-gray-500">
+                {job.trigger_type === 'recurring' && job.triggered_by_schedule ? (
+                  <Link
+                    to={`/testing/schedules/${job.triggered_by_schedule}/runs`}
+                    className="inline-flex items-center gap-1 text-indigo-500 hover:text-indigo-700"
+                    title={`Created by recurring job "${job.triggered_by_schedule}"`}
+                  >
+                    <CalendarDaysIcon className="h-3.5 w-3.5" /> {job.triggered_by_schedule}
+                  </Link>
+                ) : job.trigger_type === 'deferred' ? (
+                  <span className="inline-flex items-center gap-1 text-gray-400">
+                    <ClockIcon className="h-3.5 w-3.5" /> Deferred
+                  </span>
+                ) : job.trigger_type === 'recurring-parent' ? (
+                  <span className="inline-flex items-center gap-1 text-teal-600">
+                    <CalendarDaysIcon className="h-3.5 w-3.5" /> Recurring template
+                  </span>
+                ) : (
+                  '-'
+                )}
+              </td>
+              {source === 'history' && (<>
+                <td className="px-4 py-3 text-base text-gray-500">{formatDuration(job.duration_seconds)}</td>
+                <td className="px-4 py-3 text-sm text-gray-500">
+                  {job.forge_git_version && <code>{job.forge_git_version}</code>}
+                  {job.forge_image_digest && (
+                    <code className="block max-w-32 truncate" title={job.forge_image_digest}>{job.forge_image_digest}</code>
+                  )}
+                  {!job.forge_git_version && !job.forge_image_digest && (
+                    <span title={job.forge_provenance_state || 'Forge version unavailable'}>-</span>
                   )}
                 </td>
-              ) : (
-                <td className="px-4 py-3 text-base text-gray-500">{formatDuration(job.duration_seconds)}</td>
-              )}
+              </>)}
               {source === 'live' && (
                 <td className="px-4 py-3 text-base">
                   {job.source_pr_number ? (
@@ -648,6 +658,18 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
     isError: clusterOverviewError,
     refetch: refetchClusterOverview,
   } = useClusterOverview(jobType === 'forge' ? cluster || undefined : undefined)
+
+  const [activityOpen, setActivityOpen] = useState(false)
+  const checkedActivity = useRef(false)
+  useEffect(() => {
+    checkedActivity.current = false
+    setActivityOpen(false)
+  }, [cluster, jobType])
+  useEffect(() => {
+    if (jobType !== 'forge' || step !== 2 || !clusterOverview || clusterOverview.cluster !== cluster || checkedActivity.current) return
+    checkedActivity.current = true
+    if (hasUpcomingClusterActivity(clusterOverview)) setActivityOpen(true)
+  }, [cluster, clusterOverview, jobType, step])
 
   const selectedProject = useMemo(
     () => projects?.find((p: ForgeProject) => p.name === project),
@@ -1130,6 +1152,18 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
               isError={clusterOverviewError}
               onRefresh={() => { void refetchClusterOverview() }}
             />
+          )}
+          {cluster && (
+            <div>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:text-indigo-800"
+                onClick={() => { checkedActivity.current = true; setActivityOpen(true) }}
+              >
+                <CalendarDaysIcon className="h-4 w-4" /> View {cluster}'s schedule
+              </button>
+              <ClusterActivityModal cluster={cluster} open={activityOpen} onClose={() => setActivityOpen(false)} />
+            </div>
           )}
 
           {/* Pull Request picker */}
