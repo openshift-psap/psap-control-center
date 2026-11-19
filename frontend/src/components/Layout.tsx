@@ -51,7 +51,7 @@ const navigation: NavigationItem[] = [
   { name: 'Clusters', href: '/clusters', icon: ServerStackIcon },
   { name: 'Reservations', href: '/reservations', icon: ClipboardDocumentListIcon },
   { name: 'Calendar', href: '/calendar', icon: CalendarDaysIcon },
-  { name: 'Testing', href: testingHref, icon: BeakerIcon },
+  { name: 'Testing', href: testingHref, icon: BeakerIcon, badge: 'Experimental' },
   { name: 'Results', href: '/results', icon: ChartBarIcon, comingSoon: true },
   { name: 'Cost Explorer', href: '/cost-explorer', icon: CurrencyDollarIcon, adminOnly: true },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon, adminOnly: true },

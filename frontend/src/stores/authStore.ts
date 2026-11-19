@@ -30,6 +30,10 @@ export function getUsername(): string | null {
   return session?.username ?? null
 }
 
+export function getPreferenceAccount(): string | null {
+  return session ? `${session.auth_provider || 'local'}:${session.username}` : null
+}
+
 export function getDisplayName(): string | null {
   return session?.name || session?.email || session?.username || null
 }

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { fournosApi } from '../services/api'
-import { getUsername } from '../stores/authStore'
+import { getPreferenceAccount, getUsername } from '../stores/authStore'
 import type {
   FournosJobListResponse,
   FournosLiveJobSummaryResponse,
@@ -81,9 +81,11 @@ export function useFournosLiveJobSummary(enabled = true) {
   })
 }
 
+const historyPreferenceKey = () => ['fournos-history-preference', getPreferenceAccount()] as const
+
 export function useHistoryPreference(enabled: boolean) {
   return useQuery<HistoryPreferenceResponse>({
-    queryKey: ['fournos-history-preference'],
+    queryKey: historyPreferenceKey(),
     queryFn: () => fournosApi.getHistoryPreference(),
     enabled,
     retry: 1,
@@ -102,10 +104,11 @@ export function useHistoryFilterOptions(enabled: boolean) {
 
 export function useSaveHistoryPreference() {
   const qc = useQueryClient()
-  return useMutation<HistoryPreferenceResponse, Error, HistoryViewState>({
-    mutationFn: (state) => fournosApi.saveHistoryPreference(state),
-    onSuccess: (data) => {
-      qc.setQueryData(['fournos-history-preference'], data)
+  return useMutation({
+    mutationFn: (state: HistoryViewState) => fournosApi.saveHistoryPreference(state),
+    onMutate: historyPreferenceKey,
+    onSuccess: (data, _state, key) => {
+      if (key) qc.setQueryData(key, data)
     },
     onError: (error) => toast.error(error.message || 'Failed to save History view'),
   })
@@ -115,8 +118,9 @@ export function useResetHistoryPreference() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => fournosApi.resetHistoryPreference(),
-    onSuccess: () => {
-      qc.removeQueries({ queryKey: ['fournos-history-preference'] })
+    onMutate: historyPreferenceKey,
+    onSuccess: (_data, _variables, key) => {
+      if (key) qc.removeQueries({ queryKey: key })
     },
     onError: (error) => toast.error(error.message || 'Failed to reset History view'),
   })

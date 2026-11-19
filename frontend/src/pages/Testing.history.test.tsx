@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { Link, MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { clearSession, setSession } from '../stores/authStore'
 import { clusterApi, fournosApi } from '../services/api'
@@ -26,6 +26,7 @@ describe('History table', () => {
       history_date: '', from_time: '00:00', to_time: '23:59', sort_by: 'triggered_by', sort_dir: 'asc', per_page: 100,
     }
     vi.spyOn(fournosApi, 'getHistoryPreference').mockResolvedValue({ state, schema_version: 1, updated_at: null })
+    const save = vi.spyOn(fournosApi, 'saveHistoryPreference').mockResolvedValue({ state, schema_version: 1, updated_at: null })
     vi.spyOn(fournosApi, 'getHistoryFilterOptions').mockResolvedValue({
       identities: [], repositories: [], pr_numbers: [], source_shas: [], forge: [], tags: [], work_item_providers: [], work_item_keys: [],
     })
@@ -33,9 +34,11 @@ describe('History table', () => {
     vi.spyOn(fournosApi, 'listProjects').mockResolvedValue([])
     const list = vi.spyOn(fournosApi, 'listJobs').mockResolvedValue({ jobs: [archived], total: 1, page: 1, per_page: 100 })
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/testing?tab=history']}>
+    const page = () => <QueryClientProvider client={client}><MemoryRouter initialEntries={['/testing?tab=history']}>
+      <Link to="/testing?tab=live">Jobs sidebar link</Link>
       <Testing />
-    </MemoryRouter></QueryClientProvider>)
+    </MemoryRouter></QueryClientProvider>
+    const { rerender } = render(page())
 
     fireEvent.click(screen.getByText('Filter list'))
     await waitFor(() => expect(screen.getByLabelText('Owner or requester')).toHaveValue(state.identity))
@@ -49,6 +52,22 @@ describe('History table', () => {
       pr_number: 17, source_sha: state.source_sha, forge: state.forge, work_item_provider: 'jira',
       work_item_key: 'TEST-7', tags: 'nightly', sort_by: 'triggered_by',
     })))
+
+    fireEvent.click(screen.getByRole('link', { name: 'Jobs sidebar link' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+    await waitFor(() => expect(screen.getByLabelText('Source repository')).toHaveValue(state.repository))
+    expect(screen.getByLabelText('Owner or requester')).toHaveValue(state.identity)
+
+    clearSession()
+    rerender(page())
+    await waitFor(() => expect(screen.getByLabelText('Source repository')).toHaveValue(''))
+    const otherState = { ...state, repository: 'another/repo', identity: 'Another owner' }
+    vi.mocked(fournosApi.getHistoryPreference).mockResolvedValue({ state: otherState, schema_version: 1, updated_at: null })
+    setSession({ username: 'another-user', role: 'user' })
+    rerender(page())
+    await waitFor(() => expect(screen.getByLabelText('Source repository')).toHaveValue(otherState.repository))
+    expect(screen.getByLabelText('Owner or requester')).toHaveValue(otherState.identity)
+    expect(save).not.toHaveBeenCalled()
   })
 
   it('shows the schedule and observed Forge version alongside duration and MLflow', () => {

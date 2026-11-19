@@ -59,6 +59,7 @@ class GpuAllocationStatus:
     gpu_types: list = None
     nodes: list = None
     gpu_pods: list = None
+    pod_inventory_complete: bool = False
 
     def __post_init__(self):
         if self.gpu_types is None:
@@ -547,6 +548,8 @@ class KubernetesService:
             logger.warning(
                 f"Could not list pods for legacy GPU counting: {e}"
             )
+        else:
+            status.pod_inventory_complete = True
 
         # Aggregate into the status object
         unique_nodes_per_type: Dict[str, set] = {}
@@ -659,6 +662,7 @@ class KubernetesService:
         status.total_gpus = sum(t.count for t in status.gpu_types)
         status.allocated_gpus = sum(t.allocated for t in status.gpu_types)
         status.free_gpus = status.total_gpus - status.allocated_gpus
+        status.pod_inventory_complete = True
         return status
 
     def get_gpu_allocation(self) -> GpuAllocationStatus:

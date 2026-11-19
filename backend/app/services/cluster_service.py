@@ -12,7 +12,7 @@ from app.models.node_history import NodeHistory
 from app.schemas.cluster import ClusterCreate, ClusterUpdate, ClusterStatus
 from app.services.kubernetes_service import KubernetesService
 from app.services import billing_csv_service
-from app.services import gpu_status_cache
+from app.services.gpu_pod_history_service import record_gpu_snapshot
 from app.core.config import settings
 from app.utils.logger import create_logger
 
@@ -266,7 +266,6 @@ class ClusterService:
                 cluster.gpu_count = cluster_info.get("gpu_count")
                 cluster.gpu_type = cluster_info.get("gpu_type")
             else:
-                gpu_status_cache.store(cluster_id, gpu_alloc.to_dict())
                 cluster.gpu_allocation_mode = gpu_alloc.gpu_allocation_mode
                 cluster.gpu_count = str(gpu_alloc.total_gpus)
                 cluster.gpu_type = (
@@ -283,6 +282,8 @@ class ClusterService:
                     logger.info(f"Auto-detected infra_id for {cluster.name}: {infra_id}")
 
             await self.db.commit()
+            if not isinstance(gpu_alloc, Exception):
+                await record_gpu_snapshot(self.db, cluster_id, gpu_alloc)
             await self.db.refresh(cluster)
 
             await self._upsert_node_history(

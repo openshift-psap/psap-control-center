@@ -1,12 +1,28 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_, tuple_
 from datetime import datetime
 from typing import List, Dict, Any
 
+from app.models.cluster import Cluster
 from app.models.gpu_pod_history import GpuPodHistory
+from app.services import gpu_status_cache
+from app.services.kubernetes_service import GpuAllocationStatus
 from app.utils.logger import create_logger
 
 logger = create_logger("GpuPodHistoryService")
+
+
+async def record_gpu_snapshot(db: AsyncSession, cluster_id: str, allocation: GpuAllocationStatus) -> dict:
+    """Publish a fresh observation. Only a complete pod list can retire missing pods."""
+    snapshot = allocation.to_dict()
+    gpu_status_cache.store(cluster_id, snapshot)
+    if allocation.pod_inventory_complete:
+        try:
+            await sync_gpu_pods(db, cluster_id, snapshot["gpu_pods"])
+        except Exception as exc:
+            await db.rollback()
+            logger.warning(f"GPU pod history sync failed for cluster {cluster_id}: {exc}")
+    return snapshot
 
 
 async def sync_gpu_pods(
@@ -18,17 +34,27 @@ async def sync_gpu_pods(
     Upsert currently-running GPU pods and mark
     vanished ones as finished.
     """
+    # A cold API read and a scheduled refresh may discover the same new pod.
+    # Serialize their upserts per cluster, including across backend workers.
+    await db.execute(select(Cluster.id).where(Cluster.id == cluster_id).with_for_update())
     now = datetime.utcnow()
 
     active_keys = {
         (p["namespace"], p["name"]) for p in active_pods
     }
 
-    # Fetch ALL records for this cluster (including finished) so we can
-    # detect re-appeared pods instead of hitting the unique constraint.
+    # Include finished rows only for pods we see again. Most historical rows
+    # never need to be read during periodic cluster refreshes.
+    relevant_rows = GpuPodHistory.finished_at.is_(None)
+    if active_keys:
+        relevant_rows = or_(
+            relevant_rows,
+            tuple_(GpuPodHistory.namespace, GpuPodHistory.pod_name).in_(active_keys),
+        )
     result = await db.execute(
         select(GpuPodHistory).where(
             GpuPodHistory.cluster_id == cluster_id,
+            relevant_rows,
         )
     )
     existing: List[GpuPodHistory] = list(

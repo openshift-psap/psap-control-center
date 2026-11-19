@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { clusterApi } from '../services/api'
+import { getPreferenceAccount } from '../stores/authStore'
 import type { Cluster, RefreshDisplayMode, RefreshDisplayPreference } from '../types'
 import toast from 'react-hot-toast'
 import { createLogger } from '../utils/logger'
@@ -14,9 +15,11 @@ export function useClusters(activeOnly = false, enabled = true) {
   })
 }
 
+const refreshPreferenceKey = () => ['cluster-refresh-display-preference', getPreferenceAccount()] as const
+
 export function useClusterRefreshDisplayPreference(enabled = true) {
   return useQuery<RefreshDisplayPreference>({
-    queryKey: ['cluster-refresh-display-preference'],
+    queryKey: refreshPreferenceKey(),
     queryFn: clusterApi.getRefreshDisplayPreference,
     enabled,
     staleTime: Infinity,
@@ -31,31 +34,22 @@ export function useSaveClusterRefreshDisplayPreference() {
     RefreshDisplayPreference,
     Error,
     RefreshDisplayMode,
-    { previous?: RefreshDisplayPreference }
+    { key: ReturnType<typeof refreshPreferenceKey>; previous?: RefreshDisplayPreference }
   >({
     mutationFn: clusterApi.saveRefreshDisplayPreference,
     onMutate: async (mode) => {
-      await queryClient.cancelQueries({
-        queryKey: ['cluster-refresh-display-preference'],
-      })
-      const previous = queryClient.getQueryData<RefreshDisplayPreference>(
-        ['cluster-refresh-display-preference'],
-      )
-      queryClient.setQueryData<RefreshDisplayPreference>(
-        ['cluster-refresh-display-preference'],
-        { ...previous, mode },
-      )
-      return { previous }
+      const key = refreshPreferenceKey()
+      await queryClient.cancelQueries({ queryKey: key })
+      const previous = queryClient.getQueryData<RefreshDisplayPreference>(key)
+      queryClient.setQueryData<RefreshDisplayPreference>(key, { ...previous, mode })
+      return { key, previous }
     },
     onError: (error, _mode, context) => {
-      queryClient.setQueryData<RefreshDisplayPreference>(
-        ['cluster-refresh-display-preference'],
-        context?.previous ?? { mode: 'countdown' },
-      )
+      if (context) queryClient.setQueryData(context.key, context.previous ?? { mode: 'countdown' })
       toast.error(`Failed to save refresh display preference: ${error.message}`)
     },
-    onSuccess: (data) => {
-      queryClient.setQueryData(['cluster-refresh-display-preference'], data)
+    onSuccess: (data, _mode, context) => {
+      if (context) queryClient.setQueryData(context.key, data)
     },
   })
 }

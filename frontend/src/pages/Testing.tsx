@@ -22,7 +22,7 @@ import {
   PencilSquareIcon,
 } from '@heroicons/react/24/outline'
 import clsx from 'clsx'
-import { getDisplayName, isAdmin, isAuthenticated } from '../stores/authStore'
+import { getDisplayName, getPreferenceAccount, isAdmin, isAuthenticated } from '../stores/authStore'
 import { useClusters } from '../hooks/useClusters'
 import { useHearthClusters } from '../hooks/useHearth'
 import DynamicSubmitForm, { type MatrixClusterConstraints } from '../components/DynamicSubmitForm'
@@ -1392,12 +1392,10 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
         />
       )}
 
-      {/* RHAIIS shares the basics panel above and renders project configuration,
-          YAML preview, and submission together. Other projects use the wizard. */}
-      {jobType === 'forge' && dynamicSchema && (
-        (rhaiisSinglePage && step === 2) || (!rhaiisSinglePage && (step === 3 || step === 4))
-      ) && (
+      {/* Keep each project's draft mounted while editing Basics in the wizard. */}
+      {jobType === 'forge' && dynamicSchema && (!rhaiisSinglePage || step === 2) && (
         <DynamicSubmitForm
+          key={project}
           project={project}
           schema={dynamicSchema}
           basics={{ cluster, clusterGpuType: selectedCluster?.gpu_type || '', pipeline, owner, priority, exclusive, pullSha, pullRequest, useLatestMain, prLabel: prSearch || pullSha, scheduling, workItems, runGroupIds, runGroups }}
@@ -1916,7 +1914,8 @@ export default function Testing() {
   const lastSavedStateRef = useRef<string | null>(
     historyUrlHasState ? JSON.stringify(initialHistory) : null
   )
-  const previousAuthenticatedRef = useRef(authenticated)
+  const preferenceAccount = getPreferenceAccount()
+  const previousAccountRef = useRef(preferenceAccount)
   const observedUrlRef = useRef(searchParams.toString())
   const applyingUrlRef = useRef(false)
   const suppressPreferenceSaveRef = useRef(false)
@@ -2012,21 +2011,39 @@ export default function Testing() {
   }, [historyQuery, historyIdentity, historyRepository, historySourceSha, historyForge, historyViewState.tags])
 
   useEffect(() => {
-    if (authenticated && !previousAuthenticatedRef.current && activeTab === 'history' && !historyUrlHasState) {
-      lastSavedStateRef.current = null
+    if (activeTab !== 'history' && authenticated) setPreferenceApplied(false)
+    if (previousAccountRef.current === preferenceAccount) return
+
+    const hadAccount = previousAccountRef.current !== null
+    previousAccountRef.current = preferenceAccount
+    lastSavedStateRef.current = null
+    if (hadAccount) {
+      applyHistoryView(DEFAULT_HISTORY_VIEW)
+      setPreferenceApplied(!authenticated)
+      if (historyUrlHasState) {
+        const next = new URLSearchParams(searchParams)
+        HISTORY_URL_KEYS.forEach(key => next.delete(key))
+        applyingUrlRef.current = activeTab === 'history'
+        setSearchParams(next, { replace: true })
+      }
+    } else if (activeTab === 'history' && !historyUrlHasState) {
       setPreferenceApplied(false)
     }
-    previousAuthenticatedRef.current = authenticated
-  }, [authenticated, activeTab, historyUrlHasState])
+  }, [preferenceAccount, authenticated, activeTab, historyUrlHasState, searchParams, setSearchParams, applyHistoryView])
 
   useEffect(() => {
     if (activeTab !== 'history' || preferenceApplied) return
-    if (!authenticated || historyUrlHasState) {
+    if (historyUrlHasState) {
+      const state = historyViewFromParams(searchParams)
+      const urlPage = Number(searchParams.get('page'))
+      applyHistoryView(state)
+      setPage(Number.isInteger(urlPage) && urlPage > 0 ? urlPage : 1)
+      lastSavedStateRef.current = JSON.stringify(state)
+      setPreferenceApplied(true)
+    } else if (!authenticated) {
       lastSavedStateRef.current = JSON.stringify(historyViewState)
       setPreferenceApplied(true)
-      return
-    }
-    if (preferenceQuery.data) {
+    } else if (preferenceQuery.data) {
       applyHistoryView(preferenceQuery.data.state)
       lastSavedStateRef.current = JSON.stringify(preferenceQuery.data.state)
       setPreferenceApplied(true)
@@ -2037,7 +2054,7 @@ export default function Testing() {
   }, [
     activeTab, preferenceApplied, authenticated, historyUrlHasState,
     preferenceQuery.data, preferenceQuery.isError, applyHistoryView,
-    historyViewState,
+    historyViewState, searchParams,
   ])
 
   useEffect(() => {
