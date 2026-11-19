@@ -11,7 +11,7 @@ from fastapi import Response
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api import clusters
-from app.models.cluster import Cluster, ClusterTopologySnapshot
+from app.models.cluster import Cluster, ClusterTopologySnapshot, ResourceObservation
 from app.services import topology_snapshot as snapshots
 from app.services.kubernetes_service import KubernetesService
 
@@ -22,7 +22,7 @@ async def store(tmp_path):
     engine = create_async_engine(os.getenv("TOPOLOGY_TEST_DATABASE_URL") or f"sqlite+aiosqlite:///{tmp_path}/db")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as conn:
-        for table in (Cluster.__table__, ClusterTopologySnapshot.__table__):
+        for table in (Cluster.__table__, ClusterTopologySnapshot.__table__, ResourceObservation.__table__):
             await conn.run_sync(lambda sync, t=table: t.create(sync, checkfirst=True))
     async with sessions.begin() as db:
         cluster = Cluster(name=str(uuid4()), kubeconfig_path="test", api_server_url="old")
@@ -153,7 +153,7 @@ async def test_old_check_cannot_overwrite_new_cluster_target(store):
 def test_lightweight_check_reuses_node_details_and_counts_assigned_pods():
     client = Mock(spec=KubernetesService)
     client._topology_pod_counts = KubernetesService._topology_pod_counts.__get__(client)
-    client._topology_collection.side_effect = [
+    client._collection.side_effect = [
         {"kind": "Table", "columnDefinitions": [{"name": "Name"}, {"name": "Node"}],
          "rows": [{"cells": ["a", "worker"]}, {"cells": ["b", "worker"]}, {"cells": ["c", "<none>"]}]},
         {"items": [{"metadata": {"name": "worker", "resourceVersion": "42"}}]},
@@ -167,7 +167,7 @@ def test_lightweight_check_reuses_node_details_and_counts_assigned_pods():
 def test_changed_node_revision_reads_details_and_pod_list_fallback():
     client = Mock(spec=KubernetesService)
     client._topology_pod_counts = KubernetesService._topology_pod_counts.__get__(client)
-    client._topology_collection.side_effect = [
+    client._collection.side_effect = [
         {"kind": "PodList", "items": [{"spec": {"nodeName": "worker"}}]},
         {"items": [{"metadata": {"name": "worker", "resourceVersion": "43"}}]},
     ]

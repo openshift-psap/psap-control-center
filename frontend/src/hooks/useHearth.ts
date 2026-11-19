@@ -17,7 +17,7 @@ export function useHearthStatus() {
   return useQuery({
     queryKey: ['hearthStatus'],
     queryFn: hearthApi.getStatus,
-    refetchInterval: 60000,
+    staleTime: 60_000,
     retry: 1,
   })
 }
@@ -37,7 +37,8 @@ export function useHearthCluster(name: string) {
     queryKey: ['hearthCluster', name],
     queryFn: () => hearthApi.getCluster(name),
     enabled: !!name,
-    refetchInterval: 30000,
+    refetchInterval: 15_000,
+    staleTime: 0,
     retry: 1,
   })
 }
@@ -53,6 +54,7 @@ export function useConnectHearth() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['hearthStatus'] })
       queryClient.invalidateQueries({ queryKey: ['hearthClusters'] })
+      queryClient.resetQueries({ queryKey: ['hearthCluster'] })
       toast.success(data.message)
     },
     onError: (error: Error) => {
@@ -69,6 +71,7 @@ export function useDisconnectHearth() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['hearthStatus'] })
       queryClient.invalidateQueries({ queryKey: ['hearthClusters'] })
+      queryClient.resetQueries({ queryKey: ['hearthCluster'] })
       toast.success(data.message)
     },
     onError: (error: Error) => {

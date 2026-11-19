@@ -65,3 +65,18 @@ class ClusterTopologySnapshot(Base):
     changed_at = Column(DateTime, nullable=True)
     checking_since = Column(DateTime, nullable=True)
     last_check_failed = Column(Boolean, nullable=False, default=False)
+
+
+class ResourceObservation(Base):
+    __tablename__ = "resource_observations"
+
+    source = Column(String(80), primary_key=True)
+    section = Column(String(128), primary_key=True)
+    cluster_id = Column(String(36), ForeignKey("clusters.id", ondelete="CASCADE"), index=True)
+    payload = Column(JSON)
+    versions = Column(JSON)
+    checked_at = Column(DateTime)
+    changed_at = Column(DateTime)
+    checking_since = Column(DateTime)
+    last_check_failed = Column(Boolean, nullable=False, default=False)
+    failed_at = Column(DateTime)

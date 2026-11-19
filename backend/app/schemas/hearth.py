@@ -1,3 +1,4 @@
+from datetime import datetime
 from pydantic import BaseModel, Field
 from typing import Optional, List
 
@@ -27,6 +28,7 @@ class HearthCondition(BaseModel):
 
 
 class HearthClusterResponse(BaseModel):
+    observed_at: Optional[datetime] = None
     name: str
     kubeconfig_secret: str
     owner: Optional[str] = None
@@ -34,7 +36,8 @@ class HearthClusterResponse(BaseModel):
     gpu_discovery_interval: Optional[str] = None
     hardware: Optional[HearthHardware] = None
     kubeconfig_status: Optional[str] = None
-    locked: bool = False
+    availability_verified: bool = True
+    locked: Optional[bool] = False
     lock_expires_at: Optional[str] = None
     owner_set_at: Optional[str] = None
     lock_job_name: Optional[str] = None
@@ -44,14 +47,17 @@ class HearthClusterResponse(BaseModel):
 
 
 class HearthClusterListResponse(BaseModel):
+    observed_at: Optional[datetime] = None
     clusters: List[HearthClusterResponse]
     total: int
     available: bool = True
 
 
 class HearthStatusResponse(BaseModel):
+    observed_at: Optional[datetime] = None
     available: bool
     configured: bool = False
+    cluster_names: List[str] = Field(default_factory=list)
     cluster_count: int = 0
     total_gpus: int = 0
     locked_clusters: int = 0

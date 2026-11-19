@@ -12,7 +12,7 @@ import {
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline'
 import { useDropzone } from 'react-dropzone'
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import {
   useClusterRefreshDisplayPreference,
   useCreateCluster,
@@ -55,10 +55,9 @@ export default function Clusters() {
   const [refreshProgress, setRefreshProgress] = useState<RefreshProgress | null>(null)
   const prevLastRefresh = useRef<string | null>(null)
 
-  const queryClient = useQueryClient()
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['clusters', { activeOnly: false, includeLatestCost: true }],
-    queryFn: () => clusterApi.list(false, true),
+    queryKey: ['clusters', { activeOnly: false, includeLatestCost: true, includeGpuSummary: true }],
+    queryFn: () => clusterApi.list(false, true, true),
   })
   const createCluster = useCreateCluster()
   const deleteCluster = useDeleteCluster()
@@ -83,10 +82,9 @@ export default function Clusters() {
     if (!schedule?.last_refresh) return
     if (prevLastRefresh.current && prevLastRefresh.current !== schedule.last_refresh) {
       refetch()
-      queryClient.invalidateQueries({ queryKey: ['gpu-status'] })
     }
     prevLastRefresh.current = schedule.last_refresh
-  }, [schedule?.last_refresh, refetch, queryClient])
+  }, [schedule?.last_refresh, refetch])
 
   const serverRefreshing = schedule?.in_progress ?? false
 
@@ -111,23 +109,12 @@ export default function Clusters() {
         errors.push(cluster.name)
       }
 
-      refetch()
-
-      try {
-        await queryClient.fetchQuery({
-          queryKey: ['gpu-status', cluster.id],
-          queryFn: () => clusterApi.getGpuStatus(cluster.id),
-          staleTime: 0,
-        })
-      } catch {
-        // GPU status fetch is best-effort
-      }
-
       completed++
       setRefreshProgress(prev => prev ? { ...prev, completed, errors: [...errors] } : prev)
     }
 
     await Promise.all(clusterList.map(refreshOne))
+    await refetch()
 
     setRefreshProgress({ total: clusterList.length, completed: clusterList.length, currentCluster: '', errors })
 
@@ -141,21 +128,15 @@ export default function Clusters() {
       setRefreshing(false)
       setRefreshProgress(null)
     }, 2000)
-  }, [data, refreshing, serverRefreshing, refetch, queryClient])
+  }, [data, refreshing, serverRefreshing, refetch])
 
   const clusters = data?.clusters || []
-  const gpuQueries = useQueries({
-    queries: clusters.map(cluster => ({
-      queryKey: ['gpu-status', cluster.id],
-      queryFn: () => clusterApi.getGpuStatus(cluster.id),
-      enabled: cluster.status === 'healthy',
-      staleTime: 30_000,
-      refetchInterval: 60_000,
-    })),
-  })
-  const clusterCards = clusters.map((cluster, index) => {
-    const gpuData = cluster.status === 'healthy' ? gpuQueries[index].data : undefined
-    const activityRank = gpuData ? (gpuData.allocated_gpus > 0 ? 0 : 1) : 2
+  const clusterCards = clusters.map(cluster => {
+    const saved = data?.gpu_summaries?.[cluster.id]
+    const gpuData = saved && {
+      ...saved, stale: saved.stale || cluster.status !== 'healthy' || Date.now() > Date.parse(saved.fresh_until),
+    }
+    const activityRank = gpuData && !gpuData.stale ? (gpuData.allocated_gpus > 0 ? 0 : 1) : 2
     return { cluster, gpuData, activityRank }
   }).sort((a, b) => a.activityRank - b.activityRank)
 

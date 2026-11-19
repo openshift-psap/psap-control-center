@@ -32,9 +32,9 @@ export default function Dashboard() {
     isError: liveJobSummaryError,
   } = useFournosLiveJobSummary()
   
-  const { data: hearthData } = useHearthClusters()
+  const { data: hearthData, isError: hearthError } = useHearthClusters()
   const hearthClusters = hearthData?.clusters || []
-  const hearthAvailable = hearthData?.available ?? false
+  const hearthAvailable = hearthData?.available && !hearthError
 
   const clusters = clustersData?.clusters || []
   const reservations = reservationsData?.reservations || []

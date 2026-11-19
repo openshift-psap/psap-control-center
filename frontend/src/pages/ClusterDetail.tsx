@@ -25,7 +25,6 @@ import {
 import { useDropzone } from 'react-dropzone'
 import {
   useCluster,
-  useClusterStatus,
   useRefreshClusterStatus,
   useUploadKubeconfig,
   useOcpDetails,
@@ -33,7 +32,7 @@ import {
   useClusterWorkloads,
 } from '../hooks/useClusters'
 import { useCurrentClusterUser } from '../hooks/useReservations'
-import { useHearthCluster } from '../hooks/useHearth'
+import { useHearthCluster, useHearthStatus } from '../hooks/useHearth'
 import { useClusterTopology } from '../hooks/useClusterTopology'
 import { useGpuStatus } from '../hooks/useGpuStatus'
 import { useClusterCosts, useRefreshClusterCost } from '../hooks/useClusterCost'
@@ -41,7 +40,7 @@ import { useClusterEstimate } from '../hooks/useCostExplorer'
 import { isAdmin } from '../stores/authStore'
 import { format } from 'date-fns'
 import clsx from 'clsx'
-import type { TopologyNode, PodInfo } from '../types'
+import type { TopologyNode, PodInfo, PanelObservation } from '../types'
 
 const TopologyVisualization = memo(function TopologyVisualization({
   controlPlane, 
@@ -494,6 +493,118 @@ function WorkloadsByNode({
   )
 }
 
+function ObservationStatus({ observation, failed }: { observation?: PanelObservation; failed: boolean }) {
+  if (!observation && !failed) return null
+  const missing = observation?.failed_resources?.join(', ')
+  return (
+    <div className="mb-3 text-xs text-gray-600" role="status">
+      {observation?.last_checked_at && <span>Observed {format(new Date(observation.last_checked_at), 'MMM d, HH:mm:ss')}. </span>}
+      {(failed || observation?.last_check_failed) && <span className="text-amber-800">
+        {missing ? `Couldn’t verify ${missing}.` : 'Couldn’t verify the latest data.'} {observation?.last_checked_at && 'Showing saved values.'}
+      </span>}
+    </div>
+  )
+}
+
+function HearthDetail({ name }: { name: string }) {
+  const { data: hearthCluster, isError, isLoading } = useHearthCluster(name)
+  if (!hearthCluster) return <p role="status">{isLoading ? 'Checking Hearth…' : 'Hearth status unavailable.'}</p>
+  const unverified = isError || hearthCluster.availability_verified === false
+  return (
+    <>
+      {unverified && <p role="status">Couldn’t verify availability. Showing saved hardware.</p>}
+      {hearthCluster.observed_at && <p className="mb-2 text-xs text-gray-500">Observed {format(new Date(hearthCluster.observed_at), 'MMM d, HH:mm:ss')}</p>}
+      <p className="mb-3 text-xs text-gray-500">FournosCluster CR</p>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div>
+          <p className="text-xs text-gray-500 uppercase tracking-wider">GPU Hardware</p>
+          <p className="mt-1 text-sm font-semibold text-gray-900">
+            {hearthCluster.gpu_summary || 'Pending discovery'}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500 uppercase tracking-wider">Kubeconfig</p>
+          <p className="mt-1">
+            <span className={clsx(
+              'badge',
+              hearthCluster.kubeconfig_status === 'Valid' ? 'badge-success' :
+              hearthCluster.kubeconfig_status === 'Unreachable' ? 'badge-error' :
+              'badge-warning'
+            )}>
+              {hearthCluster.kubeconfig_status || 'Unknown'}
+            </span>
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500 uppercase tracking-wider">Lock Status</p>
+          <p className="mt-1">
+            {unverified ? <span>Unverified</span> : hearthCluster.locked ? (
+              <span className="flex items-center gap-1 text-sm font-medium text-orange-600">
+                <LockClosedIcon className="h-4 w-4" />
+                Locked
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-sm font-medium text-green-600">
+                <LockOpenIcon className="h-4 w-4" />
+                Available
+              </span>
+            )}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500 uppercase tracking-wider">Owner</p>
+          <p className="mt-1 text-sm font-semibold text-gray-900">
+            {unverified ? 'Unverified' : hearthCluster.owner || '—'}
+          </p>
+        </div>
+      </div>
+
+      {/* GPU Details */}
+      {hearthCluster.hardware && hearthCluster.hardware.gpus.length > 0 && (
+        <div className="mt-4 pt-4 border-t border-gray-100">
+          <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">GPU Inventory</p>
+          <div className="flex flex-wrap gap-2">
+            {hearthCluster.hardware.gpus.map((gpu, idx) => (
+              <div key={idx} className="flex items-center gap-2 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
+                <CpuChipIcon className="h-4 w-4 text-purple-600" />
+                <span className="text-sm font-medium text-purple-900">
+                  {gpu.count}x {gpu.short_name.toUpperCase()}
+                </span>
+                <span className="text-xs text-purple-600">
+                  ({gpu.vendor} · {gpu.node_count || '?'} node{gpu.node_count !== 1 ? 's' : ''})
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Lock expiry */}
+      {!unverified && hearthCluster.locked && hearthCluster.lock_expires_at && (
+        <div className="mt-4 pt-4 border-t border-gray-100">
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <ClockIcon className="h-4 w-4 text-gray-400" />
+            Lock expires: {format(new Date(hearthCluster.lock_expires_at), 'MMM d, yyyy h:mm a')}
+          </div>
+        </div>
+      )}
+
+      {/* Discovery error */}
+      {hearthCluster.hardware?.last_error && (
+        <div className="mt-4 pt-4 border-t border-gray-100">
+          <div className="flex items-start gap-2 text-sm text-orange-600 bg-orange-50 p-3 rounded-lg">
+            <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="font-medium">GPU Discovery Error</p>
+              <p className="text-xs mt-1">{hearthCluster.hardware.last_error}</p>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 function DetailSection({ title, icon: Icon, children }: {
   title: string
   icon: typeof FireIcon
@@ -586,16 +697,18 @@ export default function ClusterDetail() {
   const [activeTab, setActiveTab] = useState<'topology' | 'ocp' | 'operators' | 'workloads'>('topology')
 
   const { data: cluster, isLoading: clusterLoading } = useCluster(id!)
-  useClusterStatus(id!)
   const { data: occupancy } = useCurrentClusterUser(id!)
   const { data: gpuStatus } = useGpuStatus(id, !!cluster)
   // Hearth integration: try to find a matching FournosCluster by name
   const clusterName = cluster?.name || ''
-  const { data: hearthCluster } = useHearthCluster(clusterName)
+  const { data: hearthStatus, refetch: refreshHearth } = useHearthStatus()
   const { data: topology, isFetching: checkingTopology, isError: topologyReadFailed, refetch: checkTopology } = useClusterTopology(id!, activeTab === 'topology')
-  const { data: ocpDetails, isLoading: ocpLoading } = useOcpDetails(id!, activeTab === 'ocp')
-  const { data: operatorsData, isLoading: operatorsLoading } = useClusterOperators(id!)
-  const { data: workloads, isLoading: workloadsLoading } = useClusterWorkloads(id!, undefined, activeTab === 'workloads')
+  const ocp = useOcpDetails(id!, activeTab === 'ocp')
+  const ocpDetails = ocp.data?.value
+  const operators = useClusterOperators(id!, activeTab === 'operators')
+  const operatorsData = operators.data?.value
+  const workloadPanel = useClusterWorkloads(id!, activeTab === 'workloads')
+  const workloads = workloadPanel.data?.value
   const { data: clusterEstimate } = useClusterEstimate(isAdmin() ? id : undefined)
 
   const refreshStatus = useRefreshClusterStatus()
@@ -659,6 +772,10 @@ export default function ClusterDetail() {
           <button
             onClick={() => {
               if (activeTab === 'topology') void checkTopology({ cancelRefetch: false })
+              if (activeTab === 'ocp') void ocp.refetch({ cancelRefetch: false })
+              if (activeTab === 'workloads') void workloadPanel.refetch({ cancelRefetch: false })
+              void operators.refetch({ cancelRefetch: false })
+              void refreshHearth({ cancelRefetch: false })
               refreshStatus.mutate(id!)
             }}
             disabled={refreshStatus.isPending}
@@ -737,7 +854,7 @@ export default function ClusterDetail() {
             </div>
             <div>
               <p className="text-sm text-gray-500">Operators</p>
-              <p className="text-xl font-semibold text-gray-900">{operatorsData?.total || '...'}</p>
+              <p title="Installed operators at the last successful check" className="text-xl font-semibold text-gray-900">{operatorsData?.total ?? cluster.operator_count ?? '—'}</p>
             </div>
           </div>
         </div>
@@ -805,7 +922,8 @@ export default function ClusterDetail() {
           {/* OCP Details Tab */}
           {activeTab === 'ocp' && (
             <div>
-              {ocpLoading ? (
+              <ObservationStatus observation={ocp.data?.observation} failed={ocp.isError} />
+              {ocp.isFetching && !ocp.data?.value ? (
                 <div className="flex items-center justify-center h-64">
                   <ArrowPathIcon className="h-8 w-8 animate-spin text-gray-400" />
                 </div>
@@ -892,7 +1010,8 @@ export default function ClusterDetail() {
           {/* Operators Tab */}
           {activeTab === 'operators' && (
             <div>
-              {operatorsLoading ? (
+              <ObservationStatus observation={operators.data?.observation} failed={operators.isError} />
+              {operators.isFetching && !operators.data?.value ? (
                 <div className="flex items-center justify-center h-64">
                   <ArrowPathIcon className="h-8 w-8 animate-spin text-gray-400" />
                 </div>
@@ -940,7 +1059,8 @@ export default function ClusterDetail() {
           {/* Workloads Tab */}
           {activeTab === 'workloads' && (
             <div>
-              {workloadsLoading ? (
+              <ObservationStatus observation={workloadPanel.data?.observation} failed={workloadPanel.isError} />
+              {workloadPanel.isFetching && !workloadPanel.data?.value ? (
                 <div className="flex items-center justify-center h-64">
                   <ArrowPathIcon className="h-8 w-8 animate-spin text-gray-400" />
                 </div>
@@ -966,95 +1086,9 @@ export default function ClusterDetail() {
       </div>
 
       {/* Hearth Integration Panel */}
-      {hearthCluster && (
+      {(!hearthStatus?.available || hearthStatus.cluster_names?.includes(clusterName)) && (
         <DetailSection title="Hearth Status" icon={FireIcon}>
-          <p className="mb-3 text-xs text-gray-500">FournosCluster CR</p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wider">GPU Hardware</p>
-              <p className="mt-1 text-sm font-semibold text-gray-900">
-                {hearthCluster.gpu_summary || 'Pending discovery'}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wider">Kubeconfig</p>
-              <p className="mt-1">
-                <span className={clsx(
-                  'badge',
-                  hearthCluster.kubeconfig_status === 'Valid' ? 'badge-success' :
-                  hearthCluster.kubeconfig_status === 'Unreachable' ? 'badge-error' :
-                  'badge-warning'
-                )}>
-                  {hearthCluster.kubeconfig_status || 'Unknown'}
-                </span>
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wider">Lock Status</p>
-              <p className="mt-1">
-                {hearthCluster.locked ? (
-                  <span className="flex items-center gap-1 text-sm font-medium text-orange-600">
-                    <LockClosedIcon className="h-4 w-4" />
-                    Locked
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1 text-sm font-medium text-green-600">
-                    <LockOpenIcon className="h-4 w-4" />
-                    Available
-                  </span>
-                )}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 uppercase tracking-wider">Owner</p>
-              <p className="mt-1 text-sm font-semibold text-gray-900">
-                {hearthCluster.owner || '—'}
-              </p>
-            </div>
-          </div>
-
-          {/* GPU Details */}
-          {hearthCluster.hardware && hearthCluster.hardware.gpus.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">GPU Inventory</p>
-              <div className="flex flex-wrap gap-2">
-                {hearthCluster.hardware.gpus.map((gpu, idx) => (
-                  <div key={idx} className="flex items-center gap-2 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
-                    <CpuChipIcon className="h-4 w-4 text-purple-600" />
-                    <span className="text-sm font-medium text-purple-900">
-                      {gpu.count}x {gpu.short_name.toUpperCase()}
-                    </span>
-                    <span className="text-xs text-purple-600">
-                      ({gpu.vendor} · {gpu.node_count || '?'} node{gpu.node_count !== 1 ? 's' : ''})
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Lock expiry */}
-          {hearthCluster.locked && hearthCluster.lock_expires_at && (
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <div className="flex items-center gap-2 text-sm text-gray-600">
-                <ClockIcon className="h-4 w-4 text-gray-400" />
-                Lock expires: {format(new Date(hearthCluster.lock_expires_at), 'MMM d, yyyy h:mm a')}
-              </div>
-            </div>
-          )}
-
-          {/* Discovery error */}
-          {hearthCluster.hardware?.last_error && (
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <div className="flex items-start gap-2 text-sm text-orange-600 bg-orange-50 p-3 rounded-lg">
-                <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="font-medium">GPU Discovery Error</p>
-                  <p className="text-xs mt-1">{hearthCluster.hardware.last_error}</p>
-                </div>
-              </div>
-            </div>
-          )}
+          <HearthDetail name={clusterName} />
         </DetailSection>
       )}
 

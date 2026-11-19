@@ -1,19 +1,13 @@
 """One durable, on-demand topology observation per cluster."""
-import asyncio
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, delete, or_, select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import case, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.cluster import ClusterTopologySnapshot as Snapshot
-from app.utils.logger import create_logger
+from app.models.cluster import ClusterTopologySnapshot as Snapshot, ResourceObservation
+from app.services import snapshot_checks
 
-logger = create_logger("Topology")
 FRESH_FOR = timedelta(minutes=5)
-# A stopped backend must eventually release its claim. Late writers are fenced.
-CLAIM_LIFETIME = timedelta(minutes=3)
 
 
 def utcnow():
@@ -21,6 +15,8 @@ def utcnow():
 
 
 async def clear_if_target_changed(db, cluster, target):
+    # A replacement identity on the same server can see different namespaces or operators.
+    await db.execute(delete(ResourceObservation).where(ResourceObservation.cluster_id == cluster.id))
     if cluster.api_server_url != target:
         await db.execute(delete(Snapshot).where(Snapshot.cluster_id == cluster.id))
 
@@ -67,44 +63,17 @@ async def read(db: AsyncSession, cluster_id: str, known_changed_at: datetime | N
 
 async def check(db: AsyncSession, cluster_id: str, discover, known_changed_at: datetime | None = None):
     """Share checks across replicas without holding a DB connection during discovery."""
-    started = utcnow()
-    insert = sqlite_insert if db.get_bind().dialect.name == "sqlite" else pg_insert
-    statement = insert(Snapshot).values(cluster_id=cluster_id, checking_since=started)
-    claim = statement.on_conflict_do_update(
-        index_elements=[Snapshot.cluster_id], set_={"checking_since": started},
-        where=(
-            or_(Snapshot.checked_at.is_(None), Snapshot.checked_at <= started - FRESH_FOR)
-            & or_(Snapshot.checking_since.is_(None), Snapshot.checking_since <= started - CLAIM_LIFETIME)
-        ),
-    ).returning(Snapshot.checking_since, Snapshot.node_versions, Snapshot.nodes)
-    owned = (await db.execute(claim)).first()
-    await db.commit()
+    async def collect(old):
+        versions, nodes = await discover(old.node_versions, old.nodes)
+        values = {}
+        if versions != old.node_versions:
+            values["node_versions"] = versions
+        if nodes != old.nodes:
+            values.update(nodes=nodes, changed_at=utcnow())
+        return values
 
-    if owned is None:
-        # Only join a check already in flight. Release the connection between reads.
-        delay = 0.2
-        while True:
-            checking = await db.scalar(select(Snapshot.checking_since).where(Snapshot.cluster_id == cluster_id))
-            await db.commit()
-            if checking is None or checking <= utcnow() - CLAIM_LIFETIME:
-                break
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, 2)
-    else:
-        try:
-            versions, nodes = await discover(owned.node_versions, owned.nodes)
-        except Exception as exc:
-            logger.warning(f"Topology check failed for {cluster_id}: {type(exc).__name__}")
-            values = {"last_check_failed": True}
-        else:
-            now = utcnow()
-            values = {"checked_at": now, "last_check_failed": False}
-            if versions != owned.node_versions:
-                values["node_versions"] = versions
-            if nodes != owned.nodes:
-                values.update(nodes=nodes, changed_at=now)
-        await db.execute(update(Snapshot).where(
-            Snapshot.cluster_id == cluster_id, Snapshot.checking_since == started,
-        ).values(**values, checking_since=None))
-        await db.commit()
+    await snapshot_checks.refresh(
+        db, Snapshot, {"cluster_id": cluster_id}, fresh_for=FRESH_FOR,
+        columns=(Snapshot.node_versions, Snapshot.nodes), collect=collect, clock=utcnow,
+    )
     return await read(db, cluster_id, known_changed_at)

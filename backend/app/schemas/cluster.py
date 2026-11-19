@@ -73,6 +73,7 @@ class ClusterStatus(BaseModel):
 
 
 class ClusterResponse(ClusterBase):
+    operator_count: Optional[int] = None
     id: str
     api_server_url: Optional[str] = None
     status: str
@@ -100,7 +101,24 @@ class ClusterCostSummary(BaseModel):
     currency: str
 
 
+class NamespaceGpuPods(BaseModel):
+    namespace: str
+    gpu_count: int
+    pods: List[GpuPodInfo]
+
+
+class CardGpuSummary(BaseModel):
+    fresh_until: datetime
+    observed_at: datetime
+    stale: bool
+    total_gpus: int
+    allocated_gpus: int
+    gpu_nodes: int
+    namespaces: List[NamespaceGpuPods]
+
+
 class ClusterListResponse(BaseModel):
+    gpu_summaries: Optional[Dict[str, CardGpuSummary]] = None
     clusters: List[ClusterResponse]
     total: int
     latest_costs: Optional[Dict[str, ClusterCostSummary]] = None

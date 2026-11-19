@@ -1,5 +1,6 @@
 import {
   Fragment,
+  useRef,
   useState,
   useEffect,
   useId,
@@ -265,7 +266,14 @@ export default function Layout() {
     return isTestingPage && currentTestingTab === id
   }
 
-  const { data: hearthStatus } = useHearthStatus()
+  const { data: hearthStatus, refetch: checkHearth } = useHearthStatus()
+  const previousPath = useRef(location.pathname)
+  useEffect(() => {
+    if (previousPath.current !== location.pathname) {
+      previousPath.current = location.pathname
+      void checkHearth({ cancelRefetch: false })
+    }
+  }, [location.pathname, checkHearth])
   const admin = isAdmin()
   const { data: pendingReservations } = useReservations({ status: 'pending' }, { enabled: admin })
   const pendingCount = admin ? pendingReservations?.total ?? 0 : 0

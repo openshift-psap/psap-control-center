@@ -2,16 +2,18 @@ import asyncio
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
+from typing import Optional, Annotated
 
 from app.core.database import get_db
 from app.core.auth import require_admin, require_auth
 from app.services.cluster_service import ClusterService
 from app.services.kubernetes_service import KubernetesService
-from app.services import gpu_status_cache, topology_snapshot
+from app.models.cluster import ResourceObservation
+from app.services import gpu_status_cache, resource_observations, topology_snapshot
 from app.services.gpu_pod_history_service import record_gpu_snapshot
 from app.schemas.cluster import (
     ClusterCreate,
@@ -179,6 +181,7 @@ async def list_clusters(
     active_only: bool = False,
     db: AsyncSession = Depends(get_db),
     include_latest_cost: bool = False,
+    include_gpu_summary: bool = False,
 ):
     service = ClusterService(db)
     clusters, total = await service.get_clusters(skip, limit, active_only)
@@ -187,6 +190,7 @@ async def list_clusters(
         latest_costs = await service.get_latest_cost_summaries([c.id for c in clusters if c.provider == "ibm"])
     return ClusterListResponse(
         latest_costs=latest_costs,
+        gpu_summaries=await gpu_status_cache.card_summaries(db, [c.id for c in clusters]) if include_gpu_summary else None,
         clusters=[ClusterResponse.model_validate(c) for c in clusters],
         total=total
     )
@@ -222,7 +226,11 @@ async def get_cluster(
     if not cluster:
         raise HTTPException(status_code=404, detail="Cluster not found")
     
-    return ClusterResponse.model_validate(cluster)
+    response = ClusterResponse.model_validate(cluster)
+    response.operator_count = await db.scalar(select(ResourceObservation.payload["total"].as_integer()).where(
+        ResourceObservation.source == cluster_id, ResourceObservation.section == "operators",
+    ))
+    return response
 
 
 @router.put("/{cluster_id}", response_model=ClusterResponse)
@@ -504,74 +512,95 @@ async def get_gpu_pod_history(
     }
 
 
-@router.get("/{cluster_id}/ocp-details")
+def _uncached(response: Response):
+    response.headers["Cache-Control"] = "private, no-store"
+
+
+async def _cluster_path(db, cluster_id):
+    cluster = await ClusterService(db).get_cluster(cluster_id)
+    if not cluster:
+        raise HTTPException(404, "Cluster not found")
+    if not cluster.kubeconfig_path:
+        raise HTTPException(400, "Cluster has no kubeconfig configured")
+    return cluster.kubeconfig_path
+
+
+def _panel_response(payload, observation, saved_only, known_changed_at):
+    if known_changed_at is not None and observation["last_changed_at"] == known_changed_at:
+        return {"unchanged": True, "observation": observation}
+    if payload is None and not saved_only:
+        raise HTTPException(503, "Cluster data could not be verified")
+    return {**(payload if payload is not None else {"empty": True}), "observation": observation}
+
+
+@router.get("/{cluster_id}/ocp-details", dependencies=[Depends(_uncached)])
 async def get_ocp_details(
-    cluster_id: str,
-    db: AsyncSession = Depends(get_db)
+    cluster_id: str, db: AsyncSession = Depends(get_db),
+    saved_only: bool = False, known_changed_at: Optional[datetime] = None,
 ):
-    """Get OpenShift-specific cluster details."""
-    service = ClusterService(db)
-    cluster = await service.get_cluster(cluster_id)
-    
-    if not cluster:
-        raise HTTPException(status_code=404, detail="Cluster not found")
-    
-    if not cluster.kubeconfig_path:
-        raise HTTPException(status_code=400, detail="Cluster has no kubeconfig configured")
-    
-    try:
-        k8s_service = KubernetesService(cluster.kubeconfig_path)
-        ocp_details = await _run_in_thread(k8s_service.get_ocp_details)
-        return ocp_details
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    path = await _cluster_path(db, cluster_id)
+    await db.commit()  # Release the outer connection before the four independent reads.
+    # Each resource has its own last successful observation. A broken ingress
+    # lookup cannot erase its domain or prevent publishing a new cluster version.
+    async def part(plural):
+        def discover():
+            return KubernetesService(path).get_ocp_resource(plural), None
+        async with AsyncSession(bind=db.bind, expire_on_commit=False) as part_db:
+            return await resource_observations.observe(
+                part_db, cluster_id, plural, cluster_id=cluster_id,
+                discover=None if saved_only else lambda *_: _run_in_thread(discover),
+            )
+
+    names = ("clusterversions", "infrastructures", "networks", "ingresses")
+    resources = await asyncio.gather(*(part(name) for name in names))
+    data = {}
+    checked, changed, failed = [], [], []
+    for name, (value, meta) in zip(names, resources):
+        if value is not None:
+            data.update(value)
+            checked.append(meta["last_checked_at"])
+            changed.append(meta["last_changed_at"])
+        if meta["last_check_failed"]:
+            failed.append(name)
+    return _panel_response(data or None, {
+        "last_checked_at": min(checked, default=None), "last_changed_at": max(changed, default=None),
+        "last_check_failed": bool(failed), "failed_resources": failed,
+        "check_due": any(meta["check_due"] for _, meta in resources),
+    }, saved_only, known_changed_at)
 
 
-@router.get("/{cluster_id}/operators")
+@router.get("/{cluster_id}/operators", dependencies=[Depends(_uncached)])
 async def get_cluster_operators(
-    cluster_id: str,
-    db: AsyncSession = Depends(get_db)
+    cluster_id: str, db: AsyncSession = Depends(get_db),
+    saved_only: bool = False, known_changed_at: Optional[datetime] = None,
 ):
-    """Get installed operators."""
-    service = ClusterService(db)
-    cluster = await service.get_cluster(cluster_id)
-    
-    if not cluster:
-        raise HTTPException(status_code=404, detail="Cluster not found")
-    
-    if not cluster.kubeconfig_path:
-        raise HTTPException(status_code=400, detail="Cluster has no kubeconfig configured")
-    
-    try:
-        k8s_service = KubernetesService(cluster.kubeconfig_path)
-        operators = await _run_in_thread(k8s_service.get_operators)
-        return {"operators": operators, "total": len(operators)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    path = await _cluster_path(db, cluster_id)
+
+    def discover(old, versions):
+        return KubernetesService(path).check_operators(old, versions)
+    payload, meta = await resource_observations.observe(
+        db, cluster_id, "operators", cluster_id=cluster_id,
+        discover=None if saved_only else lambda *args: _run_in_thread(discover, *args),
+        known_changed_at=known_changed_at,
+    )
+    return _panel_response(payload, meta, saved_only, known_changed_at)
 
 
-@router.get("/{cluster_id}/workloads")
+@router.get("/{cluster_id}/workloads", dependencies=[Depends(_uncached)])
 async def get_cluster_workloads(
-    cluster_id: str,
-    namespace: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    cluster_id: str, namespace: Annotated[Optional[str], Query(max_length=63, pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")] = None,
+    db: AsyncSession = Depends(get_db), saved_only: bool = False, known_changed_at: Optional[datetime] = None,
 ):
-    """Get pods and deployments with node information."""
-    service = ClusterService(db)
-    cluster = await service.get_cluster(cluster_id)
-    
-    if not cluster:
-        raise HTTPException(status_code=404, detail="Cluster not found")
-    
-    if not cluster.kubeconfig_path:
-        raise HTTPException(status_code=400, detail="Cluster has no kubeconfig configured")
-    
-    try:
-        k8s_service = KubernetesService(cluster.kubeconfig_path)
-        workloads = await _run_in_thread(k8s_service.get_workloads, namespace)
-        return workloads
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    path = await _cluster_path(db, cluster_id)
+
+    def discover(old, versions):
+        return KubernetesService(path).check_workloads(namespace, old, versions)
+    payload, meta = await resource_observations.observe(
+        db, cluster_id, "workloads:" + (namespace or "*"), cluster_id=cluster_id, ttl=resource_observations.WORKLOAD_TTL,
+        discover=None if saved_only else lambda *args: _run_in_thread(discover, *args),
+        known_changed_at=known_changed_at,
+    )
+    return _panel_response(payload, meta, saved_only, known_changed_at)
 
 
 @router.get("/{cluster_id}/cost", response_model=ClusterCostListResponse)

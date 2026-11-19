@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { clusterApi } from '../services/api'
+import { clusterApi, type PanelParams } from '../services/api'
 import { getPreferenceAccount } from '../stores/authStore'
-import type { Cluster, RefreshDisplayMode, RefreshDisplayPreference } from '../types'
+import type { Cluster, PanelObservation, PanelResponse, RefreshDisplayMode, RefreshDisplayPreference } from '../types'
 import toast from 'react-hot-toast'
 import { createLogger } from '../utils/logger'
 
@@ -58,14 +58,6 @@ export function useCluster(id: string) {
   return useQuery({
     queryKey: ['cluster', id],
     queryFn: () => clusterApi.get(id),
-    enabled: !!id,
-  })
-}
-
-export function useClusterStatus(id: string) {
-  return useQuery({
-    queryKey: ['clusterStatus', id],
-    queryFn: () => clusterApi.getStatus(id),
     enabled: !!id,
     refetchInterval: 60000,
   })
@@ -128,7 +120,7 @@ export function useRefreshClusterStatus() {
   return useMutation({
     mutationFn: clusterApi.refreshStatus,
     onSuccess: (_data, id) => {
-      queryClient.invalidateQueries({ queryKey: ['clusterStatus', id] })
+      queryClient.invalidateQueries({ queryKey: ['cluster', id] })
       queryClient.invalidateQueries({ queryKey: ['clusters'] })
       toast.success('Cluster status refreshed')
     },
@@ -147,7 +139,9 @@ export function useUploadKubeconfig() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['clusters'] })
       queryClient.invalidateQueries({ queryKey: ['cluster', data.id] })
-      queryClient.invalidateQueries({ queryKey: ['clusterTopology', data.id] })
+      for (const section of ['clusterTopology', 'ocpDetails', 'clusterOperators', 'clusterWorkloads']) {
+        queryClient.resetQueries({ queryKey: [section, data.id] })
+      }
       toast.success('Kubeconfig uploaded successfully')
     },
     onError: (error: Error) => {
@@ -156,29 +150,45 @@ export function useUploadKubeconfig() {
   })
 }
 
-export function useOcpDetails(id: string, enabled = true) {
+interface PanelState<T> {
+  value: T | null
+  observation: PanelObservation
+}
+
+function useClusterPanel<T extends object>(
+  key: string[], enabled: boolean, fetchPanel: (params: PanelParams) => Promise<PanelResponse<T>>,
+) {
+  const client = useQueryClient()
   return useQuery({
-    queryKey: ['ocpDetails', id],
-    queryFn: () => clusterApi.getOcpDetails(id),
-    enabled: !!id && enabled,
-    staleTime: 60000,
+    queryKey: key, enabled, staleTime: 0, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
+    queryFn: async ({ signal }) => {
+      let state = client.getQueryData<PanelState<T>>(key)
+      const read = async (savedOnly: boolean): Promise<PanelState<T>> => {
+        const reply = await fetchPanel({ signal, saved_only: savedOnly, known_changed_at: state?.observation.last_changed_at })
+        if ('unchanged' in reply) {
+          if (!state?.value || state.observation.last_changed_at !== reply.observation.last_changed_at) {
+            throw new Error('Cluster observation no longer matches this panel')
+          }
+          return { value: state.value, observation: reply.observation }
+        }
+        return { value: 'empty' in reply ? null : reply, observation: reply.observation }
+      }
+      state = await read(true)
+      if (!state.observation.check_due) return state
+      client.setQueryData(key, state)
+      return read(false)
+    },
   })
 }
 
-export function useClusterOperators(id: string) {
-  return useQuery({
-    queryKey: ['clusterOperators', id],
-    queryFn: () => clusterApi.getOperators(id),
-    enabled: !!id,
-    staleTime: 60000,
-  })
+export function useOcpDetails(id: string, enabled: boolean) {
+  return useClusterPanel(['ocpDetails', id], !!id && enabled, params => clusterApi.getOcpDetails(id, params))
 }
 
-export function useClusterWorkloads(id: string, namespace?: string, enabled = true) {
-  return useQuery({
-    queryKey: ['clusterWorkloads', id, namespace],
-    queryFn: () => clusterApi.getWorkloads(id, namespace),
-    enabled: !!id && enabled,
-    staleTime: 30000,
-  })
+export function useClusterOperators(id: string, enabled: boolean) {
+  return useClusterPanel(['clusterOperators', id], !!id && enabled, params => clusterApi.getOperators(id, params))
+}
+
+export function useClusterWorkloads(id: string, enabled: boolean) {
+  return useClusterPanel(['clusterWorkloads', id], !!id && enabled, params => clusterApi.getWorkloads(id, params))
 }

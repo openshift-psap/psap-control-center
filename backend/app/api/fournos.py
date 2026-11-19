@@ -76,12 +76,13 @@ from app.schemas.fournos import (
 )
 from app.services import github_sync_service
 from app.services import slot_hold_service as slot_holds
-from app.schemas.ui_schema import ProjectUiSchemaResponse
+from app.schemas.ui_schema import ProjectUiSchemaResponse, UiPipeline
 from app.services import fournos_db_service as db_svc
 from app.services import cpt_run_views
 from app.services.job_name_search import compile_job_name_pattern
 from app.services import rhaiis_inference_logs
 from app.services import fournos_k8s_client as k8s
+from app.services.hearth_service import get_hearth_service
 from app.services import pipeline_definitions
 from app.services import project_adapters
 from app.services import project_ui_schema, recurring_schedule
@@ -2468,6 +2469,24 @@ def _normalize_matrix_cluster(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
+async def _verify_hearth_target(name: str, pipeline: UiPipeline) -> None:
+    """Recheck selections made from Hearth inventory before creating any matrix jobs."""
+    if not settings.HEARTH_ENABLED:
+        raise HTTPException(503, "Hearth is unavailable")
+    try:
+        cluster = await asyncio.to_thread(get_hearth_service().get_cluster, name)
+    except Exception as exc:
+        raise HTTPException(503, "Could not verify the selected Hearth cluster") from exc
+    if cluster is None:
+        raise HTTPException(409, "The selected cluster is no longer in Hearth")
+    # Explicit Forge cluster lists take precedence over the GPU filter used in the picker.
+    gpu_type = (pipeline.gpu_type or "").strip().casefold()
+    if gpu_type and not pipeline.clusters:
+        gpus = cluster.hardware.gpus if cluster.hardware else []
+        if not any(gpu_type in label.casefold() for gpu in gpus for label in (gpu.short_name, gpu.model, gpu.vendor)):
+            raise HTTPException(409, "The cluster hardware no longer matches this pipeline")
+
+
 async def _validate_matrix_submission(req: SubmitMatrixRequest):
     """Resolve client selections against the current server-side Forge schema."""
     project = req.project.strip()
@@ -2647,6 +2666,10 @@ async def submit_matrix(req: SubmitMatrixRequest, user=Depends(require_auth)):
         raise HTTPException(
             400, "models must produce unique Kubernetes job names"
         )
+    if req.verify_hearth_target:
+        matrix_cluster = matrix_cluster.strip().lower()
+        await _verify_hearth_target(matrix_cluster, selected_pipeline)
+
     results = []
     cpt_run_id = str(uuid4()) if is_cpt_submission else None
     run_started_at = datetime.now(timezone.utc).isoformat()
