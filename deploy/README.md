@@ -97,6 +97,13 @@ with its own configured URLs. `FOURNOS_DEFAULT_JOB_TTL` is optional and unset
 by default so the Fournos operator applies its own retention policy. Job
 priority defaults to `manual` for both single jobs and CPT submissions.
 
+For production and versioned frontend images, set the sidebar destinations
+under **Settings → Secrets and variables → Actions → Variables** in GitHub.
+Use `VITE_PERFORMANCE_DASHBOARD_PRODUCTION_URL` and
+`VITE_PERFORMANCE_DASHBOARD_STAGING_URL` for Performance Dashboard, and
+`VITE_PSAP_REPORT_HUB_URL`, `VITE_CONFIGIQ_URL`, and `VITE_SERVIT_STUDIO_URL`
+for Tools. Changes take effect on the next frontend build.
+
 ### 3. Create the namespace
 
 ```bash
