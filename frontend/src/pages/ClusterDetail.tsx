@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { memo, useState, type ReactNode } from 'react'
+import { Disclosure } from '@headlessui/react'
 import { useParams, Link } from 'react-router-dom'
 import {
   ArrowLeftIcon,
+  ChevronDownIcon,
   ArrowPathIcon,
   CloudArrowUpIcon,
   ServerStackIcon,
@@ -26,13 +28,13 @@ import {
   useClusterStatus,
   useRefreshClusterStatus,
   useUploadKubeconfig,
-  useClusterTopology,
   useOcpDetails,
   useClusterOperators,
   useClusterWorkloads,
 } from '../hooks/useClusters'
 import { useCurrentClusterUser } from '../hooks/useReservations'
 import { useHearthCluster } from '../hooks/useHearth'
+import { useClusterTopology } from '../hooks/useClusterTopology'
 import { useGpuStatus } from '../hooks/useGpuStatus'
 import { useClusterCosts, useRefreshClusterCost } from '../hooks/useClusterCost'
 import { useClusterEstimate } from '../hooks/useCostExplorer'
@@ -41,7 +43,7 @@ import { format } from 'date-fns'
 import clsx from 'clsx'
 import type { TopologyNode, PodInfo } from '../types'
 
-function TopologyVisualization({ 
+const TopologyVisualization = memo(function TopologyVisualization({
   controlPlane, 
   workers, 
   infra,
@@ -52,7 +54,8 @@ function TopologyVisualization({
   infra: TopologyNode[]
   zones: string[]
 }) {
-  const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null)
+  const [selectedName, setSelectedName] = useState<string | null>(null)
+  const selectedNode = selectedName && [...controlPlane, ...workers, ...infra].find(node => node.name === selectedName)
 
   const NodeCard = ({ node, variant }: { node: TopologyNode; variant: 'control' | 'worker' | 'infra' }) => {
     const gradients = {
@@ -76,12 +79,12 @@ function TopologyVisualization({
       infra: 'ring-amber-400',
     }
     
-    const isSelected = selectedNode?.name === node.name
+    const isSelected = selectedName === node.name
     const isReady = node.status === 'Ready'
     
     return (
       <div
-        onClick={() => setSelectedNode(isSelected ? null : node)}
+        onClick={() => setSelectedName(isSelected ? null : node.name)}
         className={clsx(
           'relative p-4 rounded-xl cursor-pointer transition-all duration-300',
           'bg-slate-900/80 backdrop-blur-sm border',
@@ -317,7 +320,7 @@ function TopologyVisualization({
       {selectedNode && (
         <div 
           className="absolute inset-0 z-20 flex items-center justify-center p-6 rounded-xl"
-          onClick={() => setSelectedNode(null)}
+          onClick={() => setSelectedName(null)}
         >
           {/* Backdrop */}
           <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm rounded-xl" />
@@ -331,7 +334,7 @@ function TopologyVisualization({
             <div className="relative p-6 bg-slate-900/95 backdrop-blur-md rounded-2xl border border-slate-700/50 shadow-2xl">
               {/* Close button */}
               <button
-                onClick={() => setSelectedNode(null)}
+                onClick={() => setSelectedName(null)}
                 className="absolute top-4 right-4 p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 transition-colors text-slate-400 hover:text-white z-10"
               >
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -402,7 +405,7 @@ function TopologyVisualization({
       )}
     </div>
   )
-}
+})
 
 function WorkloadsByNode({ 
   podsByNode, 
@@ -486,6 +489,92 @@ function WorkloadsByNode({
   )
 }
 
+function DetailSection({ title, icon: Icon, children }: {
+  title: string
+  icon: typeof FireIcon
+  children: ReactNode
+}) {
+  return (
+    <Disclosure as="section" className="card">
+      <h2>
+        <Disclosure.Button className="flex w-full items-center gap-2 px-6 py-4 text-left font-semibold text-gray-900 hover:bg-gray-50">
+          {({ open }) => <>
+            <Icon className="h-5 w-5 text-gray-500" />
+            {title}
+            <ChevronDownIcon className={clsx('ml-auto h-4 w-4', open && 'rotate-180')} />
+          </>}
+        </Disclosure.Button>
+      </h2>
+      <Disclosure.Panel className="border-t border-gray-100 px-6 py-4">{children}</Disclosure.Panel>
+    </Disclosure>
+  )
+}
+
+function ClusterBillingHistory({ id }: { id: string }) {
+  const { data: costs, isLoading: costsLoading } = useClusterCosts(id)
+  const refreshCost = useRefreshClusterCost()
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-end gap-3">
+        {costs && costs.length > 0 && costs[0].fetched_at && (
+          <span className="text-xs text-gray-400">
+            Updated {format(new Date(costs[0].fetched_at), 'MMM d, HH:mm')}
+          </span>
+        )}
+        <button
+          onClick={() => refreshCost.mutate(id)}
+          disabled={refreshCost.isPending}
+          className="btn-secondary text-sm py-1.5 px-3"
+        >
+          <ArrowPathIcon className={clsx('h-3.5 w-3.5 mr-1.5', refreshCost.isPending && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+
+      {costsLoading ? (
+        <div className="text-sm text-gray-400">Loading...</div>
+      ) : (!costs || costs.length === 0) ? (
+        <div className="flex items-start gap-2 text-sm text-orange-600 bg-orange-50 p-3 rounded-lg">
+          <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          <span>No billing data available</span>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {costs.map((cost) => (
+            <div key={cost.billing_month} className="border border-gray-200 rounded-lg overflow-hidden">
+              <div className="flex items-center justify-between p-4 bg-emerald-50">
+                <p className="text-sm font-medium text-gray-600">{cost.billing_month}</p>
+                <p className="text-xl font-bold text-emerald-700">
+                  {cost.total_cost != null
+                    ? cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })
+                    : '—'}
+                </p>
+              </div>
+              {cost.node_breakdown && cost.node_breakdown.length > 0 && (
+                <div className="p-3 space-y-1">
+                  {cost.node_breakdown.map((n) => (
+                    <div key={n.node} className="flex items-center justify-between text-sm p-1.5">
+                      <span className="font-mono text-xs text-gray-700 truncate">{n.node}</span>
+                      <span className="font-medium text-gray-900">
+                        {n.cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {cost.error && (
+                <div className="px-4 py-2 text-xs text-orange-600 bg-orange-50 border-t border-orange-100">
+                  {cost.error}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ClusterDetail() {
   const { id } = useParams<{ id: string }>()
   const [showUpload, setShowUpload] = useState(false)
@@ -498,12 +587,10 @@ export default function ClusterDetail() {
   // Hearth integration: try to find a matching FournosCluster by name
   const clusterName = cluster?.name || ''
   const { data: hearthCluster } = useHearthCluster(clusterName)
-  const { data: topology, isLoading: topologyLoading } = useClusterTopology(id!)
+  const { data: topology, isLoading: topologyLoading, isRefetchError: topologyRefreshFailed, dataUpdatedAt: topologyUpdatedAt } = useClusterTopology(id!)
   const { data: ocpDetails, isLoading: ocpLoading } = useOcpDetails(id!)
   const { data: operatorsData, isLoading: operatorsLoading } = useClusterOperators(id!)
   const { data: workloads, isLoading: workloadsLoading } = useClusterWorkloads(id!)
-  const { data: costs, isLoading: costsLoading } = useClusterCosts(id!)
-  const refreshCost = useRefreshClusterCost()
   const { data: clusterEstimate } = useClusterEstimate(isAdmin() ? id : undefined)
 
   const refreshStatus = useRefreshClusterStatus()
@@ -648,323 +735,16 @@ export default function ClusterDetail() {
         </div>
       </div>
 
-      {/* Hearth Integration Panel */}
-      {hearthCluster && (
-        <div className="card border-l-4 border-l-orange-400">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex items-center gap-2">
-              <FireIcon className="h-5 w-5 text-orange-500" />
-              <h3 className="font-semibold text-gray-900">Hearth Status</h3>
-              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full ml-auto">
-                FournosCluster CR
-              </span>
-            </div>
-          </div>
-          <div className="px-6 py-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider">GPU Hardware</p>
-                <p className="mt-1 text-sm font-semibold text-gray-900">
-                  {hearthCluster.gpu_summary || 'Pending discovery'}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider">Kubeconfig</p>
-                <p className="mt-1">
-                  <span className={clsx(
-                    'badge',
-                    hearthCluster.kubeconfig_status === 'Valid' ? 'badge-success' :
-                    hearthCluster.kubeconfig_status === 'Unreachable' ? 'badge-error' :
-                    'badge-warning'
-                  )}>
-                    {hearthCluster.kubeconfig_status || 'Unknown'}
-                  </span>
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider">Lock Status</p>
-                <p className="mt-1">
-                  {hearthCluster.locked ? (
-                    <span className="flex items-center gap-1 text-sm font-medium text-orange-600">
-                      <LockClosedIcon className="h-4 w-4" />
-                      Locked
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1 text-sm font-medium text-green-600">
-                      <LockOpenIcon className="h-4 w-4" />
-                      Available
-                    </span>
-                  )}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 uppercase tracking-wider">Owner</p>
-                <p className="mt-1 text-sm font-semibold text-gray-900">
-                  {hearthCluster.owner || '—'}
-                </p>
-              </div>
-            </div>
-
-            {/* GPU Details */}
-            {hearthCluster.hardware && hearthCluster.hardware.gpus.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-gray-100">
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">GPU Inventory</p>
-                <div className="flex flex-wrap gap-2">
-                  {hearthCluster.hardware.gpus.map((gpu, idx) => (
-                    <div key={idx} className="flex items-center gap-2 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
-                      <CpuChipIcon className="h-4 w-4 text-purple-600" />
-                      <span className="text-sm font-medium text-purple-900">
-                        {gpu.count}x {gpu.short_name.toUpperCase()}
-                      </span>
-                      <span className="text-xs text-purple-600">
-                        ({gpu.vendor} · {gpu.node_count || '?'} node{gpu.node_count !== 1 ? 's' : ''})
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Lock expiry */}
-            {hearthCluster.locked && hearthCluster.lock_expires_at && (
-              <div className="mt-4 pt-4 border-t border-gray-100">
-                <div className="flex items-center gap-2 text-sm text-gray-600">
-                  <ClockIcon className="h-4 w-4 text-gray-400" />
-                  Lock expires: {format(new Date(hearthCluster.lock_expires_at), 'MMM d, yyyy h:mm a')}
-                </div>
-              </div>
-            )}
-
-            {/* Discovery error */}
-            {hearthCluster.hardware?.last_error && (
-              <div className="mt-4 pt-4 border-t border-gray-100">
-                <div className="flex items-start gap-2 text-sm text-orange-600 bg-orange-50 p-3 rounded-lg">
-                  <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="font-medium">GPU Discovery Error</p>
-                    <p className="text-xs mt-1">{hearthCluster.hardware.last_error}</p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* GPU Allocation Card */}
-      {gpuStatus && gpuStatus.total_gpus > 0 && (
-        <div className="card p-6">
-          <h3 className="font-semibold text-gray-900 mb-3">GPU Allocation</h3>
-          <div className="grid grid-cols-3 gap-4 text-sm mb-3">
-            <div className="text-center p-3 bg-gray-50 rounded-lg">
-              <p className="text-2xl font-bold text-gray-900">{gpuStatus.total_gpus}</p>
-              <p className="text-xs text-gray-500">Total GPUs</p>
-            </div>
-            <div className="text-center p-3 bg-orange-50 rounded-lg">
-              <p className="text-2xl font-bold text-orange-600">{gpuStatus.allocated_gpus}</p>
-              <p className="text-xs text-gray-500">Allocated</p>
-            </div>
-            <div className="text-center p-3 bg-green-50 rounded-lg">
-              <p className="text-2xl font-bold text-green-600">{gpuStatus.free_gpus}</p>
-              <p className="text-xs text-gray-500">Free</p>
-            </div>
-          </div>
-          {gpuStatus.gpu_types.length > 0 && (
-            <div className="space-y-2">
-              {gpuStatus.gpu_types.map((t, i) => (
-                <div key={i} className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded">
-                  <span className="font-medium text-gray-700">{t.product}</span>
-                  <div className="flex items-center gap-3 text-xs">
-                    <span className="text-gray-500">{t.node_count} node{t.node_count !== 1 ? 's' : ''}</span>
-                    <span className="text-green-600 font-medium">{t.free}/{t.count} free</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {gpuStatus.dra_available && (
-            <div className="mt-2 text-xs text-gray-500">
-              DRA {gpuStatus.dra_api_version} &middot; {gpuStatus.gpu_allocation_mode} mode
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Cost Card */}
-      {cluster.provider === 'ibm' && (
-        <div className="card p-6">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-              <CurrencyDollarIcon className="h-5 w-5 text-emerald-600" />
-              Cost
-            </h3>
-            <div className="flex items-center gap-3">
-              {costs && costs.length > 0 && costs[0].fetched_at && (
-                <span className="text-xs text-gray-400">
-                  Updated {format(new Date(costs[0].fetched_at), 'MMM d, HH:mm')}
-                </span>
-              )}
-              <button
-                onClick={() => refreshCost.mutate(id!)}
-                disabled={refreshCost.isPending}
-                className="btn-secondary text-sm py-1.5 px-3"
-              >
-                <ArrowPathIcon className={clsx('h-3.5 w-3.5 mr-1.5', refreshCost.isPending && 'animate-spin')} />
-                Refresh
-              </button>
-            </div>
-          </div>
-
-          {costsLoading ? (
-            <div className="text-sm text-gray-400">Loading...</div>
-          ) : (!costs || costs.length === 0) ? (
-            <div className="flex items-start gap-2 text-sm text-orange-600 bg-orange-50 p-3 rounded-lg">
-              <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
-              <span>No billing data available</span>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {costs.map((cost) => (
-                <div key={cost.billing_month} className="border border-gray-200 rounded-lg overflow-hidden">
-                  <div className="flex items-center justify-between p-4 bg-emerald-50">
-                    <p className="text-sm font-medium text-gray-600">{cost.billing_month}</p>
-                    <p className="text-xl font-bold text-emerald-700">
-                      {cost.total_cost != null
-                        ? cost.total_cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })
-                        : '—'}
-                    </p>
-                  </div>
-                  {cost.node_breakdown && cost.node_breakdown.length > 0 && (
-                    <div className="p-3 space-y-1">
-                      {cost.node_breakdown.map((n) => (
-                        <div key={n.node} className="flex items-center justify-between text-sm p-1.5">
-                          <span className="font-mono text-xs text-gray-700 truncate">{n.node}</span>
-                          <span className="font-medium text-gray-900">
-                            {n.cost.toLocaleString(undefined, { style: 'currency', currency: cost.currency })}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {cost.error && (
-                    <div className="px-4 py-2 text-xs text-orange-600 bg-orange-50 border-t border-orange-100">
-                      {cost.error}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Current Month Estimate (admin only) */}
-      {isAdmin() && clusterEstimate && clusterEstimate.node_count > 0 && (
-        <div className="card p-6">
-          <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-3">
-            <CurrencyDollarIcon className="h-5 w-5 text-blue-600" />
-            Current Month Estimate
-            {clusterEstimate.discount_pct > 0 && (
-              <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
-                {clusterEstimate.discount_pct}% discount
-              </span>
-            )}
-          </h3>
-          <div className="grid grid-cols-3 gap-3 mb-3">
-            <div className="text-center p-3 bg-gray-50 rounded-lg">
-              <p className="text-xs text-gray-500">Public Rate</p>
-              <p className="text-lg font-bold text-gray-700">
-                {clusterEstimate.total_public_cost.toLocaleString(undefined, { style: 'currency', currency: 'USD' })}
-              </p>
-            </div>
-            <div className="text-center p-3 bg-blue-50 rounded-lg">
-              <p className="text-xs text-gray-500">Estimated Actual</p>
-              <p className="text-lg font-bold text-blue-700">
-                {clusterEstimate.total_estimated_cost.toLocaleString(undefined, { style: 'currency', currency: 'USD' })}
-              </p>
-            </div>
-            <div className="text-center p-3 bg-green-50 rounded-lg">
-              <p className="text-xs text-gray-500">Est. Savings</p>
-              <p className="text-lg font-bold text-green-700">
-                {(clusterEstimate.total_public_cost - clusterEstimate.total_estimated_cost).toLocaleString(undefined, { style: 'currency', currency: 'USD' })}
-              </p>
-            </div>
-          </div>
-          <p className="text-xs text-gray-400">
-            Based on {clusterEstimate.node_count} nodes tracked this month ({clusterEstimate.billing_month})
-          </p>
-        </div>
-      )}
-
-      {/* Current Reservations (multi-occupant) */}
-      {occupancy?.occupied && occupancy.reservations.length > 0 && (
-        <div className="card p-6 border-l-4 border-l-orange-500">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-gray-900">
-              Currently Reserved ({occupancy.reservations.length} active)
-            </h3>
-            {occupancy.gpu_summary && occupancy.gpu_summary.total_reserved_gpus > 0 && (
-              <span className="text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded-full font-medium">
-                {occupancy.gpu_summary.total_reserved_gpus} GPU reserved
-              </span>
-            )}
-          </div>
-          <div className="space-y-3">
-            {occupancy.reservations.map((r, idx) => (
-              <div key={idx} className="p-3 bg-gray-50 rounded-lg">
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <p className="text-gray-500">User</p>
-                    <p className="font-medium text-gray-900">{r.user_name}</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500">Purpose</p>
-                    <p className="font-medium text-gray-900">{r.title}</p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500">Type</p>
-                    <p className="font-medium text-gray-900">
-                      {r.reservation_type === 'gpu' ? `${r.gpu_count ?? '?'} GPU` : 'Full Cluster'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-gray-500">Ends</p>
-                    <p className="font-medium text-gray-900">
-                      {format(new Date(r.end_time), 'MMM d, h:mm a')}
-                    </p>
-                  </div>
-                </div>
-                {r.enforcement_namespace && (
-                  <div className="mt-2 p-2 bg-blue-50 rounded flex items-center gap-2 text-xs">
-                    <span className="text-blue-700">Namespace: </span>
-                    <code className="font-mono text-blue-900">{r.enforcement_namespace}</code>
-                    {r.enforcement_status && (
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                        r.enforcement_status === 'provisioned' ? 'bg-green-100 text-green-800' :
-                        r.enforcement_status === 'error' ? 'bg-orange-100 text-orange-800' :
-                        'bg-gray-100 text-gray-600'
-                      }`}>
-                        {r.enforcement_status}
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Tabs */}
       <div className="card">
-        <div className="border-b border-gray-200">
+        <div className="overflow-x-auto border-b border-gray-200">
           <nav className="flex -mb-px">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={clsx(
-                  'flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 transition-colors',
+                  'flex shrink-0 items-center gap-2 px-4 py-4 text-sm font-medium border-b-2 transition-colors sm:px-6',
                   activeTab === tab.id
                     ? 'border-primary-500 text-primary-600'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -981,12 +761,16 @@ export default function ClusterDetail() {
           {/* Topology Tab */}
           {activeTab === 'topology' && (
             <div>
+              {topologyRefreshFailed && topology && (
+                <p role="status" className="mb-3 text-sm text-amber-800">Couldn’t refresh topology. Showing the snapshot from {format(topologyUpdatedAt, 'MMM d, HH:mm')}.</p>
+              )}
               {topologyLoading ? (
                 <div className="flex items-center justify-center h-64">
                   <ArrowPathIcon className="h-8 w-8 animate-spin text-gray-400" />
                 </div>
               ) : topology ? (
                 <TopologyVisualization
+                  key={id}
                   controlPlane={topology.control_plane}
                   workers={topology.workers}
                   infra={topology.infra}
@@ -1160,6 +944,241 @@ export default function ClusterDetail() {
           )}
         </div>
       </div>
+
+      {/* Hearth Integration Panel */}
+      {hearthCluster && (
+        <DetailSection title="Hearth Status" icon={FireIcon}>
+          <p className="mb-3 text-xs text-gray-500">FournosCluster CR</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wider">GPU Hardware</p>
+              <p className="mt-1 text-sm font-semibold text-gray-900">
+                {hearthCluster.gpu_summary || 'Pending discovery'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wider">Kubeconfig</p>
+              <p className="mt-1">
+                <span className={clsx(
+                  'badge',
+                  hearthCluster.kubeconfig_status === 'Valid' ? 'badge-success' :
+                  hearthCluster.kubeconfig_status === 'Unreachable' ? 'badge-error' :
+                  'badge-warning'
+                )}>
+                  {hearthCluster.kubeconfig_status || 'Unknown'}
+                </span>
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wider">Lock Status</p>
+              <p className="mt-1">
+                {hearthCluster.locked ? (
+                  <span className="flex items-center gap-1 text-sm font-medium text-orange-600">
+                    <LockClosedIcon className="h-4 w-4" />
+                    Locked
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-sm font-medium text-green-600">
+                    <LockOpenIcon className="h-4 w-4" />
+                    Available
+                  </span>
+                )}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wider">Owner</p>
+              <p className="mt-1 text-sm font-semibold text-gray-900">
+                {hearthCluster.owner || '—'}
+              </p>
+            </div>
+          </div>
+
+          {/* GPU Details */}
+          {hearthCluster.hardware && hearthCluster.hardware.gpus.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">GPU Inventory</p>
+              <div className="flex flex-wrap gap-2">
+                {hearthCluster.hardware.gpus.map((gpu, idx) => (
+                  <div key={idx} className="flex items-center gap-2 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
+                    <CpuChipIcon className="h-4 w-4 text-purple-600" />
+                    <span className="text-sm font-medium text-purple-900">
+                      {gpu.count}x {gpu.short_name.toUpperCase()}
+                    </span>
+                    <span className="text-xs text-purple-600">
+                      ({gpu.vendor} · {gpu.node_count || '?'} node{gpu.node_count !== 1 ? 's' : ''})
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Lock expiry */}
+          {hearthCluster.locked && hearthCluster.lock_expires_at && (
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <div className="flex items-center gap-2 text-sm text-gray-600">
+                <ClockIcon className="h-4 w-4 text-gray-400" />
+                Lock expires: {format(new Date(hearthCluster.lock_expires_at), 'MMM d, yyyy h:mm a')}
+              </div>
+            </div>
+          )}
+
+          {/* Discovery error */}
+          {hearthCluster.hardware?.last_error && (
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <div className="flex items-start gap-2 text-sm text-orange-600 bg-orange-50 p-3 rounded-lg">
+                <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-medium">GPU Discovery Error</p>
+                  <p className="text-xs mt-1">{hearthCluster.hardware.last_error}</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </DetailSection>
+      )}
+
+      {/* GPU Allocation Card */}
+      {gpuStatus && gpuStatus.total_gpus > 0 && (
+        <DetailSection title="GPU Allocation" icon={CpuChipIcon}>
+          <div className="grid grid-cols-3 gap-4 text-sm mb-3">
+            <div className="text-center p-3 bg-gray-50 rounded-lg">
+              <p className="text-2xl font-bold text-gray-900">{gpuStatus.total_gpus}</p>
+              <p className="text-xs text-gray-500">Total GPUs</p>
+            </div>
+            <div className="text-center p-3 bg-orange-50 rounded-lg">
+              <p className="text-2xl font-bold text-orange-600">{gpuStatus.allocated_gpus}</p>
+              <p className="text-xs text-gray-500">Allocated</p>
+            </div>
+            <div className="text-center p-3 bg-green-50 rounded-lg">
+              <p className="text-2xl font-bold text-green-600">{gpuStatus.free_gpus}</p>
+              <p className="text-xs text-gray-500">Free</p>
+            </div>
+          </div>
+          {gpuStatus.gpu_types.length > 0 && (
+            <div className="space-y-2">
+              {gpuStatus.gpu_types.map((t, i) => (
+                <div key={i} className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded">
+                  <span className="font-medium text-gray-700">{t.product}</span>
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="text-gray-500">{t.node_count} node{t.node_count !== 1 ? 's' : ''}</span>
+                    <span className="text-green-600 font-medium">{t.free}/{t.count} free</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {gpuStatus.dra_available && (
+            <div className="mt-2 text-xs text-gray-500">
+              DRA {gpuStatus.dra_api_version} &middot; {gpuStatus.gpu_allocation_mode} mode
+            </div>
+          )}
+        </DetailSection>
+      )}
+
+      {(cluster.provider === 'ibm' || (isAdmin() && !!clusterEstimate?.node_count)) && (
+        <DetailSection title="Cost" icon={CurrencyDollarIcon}>
+          {cluster.provider === 'ibm' && <ClusterBillingHistory id={cluster.id} />}
+
+          {/* Current Month Estimate (admin only) */}
+          {isAdmin() && clusterEstimate && clusterEstimate.node_count > 0 && (
+            <div className="mt-4">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-3">
+                <CurrencyDollarIcon className="h-5 w-5 text-blue-600" />
+                Current Month Estimate
+                {clusterEstimate.discount_pct > 0 && (
+                  <span className="ml-auto text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
+                    {clusterEstimate.discount_pct}% discount
+                  </span>
+                )}
+              </h3>
+              <div className="grid grid-cols-3 gap-3 mb-3">
+                <div className="text-center p-3 bg-gray-50 rounded-lg">
+                  <p className="text-xs text-gray-500">Public Rate</p>
+                  <p className="text-lg font-bold text-gray-700">
+                    {clusterEstimate.total_public_cost.toLocaleString(undefined, { style: 'currency', currency: 'USD' })}
+                  </p>
+                </div>
+                <div className="text-center p-3 bg-blue-50 rounded-lg">
+                  <p className="text-xs text-gray-500">Estimated Actual</p>
+                  <p className="text-lg font-bold text-blue-700">
+                    {clusterEstimate.total_estimated_cost.toLocaleString(undefined, { style: 'currency', currency: 'USD' })}
+                  </p>
+                </div>
+                <div className="text-center p-3 bg-green-50 rounded-lg">
+                  <p className="text-xs text-gray-500">Est. Savings</p>
+                  <p className="text-lg font-bold text-green-700">
+                    {(clusterEstimate.total_public_cost - clusterEstimate.total_estimated_cost).toLocaleString(undefined, { style: 'currency', currency: 'USD' })}
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-gray-400">
+                Based on {clusterEstimate.node_count} nodes tracked this month ({clusterEstimate.billing_month})
+              </p>
+            </div>
+          )}
+        </DetailSection>
+      )}
+
+      {/* Current Reservations (multi-occupant) */}
+      {occupancy?.occupied && occupancy.reservations.length > 0 && (
+        <div className="card p-6 border-l-4 border-l-orange-500">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-gray-900">
+              Currently Reserved ({occupancy.reservations.length} active)
+            </h3>
+            {occupancy.gpu_summary && occupancy.gpu_summary.total_reserved_gpus > 0 && (
+              <span className="text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded-full font-medium">
+                {occupancy.gpu_summary.total_reserved_gpus} GPU reserved
+              </span>
+            )}
+          </div>
+          <div className="space-y-3">
+            {occupancy.reservations.map((r, idx) => (
+              <div key={idx} className="p-3 bg-gray-50 rounded-lg">
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-gray-500">User</p>
+                    <p className="font-medium text-gray-900">{r.user_name}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Purpose</p>
+                    <p className="font-medium text-gray-900">{r.title}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Type</p>
+                    <p className="font-medium text-gray-900">
+                      {r.reservation_type === 'gpu' ? `${r.gpu_count ?? '?'} GPU` : 'Full Cluster'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Ends</p>
+                    <p className="font-medium text-gray-900">
+                      {format(new Date(r.end_time), 'MMM d, h:mm a')}
+                    </p>
+                  </div>
+                </div>
+                {r.enforcement_namespace && (
+                  <div className="mt-2 p-2 bg-blue-50 rounded flex items-center gap-2 text-xs">
+                    <span className="text-blue-700">Namespace: </span>
+                    <code className="font-mono text-blue-900">{r.enforcement_namespace}</code>
+                    {r.enforcement_status && (
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                        r.enforcement_status === 'provisioned' ? 'bg-green-100 text-green-800' :
+                        r.enforcement_status === 'error' ? 'bg-orange-100 text-orange-800' :
+                        'bg-gray-100 text-gray-600'
+                      }`}>
+                        {r.enforcement_status}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

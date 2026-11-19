@@ -33,6 +33,7 @@ import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { version as releaseVersion } from '../../package.json'
 import LoginModal from './LoginModal'
+import { useSidebarPreferences } from '../hooks/useSidebarPreferences'
 import { useAuthConfig } from '../hooks/useAuthConfig'
 import HearthConnectModal from './HearthConnectModal'
 import { isAuthenticated, isAdmin, getDisplayName, clearSession } from '../stores/authStore'
@@ -99,16 +100,17 @@ function SidebarTitle() {
 }
 
 const externalSections = [
-  { name: 'Performance Dashboard', icon: ChartBarIcon, links: performanceDashboardSubnav, linkSuffix: ' Performance Dashboard' },
-  { name: 'Tools', icon: WrenchScrewdriverIcon, links: psapToolsSubnav, linkSuffix: '' },
+  { key: 'performance', name: 'Performance Dashboard', icon: ChartBarIcon, links: performanceDashboardSubnav, linkSuffix: ' Performance Dashboard' },
+  { key: 'tools', name: 'Tools', icon: WrenchScrewdriverIcon, links: psapToolsSubnav, linkSuffix: '' },
 ] as const
 
 type SectionName = 'Testing' | (typeof externalSections)[number]['name']
 
-function SidebarSection({ name, icon: Icon, expanded, onToggle, children }: {
+function SidebarSection({ name, icon: Icon, expanded, disabled, onToggle, children }: {
   name: SectionName
   icon: typeof HomeIcon
   expanded: boolean
+  disabled: boolean
   onToggle: () => void
   children: ReactNode
 }) {
@@ -121,6 +123,7 @@ function SidebarSection({ name, icon: Icon, expanded, onToggle, children }: {
         type="button"
         aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`}
         aria-expanded={expanded}
+        disabled={disabled}
         aria-controls={panelId}
         onClick={onToggle}
         className="flex w-full items-center gap-3 border-l-[3px] border-transparent py-3 pl-6 pr-4 text-left text-sm font-medium text-gray-300 hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#73BCF7]"
@@ -230,13 +233,8 @@ const envBanner = import.meta.env.VITE_ENV_BANNER as string | undefined
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [expandedSections, setExpandedSections] = useState({
-    Testing: true,
-    'Performance Dashboard': true,
-    Tools: true,
-  })
-  const toggleSection = (name: SectionName) =>
-    setExpandedSections(current => ({ ...current, [name]: !current[name] }))
+  const sidebar = useSidebarPreferences()
+  const desktopOpen = sidebar.isExpanded('desktop')
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH
 
@@ -381,8 +379,9 @@ export default function Layout() {
               <SidebarSection
                 name="Testing"
                 icon={item.icon}
-                expanded={expandedSections.Testing}
-                onToggle={() => toggleSection('Testing')}
+                expanded={sidebar.isExpanded('testing')}
+                disabled={sidebar.busy}
+                onToggle={() => sidebar.toggle('testing')}
               >
                 {testingSubnav.filter(sub => sub.id !== 'submit' || authed).map(sub => {
                   const active = isTestingSubnavActive(sub.id)
@@ -408,8 +407,9 @@ export default function Layout() {
                   key={section.name}
                   name={section.name}
                   icon={section.icon}
-                  expanded={expandedSections[section.name]}
-                  onToggle={() => toggleSection(section.name)}
+                  expanded={sidebar.isExpanded(section.key)}
+                  disabled={sidebar.busy}
+                  onToggle={() => sidebar.toggle(section.key)}
                 >
                   {section.links.map(external => (
                     <li key={external.name}>
@@ -438,7 +438,7 @@ export default function Layout() {
   return (
     <div
       className="min-h-screen bg-[#f0f0f0]"
-      style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+      style={{ '--sidebar-width': `${desktopOpen ? sidebarWidth : 0}px` } as CSSProperties}
     >
       {envBanner && (
         <div className="fixed top-0 inset-x-0 z-[60] bg-amber-500 text-black text-center text-xs font-bold tracking-widest uppercase py-1 select-none">
@@ -488,7 +488,8 @@ export default function Layout() {
       </Transition.Root>
 
       <div
-        className={clsx('hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:flex-col', envBanner && 'lg:top-7')}
+        id="desktop-sidebar"
+        className={clsx('hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex-col', desktopOpen && 'lg:flex', envBanner && 'lg:top-7')}
         style={{ width: sidebarWidth }}
       >
         <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-[#212427] px-0 pb-4">
@@ -543,6 +544,18 @@ export default function Layout() {
             onClick={() => setSidebarOpen(true)}
           >
             <span className="sr-only">Open sidebar</span>
+            <Bars3Icon className="h-6 w-6" />
+          </button>
+
+          <button
+            type="button"
+            className="-m-2.5 hidden rounded p-2.5 text-gray-300 hover:text-white lg:block"
+            aria-label={desktopOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+            aria-expanded={desktopOpen}
+            aria-controls="desktop-sidebar"
+            disabled={sidebar.busy}
+            onClick={() => sidebar.toggle('desktop')}
+          >
             <Bars3Icon className="h-6 w-6" />
           </button>
 

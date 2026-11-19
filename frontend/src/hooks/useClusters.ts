@@ -129,6 +129,7 @@ export function useRefreshClusterStatus() {
     mutationFn: clusterApi.refreshStatus,
     onSuccess: (_data, id) => {
       queryClient.invalidateQueries({ queryKey: ['clusterStatus', id] })
+      queryClient.invalidateQueries({ queryKey: ['clusterTopology', id] })
       queryClient.invalidateQueries({ queryKey: ['clusters'] })
       toast.success('Cluster status refreshed')
     },
@@ -147,20 +148,12 @@ export function useUploadKubeconfig() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['clusters'] })
       queryClient.invalidateQueries({ queryKey: ['cluster', data.id] })
+      queryClient.invalidateQueries({ queryKey: ['clusterTopology', data.id] })
       toast.success('Kubeconfig uploaded successfully')
     },
     onError: (error: Error) => {
       toast.error(`Failed to upload kubeconfig: ${error.message}`)
     },
-  })
-}
-
-export function useClusterTopology(id: string) {
-  return useQuery({
-    queryKey: ['clusterTopology', id],
-    queryFn: () => clusterApi.getTopology(id),
-    enabled: !!id,
-    staleTime: 60000,
   })
 }
 

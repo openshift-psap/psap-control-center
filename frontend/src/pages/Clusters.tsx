@@ -12,7 +12,7 @@ import {
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline'
 import { useDropzone } from 'react-dropzone'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   useClusterRefreshDisplayPreference,
   useCreateCluster,
@@ -144,6 +144,21 @@ export default function Clusters() {
   }, [data, refreshing, serverRefreshing, refetch, queryClient])
 
   const clusters = data?.clusters || []
+  const gpuQueries = useQueries({
+    queries: clusters.map(cluster => ({
+      queryKey: ['gpu-status', cluster.id],
+      queryFn: () => clusterApi.getGpuStatus(cluster.id),
+      enabled: cluster.status === 'healthy',
+      staleTime: 30_000,
+      refetchInterval: 60_000,
+    })),
+  })
+  const clusterCards = clusters.map((cluster, index) => {
+    const gpuData = cluster.status === 'healthy' ? gpuQueries[index].data : undefined
+    const activityRank = gpuData ? (gpuData.allocated_gpus > 0 ? 0 : 1) : 2
+    return { cluster, gpuData, activityRank }
+  }).sort((a, b) => a.activityRank - b.activityRank)
+
   const clusterToRemove = clusters.find(cluster => cluster.id === removeClusterId)
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -351,10 +366,11 @@ export default function Clusters() {
         </div>
       ) : (
         <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2 xl:grid-cols-3">
-          {clusters.map((cluster) => (
+          {clusterCards.map(({ cluster, gpuData }) => (
             <ClusterCard
               key={cluster.id}
               cluster={cluster}
+              gpuData={gpuData}
               latestCost={data?.latest_costs ? data.latest_costs[cluster.id] ?? null : undefined}
               onRemove={isAdmin() ? () => setRemoveClusterId(cluster.id) : undefined}
               removing={deleteCluster.isPending}

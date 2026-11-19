@@ -1,3 +1,6 @@
+export type SidebarOption = 'desktop' | 'testing' | 'performance' | 'tools'
+export type SidebarPreferences = Partial<Record<SidebarOption, boolean>>
+
 export interface Cluster {
   id: string
   name: string

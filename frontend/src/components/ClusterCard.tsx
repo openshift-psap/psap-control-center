@@ -7,22 +7,16 @@ import { format, formatDistanceToNowStrict } from 'date-fns'
 import clsx from 'clsx'
 import { clusterApi } from '../services/api'
 import { useClusterCosts } from '../hooks/useClusterCost'
-import type { Cluster, ClusterCostSummary, GpuPodInfo } from '../types'
+import type { Cluster, ClusterCostSummary, GpuAllocationStatus, GpuPodInfo } from '../types'
 import GpuDonutChart from './GpuDonutChart'
 
-export default function ClusterCard({ cluster, latestCost, onRemove, removing }: {
+export default function ClusterCard({ cluster, gpuData, latestCost, onRemove, removing }: {
   cluster: Cluster
+  gpuData?: GpuAllocationStatus
   latestCost?: ClusterCostSummary | null
   onRemove?: () => void
   removing: boolean
 }) {
-  const { data: gpuData } = useQuery({
-    queryKey: ['gpu-status', cluster.id],
-    queryFn: () => clusterApi.getGpuStatus(cluster.id),
-    enabled: cluster.status === 'healthy',
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  })
   const cTotal = gpuData?.total_gpus ?? parseInt(cluster.gpu_count || '0')
   const cUsed = gpuData?.allocated_gpus ?? 0
   const gpuNodeCount = gpuData?.gpu_types.reduce((sum, type) => sum + type.node_count, 0)

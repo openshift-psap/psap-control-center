@@ -118,3 +118,16 @@ it('only removes the selected cluster after an admin explicitly confirms', async
   fireEvent.click(nextDialog.getByRole('button', { name: 'Remove cluster' }))
   await waitFor(() => expect(remove.mock.calls.map(([id]) => id)).toEqual(['beta']))
 })
+
+it('moves a cluster ahead of idle peers as its allocated count changes', async () => {
+  const { client } = renderClusters()
+  await screen.findAllByRole('button', { name: /bench.*2 pods/ })
+  const order = () => screen.getAllByRole('article').map(card => card.getAttribute('aria-label'))
+  const gpu = await vi.mocked(clusterApi.getGpuStatus).mock.results[0].value
+  expect(order()).toEqual(['alpha', 'beta'])
+  act(() => { client.setQueryData(['gpu-status', 'alpha'], { ...gpu, allocated_gpus: 0 }) })
+  await waitFor(() => expect(order()).toEqual(['beta', 'alpha']))
+  act(() => { client.setQueryData(['gpu-status', 'beta'], { ...gpu, allocated_gpus: 0 }) })
+  await waitFor(() => expect(order()).toEqual(['alpha', 'beta']))
+  expect(clusterApi.getGpuStatus).toHaveBeenCalledTimes(2)
+})

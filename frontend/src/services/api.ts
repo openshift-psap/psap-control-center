@@ -4,6 +4,8 @@ import type {
   ClusterStatus,
   ClusterListResponse,
   ClusterTopology,
+  SidebarOption,
+  SidebarPreferences,
   ScheduleCalendarWindow,
   OcpDetails,
   Operator,
@@ -134,8 +136,8 @@ export const clusterApi = {
     return data
   },
 
-  getTopology: async (id: string): Promise<ClusterTopology> => {
-    const { data } = await api.get(`/clusters/${id}/topology`)
+  getTopology: async (id: string, signal?: AbortSignal): Promise<ClusterTopology> => {
+    const { data } = await api.get(`/clusters/${id}/topology`, { signal })
     return data
   },
 
@@ -325,6 +327,15 @@ export const hearthApi = {
 }
 
 export const authApi = {
+  getSidebarPreferences: async (): Promise<SidebarPreferences> => {
+    const { data } = await api.get('/auth/me/sidebar')
+    return data
+  },
+
+  saveSidebarChoice: async (option: SidebarOption, expanded: boolean): Promise<void> => {
+    await api.put(`/auth/me/sidebar/${option}`, { expanded })
+  },
+
   config: async (): Promise<AuthConfig> => {
     const { data } = await api.get('/auth/config')
     return data
