@@ -12,14 +12,15 @@ export interface AuthSession {
   auth_provider?: 'local' | 'google' | string
 }
 
-let session: AuthSession | null = null
+// An existing session cookie can be in use before /auth/me returns.
+let session: AuthSession | null | undefined
 
 export function getSession(): AuthSession | null {
-  return session
+  return session ?? null
 }
 
 export function isAuthenticated(): boolean {
-  return session !== null
+  return session != null
 }
 
 export function isAdmin(): boolean {
@@ -28,6 +29,14 @@ export function isAdmin(): boolean {
 
 export function getUsername(): string | null {
   return session?.username ?? null
+}
+
+export function getPreferenceAccount(): string | null {
+  return session ? `${session.auth_provider || 'local'}:${session.username}` : null
+}
+
+export function getViewerCacheKey(): string | null {
+  return session === undefined ? 'session-pending' : getPreferenceAccount()
 }
 
 export function getDisplayName(): string | null {

@@ -22,13 +22,15 @@ import {
   PencilSquareIcon,
 } from '@heroicons/react/24/outline'
 import clsx from 'clsx'
-import { getDisplayName, isAdmin, isAuthenticated } from '../stores/authStore'
+import { getDisplayName, getPreferenceAccount, isAdmin, isAuthenticated } from '../stores/authStore'
 import { useClusters } from '../hooks/useClusters'
 import { useHearthClusters } from '../hooks/useHearth'
 import DynamicSubmitForm, { type MatrixClusterConstraints } from '../components/DynamicSubmitForm'
 import ClusterCombobox from '../components/ClusterCombobox'
 import ClusterScheduleModal from '../components/ClusterScheduleModal'
 import AcceleratorQueueSummary from '../components/AcceleratorQueueSummary'
+import ClusterActivityModal from '../components/ClusterActivityModal'
+import { hasUpcomingClusterActivity } from '../utils/clusterActivity'
 import SchedulingCalendar from '../components/SchedulingCalendar'
 import { browserTimezone, datetimeLocalToUtcIso } from '../utils/timezone'
 import WizardSteps from '../components/WizardSteps'
@@ -361,7 +363,7 @@ function JobProgressCell({ job }: { job: FournosJobSummary }) {
   )
 }
 
-function JobsTable({
+export function JobsTable({
   jobs,
   source,
   sort,
@@ -401,11 +403,11 @@ function JobsTable({
             <SortableTh label="Cluster" sortKey="cluster" sort={sort} onSort={onSort} large />
             {source === 'live' && <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase">Progress</th>}
             <SortableTh label={source === 'live' ? 'Age' : 'Date'} sortKey={source === 'live' ? 'age' : 'date'} sort={sort} onSort={onSort} large />
-            {source === 'live' ? (
-              <SortableTh label="Triggered By" sortKey="triggered_by" sort={sort} onSort={onSort} large />
-            ) : (
+            <SortableTh label="Triggered By" sortKey="triggered_by" sort={sort} onSort={onSort} large />
+            {source === 'history' && (<>
               <SortableTh label="Duration" sortKey="duration" sort={sort} onSort={onSort} large />
-            )}
+              <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase">Forge used</th>
+            </>)}
             {source === 'live' && <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 uppercase">PR</th>}
             {source === 'history' && <th className="px-4 py-3 text-center text-sm font-medium text-gray-500 uppercase">MLflow</th>}
             <th className="px-4 py-3" />
@@ -448,31 +450,39 @@ function JobsTable({
                   ? formatAge(job.created_at)
                   : formatHistoryDate(job)}
               </td>
-              {source === 'live' ? (
-                <td className="px-4 py-3 text-base text-gray-500">
-                  {job.trigger_type === 'recurring' && job.triggered_by_schedule ? (
-                    <Link
-                      to={`/testing/schedules/${job.triggered_by_schedule}/runs`}
-                      className="inline-flex items-center gap-1 text-indigo-500 hover:text-indigo-700"
-                      title={`Created by recurring job "${job.triggered_by_schedule}"`}
-                    >
-                      <CalendarDaysIcon className="h-3.5 w-3.5" /> {job.triggered_by_schedule}
-                    </Link>
-                  ) : job.trigger_type === 'deferred' ? (
-                    <span className="inline-flex items-center gap-1 text-gray-400">
-                      <ClockIcon className="h-3.5 w-3.5" /> Deferred
-                    </span>
-                  ) : job.trigger_type === 'recurring-parent' ? (
-                    <span className="inline-flex items-center gap-1 text-teal-600">
-                      <CalendarDaysIcon className="h-3.5 w-3.5" /> Recurring template
-                    </span>
-                  ) : (
-                    '-'
+              <td className="px-4 py-3 text-base text-gray-500">
+                {job.trigger_type === 'recurring' && job.triggered_by_schedule ? (
+                  <Link
+                    to={`/testing/schedules/${job.triggered_by_schedule}/runs`}
+                    className="inline-flex items-center gap-1 text-indigo-500 hover:text-indigo-700"
+                    title={`Created by recurring job "${job.triggered_by_schedule}"`}
+                  >
+                    <CalendarDaysIcon className="h-3.5 w-3.5" /> {job.triggered_by_schedule}
+                  </Link>
+                ) : job.trigger_type === 'deferred' ? (
+                  <span className="inline-flex items-center gap-1 text-gray-400">
+                    <ClockIcon className="h-3.5 w-3.5" /> Deferred
+                  </span>
+                ) : job.trigger_type === 'recurring-parent' ? (
+                  <span className="inline-flex items-center gap-1 text-teal-600">
+                    <CalendarDaysIcon className="h-3.5 w-3.5" /> Recurring template
+                  </span>
+                ) : (
+                  '-'
+                )}
+              </td>
+              {source === 'history' && (<>
+                <td className="px-4 py-3 text-base text-gray-500">{formatDuration(job.duration_seconds)}</td>
+                <td className="px-4 py-3 text-sm text-gray-500">
+                  {job.forge_git_version && <code>{job.forge_git_version}</code>}
+                  {job.forge_image_digest && (
+                    <code className="block max-w-32 truncate" title={job.forge_image_digest}>{job.forge_image_digest}</code>
+                  )}
+                  {!job.forge_git_version && !job.forge_image_digest && (
+                    <span title={job.forge_provenance_state || 'Forge version unavailable'}>-</span>
                   )}
                 </td>
-              ) : (
-                <td className="px-4 py-3 text-base text-gray-500">{formatDuration(job.duration_seconds)}</td>
-              )}
+              </>)}
               {source === 'live' && (
                 <td className="px-4 py-3 text-base">
                   {job.source_pr_number ? (
@@ -648,6 +658,19 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
     isError: clusterOverviewError,
     refetch: refetchClusterOverview,
   } = useClusterOverview(jobType === 'forge' ? cluster || undefined : undefined)
+
+  const [activityOpen, setActivityOpen] = useState(false)
+  const checkedActivity = useRef(false)
+  useEffect(() => {
+    checkedActivity.current = false
+    setActivityOpen(false)
+  }, [cluster, jobType])
+  useEffect(() => {
+    if (jobType !== 'forge' || step !== 2 || !clusterOverview || clusterOverview.cluster !== cluster || checkedActivity.current) return
+    if (clusterOverviewFetching || clusterOverviewError || !hasUpcomingClusterActivity(clusterOverview)) return
+    checkedActivity.current = true
+    setActivityOpen(true)
+  }, [cluster, clusterOverview, clusterOverviewFetching, clusterOverviewError, jobType, step])
 
   const selectedProject = useMemo(
     () => projects?.find((p: ForgeProject) => p.name === project),
@@ -1131,6 +1154,18 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
               onRefresh={() => { void refetchClusterOverview() }}
             />
           )}
+          {cluster && (
+            <div>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:text-indigo-800"
+                onClick={() => { checkedActivity.current = true; setActivityOpen(true) }}
+              >
+                <CalendarDaysIcon className="h-4 w-4" /> View {cluster}'s schedule
+              </button>
+              <ClusterActivityModal cluster={cluster} open={activityOpen} onClose={() => setActivityOpen(false)} />
+            </div>
+          )}
 
           {/* Pull Request picker */}
           <div className="relative">
@@ -1358,12 +1393,10 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
         />
       )}
 
-      {/* RHAIIS shares the basics panel above and renders project configuration,
-          YAML preview, and submission together. Other projects use the wizard. */}
-      {jobType === 'forge' && dynamicSchema && (
-        (rhaiisSinglePage && step === 2) || (!rhaiisSinglePage && (step === 3 || step === 4))
-      ) && (
+      {/* Keep each project's draft mounted while editing Basics in the wizard. */}
+      {jobType === 'forge' && dynamicSchema && (!rhaiisSinglePage || step === 2) && (
         <DynamicSubmitForm
+          key={project}
           project={project}
           schema={dynamicSchema}
           basics={{ cluster, clusterGpuType: selectedCluster?.gpu_type || '', pipeline, owner, priority, exclusive, pullSha, pullRequest, useLatestMain, prLabel: prSearch || pullSha, scheduling, workItems, runGroupIds, runGroups }}
@@ -1620,6 +1653,7 @@ function RecurringJobsPanel() {
     return sortRows(rows, sort, {
       name: (r) => r.name.toLowerCase(),
       project: (r) => r.project.toLowerCase(),
+      owner: (r) => (r.owner || '').toLowerCase(),
       schedule: (r) => r.schedule,
       cluster: (r) => r.cluster.toLowerCase(),
       phase: (r) => r.phase || '',
@@ -1649,6 +1683,7 @@ function RecurringJobsPanel() {
               <tr>
                 <SortableTh label="Name" sortKey="name" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
                 <SortableTh label="Project" sortKey="project" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
+                <SortableTh label="Owner" sortKey="owner" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
                 <SortableTh label="Schedule (UTC)" sortKey="schedule" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
                 <SortableTh label="Cluster" sortKey="cluster" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
                 <SortableTh label="Phase" sortKey="phase" sort={sort} onSort={(k) => setSort((p) => toggleSort(p, k))} />
@@ -1665,6 +1700,7 @@ function RecurringJobsPanel() {
                     </Link>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-900">{r.project}</td>
+                  <td className="px-4 py-3 text-sm text-gray-500">{r.owner || '-'}</td>
                   <td className="px-4 py-3 text-sm text-gray-500">
                     <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs">{r.schedule}</code>
                   </td>
@@ -1879,10 +1915,13 @@ export default function Testing() {
   const [preferenceApplied, setPreferenceApplied] = useState(
     !authenticated || historyUrlHasState
   )
-  const lastSavedStateRef = useRef<string | null>(
+  const appliedViewRef = useRef<string | null>(
     historyUrlHasState ? JSON.stringify(initialHistory) : null
   )
-  const previousAuthenticatedRef = useRef(authenticated)
+  const preferenceAccount = getPreferenceAccount()
+  const previousAccountRef = useRef(preferenceAccount)
+  const pendingHistoryEdit = useRef<{ account: string; state: HistoryViewState } | null>(null)
+  const historySaveTimer = useRef<number | undefined>(undefined)
   const observedUrlRef = useRef(searchParams.toString())
   const applyingUrlRef = useRef(false)
   const suppressPreferenceSaveRef = useRef(false)
@@ -1959,9 +1998,26 @@ export default function Testing() {
 
   const preferenceQuery = useHistoryPreference(
     authenticated && activeTab === 'history' && !historyUrlHasState && !preferenceApplied
+    && pendingHistoryEdit.current?.account !== preferenceAccount
   )
   const { mutate: saveHistoryPreference, isPending: preferenceSaving } = useSaveHistoryPreference()
   const { mutate: resetHistoryPreference, isPending: preferenceResetting } = useResetHistoryPreference()
+
+  const flushHistoryEdit = useCallback(() => {
+    if (historySaveTimer.current === undefined) return
+    window.clearTimeout(historySaveTimer.current)
+    historySaveTimer.current = undefined
+    const edit = pendingHistoryEdit.current
+    if (!edit || edit.account !== getPreferenceAccount() || suppressPreferenceSaveRef.current) return
+    saveHistoryPreference(edit, {
+      onSettled: () => { if (pendingHistoryEdit.current === edit) pendingHistoryEdit.current = null },
+    })
+  }, [saveHistoryPreference])
+
+  // A navigation can unmount the form before its debounce expires.
+  useEffect(() => {
+    if (activeTab === 'history') return flushHistoryEdit
+  }, [activeTab, flushHistoryEdit])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -1978,32 +2034,57 @@ export default function Testing() {
   }, [historyQuery, historyIdentity, historyRepository, historySourceSha, historyForge, historyViewState.tags])
 
   useEffect(() => {
-    if (authenticated && !previousAuthenticatedRef.current && activeTab === 'history' && !historyUrlHasState) {
-      lastSavedStateRef.current = null
+    if (activeTab !== 'history' && authenticated) setPreferenceApplied(false)
+    if (previousAccountRef.current === preferenceAccount) return
+
+    const hadAccount = previousAccountRef.current !== null
+    previousAccountRef.current = preferenceAccount
+    window.clearTimeout(historySaveTimer.current)
+    historySaveTimer.current = undefined
+    pendingHistoryEdit.current = null
+    appliedViewRef.current = null
+    if (hadAccount) {
+      applyHistoryView(DEFAULT_HISTORY_VIEW)
+      setPreferenceApplied(!authenticated)
+      if (historyUrlHasState) {
+        const next = new URLSearchParams(searchParams)
+        HISTORY_URL_KEYS.forEach(key => next.delete(key))
+        applyingUrlRef.current = activeTab === 'history'
+        setSearchParams(next, { replace: true })
+      }
+    } else if (activeTab === 'history' && !historyUrlHasState) {
       setPreferenceApplied(false)
     }
-    previousAuthenticatedRef.current = authenticated
-  }, [authenticated, activeTab, historyUrlHasState])
+  }, [preferenceAccount, authenticated, activeTab, historyUrlHasState, searchParams, setSearchParams, applyHistoryView])
 
   useEffect(() => {
     if (activeTab !== 'history' || preferenceApplied) return
-    if (!authenticated || historyUrlHasState) {
-      lastSavedStateRef.current = JSON.stringify(historyViewState)
+    if (historyUrlHasState) {
+      const state = historyViewFromParams(searchParams)
+      const urlPage = Number(searchParams.get('page'))
+      applyHistoryView(state)
+      setPage(Number.isInteger(urlPage) && urlPage > 0 ? urlPage : 1)
+      appliedViewRef.current = JSON.stringify(state)
       setPreferenceApplied(true)
-      return
-    }
-    if (preferenceQuery.data) {
-      applyHistoryView(preferenceQuery.data.state)
-      lastSavedStateRef.current = JSON.stringify(preferenceQuery.data.state)
+    } else if (!authenticated) {
+      appliedViewRef.current = JSON.stringify(historyViewState)
       setPreferenceApplied(true)
-    } else if (preferenceQuery.isError) {
-      lastSavedStateRef.current = JSON.stringify(historyViewState)
-      setPreferenceApplied(true)
+    } else {
+      const edit = pendingHistoryEdit.current
+      const state = edit && edit.account === preferenceAccount ? edit.state : preferenceQuery.data?.state
+      if (state) {
+        applyHistoryView(state)
+        appliedViewRef.current = JSON.stringify(state)
+        setPreferenceApplied(true)
+      } else if (preferenceQuery.isError) {
+        appliedViewRef.current = JSON.stringify(historyViewState)
+        setPreferenceApplied(true)
+      }
     }
   }, [
-    activeTab, preferenceApplied, authenticated, historyUrlHasState,
+    activeTab, preferenceApplied, authenticated, preferenceAccount, historyUrlHasState,
     preferenceQuery.data, preferenceQuery.isError, applyHistoryView,
-    historyViewState,
+    historyViewState, searchParams,
   ])
 
   useEffect(() => {
@@ -2019,7 +2100,7 @@ export default function Testing() {
       applyingUrlRef.current = true
       applyHistoryView(urlState)
       setPage(normalizedPage)
-      lastSavedStateRef.current = JSON.stringify(urlState)
+      appliedViewRef.current = JSON.stringify(urlState)
     }
   }, [searchParams, activeTab, preferenceApplied, historyViewState, page, applyHistoryView])
 
@@ -2063,21 +2144,16 @@ export default function Testing() {
   }, [activeTab, authenticated, preferenceApplied, historyViewState, page, searchParams, setSearchParams])
 
   useEffect(() => {
-    if (!authenticated || activeTab !== 'history' || !preferenceApplied || preferenceSaving) return
+    if (!preferenceAccount || activeTab !== 'history' || !preferenceApplied || suppressPreferenceSaveRef.current) return
     const serialized = JSON.stringify(historyViewState)
-    if (lastSavedStateRef.current === null) {
-      lastSavedStateRef.current = serialized
-      return
-    }
-    if (serialized === lastSavedStateRef.current) return
-    const timeout = window.setTimeout(() => {
-      if (suppressPreferenceSaveRef.current) return
-      saveHistoryPreference(historyViewState, {
-        onSuccess: () => { lastSavedStateRef.current = serialized },
-      })
-    }, 700)
-    return () => window.clearTimeout(timeout)
-  }, [authenticated, activeTab, preferenceApplied, preferenceSaving, historyViewState, saveHistoryPreference])
+    const previous = appliedViewRef.current
+    appliedViewRef.current = serialized
+    if (previous === null || previous === serialized) return
+
+    pendingHistoryEdit.current = { account: preferenceAccount, state: historyViewState }
+    window.clearTimeout(historySaveTimer.current)
+    historySaveTimer.current = window.setTimeout(flushHistoryEdit, 700)
+  }, [activeTab, preferenceAccount, preferenceApplied, historyViewState, flushHistoryEdit])
 
   useEffect(() => {
     if (!authenticated) {
@@ -2203,10 +2279,13 @@ export default function Testing() {
 
   const resetSavedHistoryView = () => {
     suppressPreferenceSaveRef.current = true
+    window.clearTimeout(historySaveTimer.current)
+    historySaveTimer.current = undefined
+    pendingHistoryEdit.current = null
     resetHistoryPreference(undefined, {
       onSuccess: () => {
         applyHistoryView(DEFAULT_HISTORY_VIEW)
-        lastSavedStateRef.current = JSON.stringify(DEFAULT_HISTORY_VIEW)
+        appliedViewRef.current = JSON.stringify(DEFAULT_HISTORY_VIEW)
         suppressPreferenceSaveRef.current = false
       },
       onError: () => { suppressPreferenceSaveRef.current = false },
@@ -2217,9 +2296,9 @@ export default function Testing() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 font-display">Fournos Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-900 font-display">Testing</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Submit, monitor, and review FournosJob test runs
+            Submit, monitor, and review the team’s test runs.
           </p>
         </div>
         {isJobsTab && (
@@ -2503,7 +2582,7 @@ export default function Testing() {
       {/* Content */}
       {activeTab === 'submit' ? (
         <div className="rounded-xl bg-white shadow-sm border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Submit FournosJob</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Submit a job</h2>
           <SubmitForm onSubmitted={() => setTab('live')} />
         </div>
       ) : (

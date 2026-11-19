@@ -37,6 +37,9 @@ export default function Dashboard() {
   const clusters = clustersData?.clusters || []
   const reservations = reservationsData?.reservations || []
   const activeReservations = reservations.filter((reservation) => reservation.status === 'active')
+  const reservedGpus = activeReservations.reduce(
+    (total, reservation) => total + (reservation.reservation_type === 'gpu' ? reservation.gpu_count ?? 0 : 0), 0,
+  )
   const upcomingReservations = reservations
     .filter((reservation) => reservation.status === 'scheduled')
     .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
@@ -174,6 +177,9 @@ export default function Dashboard() {
                 <p className="text-2xl font-semibold text-gray-900">
                   {clustersLoading || (stat.name === 'Active Reservations' && reservationsLoading) ? '...' : stat.value}
                 </p>
+                {stat.name === 'Active Reservations' && reservedGpus > 0 && (
+                  <p className="mt-1 text-xs text-gray-500">{reservedGpus} GPUs reserved</p>
+                )}
               </div>
             </div>
           </Link>
@@ -295,9 +301,10 @@ export default function Dashboard() {
         )}
       </section>
 
+      <p className="text-sm text-gray-600">Reservation booking is disabled. Coordinate requests in <strong>#PSAP-clusters</strong>.</p>
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         {[
-          { title: 'Active Reservations', rows: activeReservations, empty: 'No active reservations', muted: false },
+          { title: 'Active Reservations', rows: activeReservations.slice(0, 5), empty: 'No active reservations', muted: false },
           { title: 'Upcoming Reservations', rows: upcomingReservations.slice(0, 10), empty: 'No upcoming reservations scheduled', muted: false },
           { title: 'Past Reservations', rows: pastReservations.slice(0, 10), empty: 'No past reservations', muted: true },
         ].map((section) => (
@@ -312,15 +319,27 @@ export default function Dashboard() {
               <p className="px-5 py-8 text-center text-sm text-gray-400">{section.empty}</p>
             ) : (
               <ul className="divide-y divide-gray-100">
-                {section.rows.slice(0, 5).map((reservation) => (
+                {section.rows.map((reservation) => (
                   <li key={reservation.id} className="px-5 py-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className={`truncate text-sm font-medium ${section.muted ? 'text-gray-500' : 'text-gray-900'}`}>{reservation.title}</p>
-                        <p className="mt-0.5 text-xs text-gray-500">{reservation.cluster_name || 'Unknown cluster'} · {reservation.user_name}</p>
+                        <p className="mt-0.5 text-xs text-gray-500">
+                          {[reservation.cluster_name || 'Unknown cluster', reservation.user_name, reservation.team].filter(Boolean).join(' · ')}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {reservation.status}
+                          {reservation.reservation_type === 'gpu' && reservation.gpu_count != null && ` · ${reservation.gpu_count} GPUs`}
+                        </p>
+                        {(reservation.enforcement_namespace || reservation.enforcement_status) && (
+                          <p className="break-words text-xs text-gray-500">
+                            {[reservation.enforcement_namespace, reservation.enforcement_status].filter(Boolean).join(' · ')}
+                          </p>
+                        )}
                       </div>
                       <span className="shrink-0 text-right text-xs text-gray-500">
-                        {format(new Date(reservation.start_time), 'MMM d, h:mm a')}
+                        {format(new Date(reservation.start_time), 'MMM d, yyyy h:mm a')}
+                        <span className="block">to {format(new Date(reservation.end_time), 'MMM d, yyyy h:mm a')}</span>
                       </span>
                     </div>
                   </li>
@@ -379,7 +398,7 @@ export default function Dashboard() {
                       <div>
                         <p className="font-medium text-gray-900">{cluster.name}</p>
                         <p className="text-sm text-gray-500">
-                          {gpuNodeCount ?? '?'} GPU nodes · {clusterUsed}/{clusterTotal} GPUs
+                          {cluster.node_count ?? '?'} cluster nodes · {gpuNodeCount ?? '?'} GPU nodes · {clusterUsed}/{clusterTotal} GPUs
                           {cluster.gpu_type && <span className="ml-1">({cluster.gpu_type})</span>}
                           {cost && !cost.error && cost.total_cost != null && (
                             <span className="ml-1">

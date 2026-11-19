@@ -254,6 +254,11 @@ def is_lock_only(spec: dict) -> bool:
     return bool(spec.get("lockUntil"))
 
 
+def is_cluster_lock(spec: dict) -> bool:
+    """Only a lock instance holds quota. A recurring parent creates instances."""
+    return not spec.get("schedule") and is_lock_only(spec)
+
+
 def list_cluster_locks(
     namespace: Optional[str] = None, cluster: Optional[str] = None
 ) -> list:
@@ -263,7 +268,7 @@ def list_cluster_locks(
     """
     locks = [
         j for j in list_fournos_jobs(namespace)
-        if is_lock_only(j.get("spec", {}))
+        if is_cluster_lock(j.get("spec", {}))
     ]
     if cluster:
         locks = [j for j in locks if j.get("spec", {}).get("cluster") == cluster]

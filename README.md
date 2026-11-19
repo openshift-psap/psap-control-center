@@ -18,7 +18,7 @@ oc get route psap-control-center -n <namespace> \
 - **Namespace Enforcement** — GPU reservations automatically provision isolated Kubernetes namespaces with `ResourceQuota` and optional DRA `ResourceClaimTemplate`. Namespaces are cleaned up on completion, cancellation, or deletion.
 - **Calendar Views** — Weekly preview with overlapping reservation display (index-based opacity for distinguishing coexisting reservations), plus full month/week/day calendar.
 - **Hearth Integration** — Discover GPU inventory from `FournosCluster` resources on a shared Hearth/Fournos management cluster.
-- **Fournos Testing (development)** — Monitor live and archived test runs, submit schema-driven Forge jobs, schedule recurring work, and coordinate cluster locks from the Testing tab.
+- **Testing (development)** — Monitor live and archived test runs, submit schema-driven Forge jobs, schedule recurring work, and coordinate cluster locks.
 - **Cost Explorer & Billing** — Compare public, estimated, and actual infrastructure costs using cluster snapshots and uploaded IBM Cloud billing reports.
 - **Slack Notifications** — Configure an incoming webhook for reservation notifications from the admin settings page.
 - **Role-Based Access** — Public read access, signed-in reservation workflows, and administrator-only cluster, integration, billing, and cost management.
@@ -78,9 +78,9 @@ access to the OpenShift API.
 
 ## Testing Tab (Development)
 
-The development branch includes a Fournos-backed Testing workspace. It uses the
-same management-cluster connection as Hearth, while the browser communicates
-with Control Center's API.
+The Testing tab brings the team's test runs into one workspace. Its Fournos
+integration uses the same management-cluster connection as Hearth. The browser
+communicates with Control Center's API.
 
 - **Live Jobs** polls active `FournosJob` resources and opens a detail view with
   pipeline progress, pods, events, and streaming logs.

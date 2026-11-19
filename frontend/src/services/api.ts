@@ -4,6 +4,7 @@ import type {
   ClusterStatus,
   ClusterListResponse,
   ClusterTopology,
+  ScheduleCalendarWindow,
   OcpDetails,
   Operator,
   WorkloadsResponse,
@@ -711,8 +712,8 @@ export const fournosApi = {
     return data
   },
 
-  getClusterOverview: async (cluster: string) => {
-    const { data } = await api.get(`/fournos/clusters/${cluster}/overview`)
+  getClusterOverview: async (cluster: string, calendar?: ScheduleCalendarWindow) => {
+    const { data } = await api.get(`/fournos/clusters/${cluster}/overview`, { params: calendar })
     return data
   },
 

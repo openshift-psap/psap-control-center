@@ -208,7 +208,7 @@ async def lifespan(app: FastAPI):
     logger.info("Reservation status updater started")
 
     refresh_task = asyncio.create_task(cluster_refresh_task())
-    logger.info("Cluster auto-refresh task started (every 10 min)")
+    logger.info(f"Cluster auto-refresh task started (every {CLUSTER_REFRESH_INTERVAL}s)")
 
     from app.services.github_sync_service import periodic_refresh_task
     github_sync_task = asyncio.create_task(periodic_refresh_task())

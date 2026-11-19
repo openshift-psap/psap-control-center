@@ -278,8 +278,8 @@ export default function DynamicSubmitForm({
     Object.assign(initial, projectAdapter?.getInitialValues(activeMode) || {})
     setValues(initial)
     setQuickPresetKey('')
-    setPipelineKey('')
-  }, [activeMode, projectAdapter])
+    setPipelineKey(isRhaiisCpt ? '' : activeMode.pipelines[0]?.key || '')
+  }, [activeMode, projectAdapter, isRhaiisCpt])
 
   useEffect(() => {
     if (!selectedPipeline) {
@@ -653,7 +653,7 @@ export default function DynamicSubmitForm({
       {isMatrix && (
         <div className="rounded-lg border border-gray-200 p-4 space-y-3">
           <div>
-            <h3 className="text-sm font-semibold text-gray-900">CPT Pipeline</h3>
+            <h3 className="text-sm font-semibold text-gray-900">{isRhaiisCpt ? 'CPT Pipeline' : activeMode.label || 'Pipeline'}</h3>
             <p className="mt-1 text-xs text-gray-500">
               Choose a published pipeline first. Its model/workload matrix and supported cluster choices will be loaded below.
             </p>
@@ -667,7 +667,7 @@ export default function DynamicSubmitForm({
                 className="input mt-1"
                 required
               >
-                <option value="">-- Select a CPT pipeline --</option>
+                <option value="">{isRhaiisCpt ? '-- Select a CPT pipeline --' : '-- Select a pipeline --'}</option>
                 {activeMode.pipelines.map((p) => (
                   <option key={p.key} value={p.key}>
                     {p.label && p.label !== p.key ? `${p.label} (${p.key})` : p.key}
@@ -676,7 +676,10 @@ export default function DynamicSubmitForm({
               </select>
             ) : (
               <p className="mt-1 text-sm text-amber-700">
-                No CPT pipelines were resolved from Forge’s cpt.d catalog. Refresh the project form from the Basics panel and try again.
+                {isRhaiisCpt
+                  ? 'No CPT pipelines were resolved from Forge’s cpt.d catalog.'
+                  : `No pipelines are published for ${schema.title || project}.`}
+                {' '}Refresh the project form from the Basics panel and try again.
               </p>
             )}
             {selectedPipeline?.clusters?.length ? (
@@ -778,7 +781,7 @@ export default function DynamicSubmitForm({
                             <label className="inline-flex cursor-pointer items-center gap-2">
                               <input
                                 type="checkbox"
-                                aria-label={`Select model ${model.key}`}
+                                aria-label={`Select model ${isRhaiisCpt ? model.key : model.label || model.key}`}
                                 checked={selected}
                                 onChange={() =>
                                   setSelectedModels((prev) =>
@@ -788,7 +791,7 @@ export default function DynamicSubmitForm({
                                   )
                                 }
                               />
-                              <span title={formatOverridesTooltip(model.overrides)}>{model.key}</span>
+                              <span title={formatOverridesTooltip(model.overrides)}>{isRhaiisCpt ? model.key : model.label || model.key}</span>
                               {model.tp && model.tp > 1 && (
                                 <span className="whitespace-nowrap text-gray-400">({model.tp} GPU)</span>
                               )}
@@ -932,7 +935,7 @@ export default function DynamicSubmitForm({
                     ) : (
                       <PlayIcon className="h-4 w-4" />
                     )}
-                    {isMatrix ? 'Submit CPT Pipeline' : 'Submit Job'}
+                    {isRhaiisCpt ? 'Submit CPT Pipeline' : isMatrix ? 'Submit Matrix' : 'Submit Job'}
                   </button>
                 </div>
               </div>

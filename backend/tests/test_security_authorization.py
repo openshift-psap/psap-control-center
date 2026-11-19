@@ -1,11 +1,14 @@
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from app.api import fournos, reservations
+from app.core.auth import COOKIE_NAME, create_session_token
+from app.models.fournos_job import FournosJob, FournosJobWorkItem
 from app.schemas.fournos import CreateClusterLockRequest
 from app.schemas.reservation import ModificationRequestCreate, ReservationUpdate
 
@@ -15,6 +18,67 @@ def _reservation(*, creator="google:owner", user_name="editable-beneficiary"):
         created_by_subject=creator,
         user_name=user_name,
     )
+
+
+@pytest.mark.parametrize("signed_in", [False, True])
+@pytest.mark.parametrize("tab", ["live", "history"])
+def test_job_list_owner_is_public_and_work_items_follow_session(monkeypatch, tab, signed_in):
+    owner = "Example Owner"
+    item = {"provider": "jira", "key": "TEST-1", "url": "https://example.org/TEST-1"}
+    live = {"metadata": {"name": "test-job"}, "spec": {"owner": owner}}
+    archived = FournosJob(name="test-job", owner=owner, project="demo", cluster="test",
+                          pipeline="", preset="", status="Succeeded", message="")
+    archived.work_items = [FournosJobWorkItem(**item)]
+    monkeypatch.setattr(fournos, "_get_live_jobs", AsyncMock(return_value=[live]))
+    monkeypatch.setattr(fournos, "AsyncSessionLocal", MagicMock())
+    monkeypatch.setattr(fournos.db_svc, "list_jobs", AsyncMock(return_value=([archived], 1)))
+    monkeypatch.setattr(fournos.db_svc, "get_work_items_by_job_names",
+                        AsyncMock(return_value={"test-job": [item]}))
+    app = FastAPI()
+    app.include_router(fournos.router)
+    with TestClient(app) as client:
+        if signed_in:
+            client.cookies.set(COOKIE_NAME, create_session_token("viewer", "user"))
+        response = client.get("/fournos/runs", params={"tab": tab})
+
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "private, no-store"
+    job, = response.json()["jobs"]
+    assert job["owner"] == owner
+    assert job["work_items"] == ([item] if signed_in else [])
+
+
+@pytest.mark.parametrize("signed_in", [False, True])
+@pytest.mark.parametrize("live", [False, True])
+def test_job_detail_shows_recorded_owner_and_protects_requester_data(monkeypatch, live, signed_in):
+    owner = "Example Owner"
+    work_item = {"provider": "jira", "key": "TEST-1", "url": "https://example.org/TEST-1"}
+    archived = FournosJob(name="test-job", owner=owner, project="demo", cluster="test", pipeline="",
+                          status="Succeeded", message="", requester_subject="google:fixture", requester_email="private@example.org")
+    archived.work_items = [FournosJobWorkItem(**work_item)]
+    job = {
+        "metadata": {"name": archived.name, "annotations": {fournos.REQUESTER_EMAIL_ANNOTATION: archived.requester_email}},
+        "spec": {"owner": owner},
+        "status": {"phase": "Pending"},
+    }
+    monkeypatch.setattr(fournos.k8s, "get_fournos_job", Mock(return_value=job if live else None))
+    monkeypatch.setattr(fournos.k8s, "list_pods_for_job", Mock(return_value=[]))
+    monkeypatch.setattr(fournos.k8s, "list_pipelineruns_for_job", Mock(return_value=[]))
+    monkeypatch.setattr(fournos, "AsyncSessionLocal", MagicMock())
+    monkeypatch.setattr(fournos.db_svc, "get_job_by_name", AsyncMock(return_value=archived))
+    app = FastAPI()
+    app.include_router(fournos.router)
+    with TestClient(app) as client:
+        if signed_in:
+            client.cookies.set(COOKIE_NAME, create_session_token("viewer", "user"))
+        response = client.get("/fournos/jobs/test-job")
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "private, no-store"
+    data = response.json()
+    assert data["job"]["spec"]["owner"] == owner
+    assert fournos.REQUESTER_EMAIL_ANNOTATION not in data["job"]["metadata"]["annotations"]
+    assert data["work_items"] == ([work_item] if signed_in else [])
+    assert data["can_edit_work_items"] is False
 
 
 def test_reservation_ownership_uses_immutable_subject():
@@ -110,20 +174,56 @@ def test_public_job_metadata_removes_requester_identity_without_mutation():
     assert fournos.REQUESTER_EMAIL_ANNOTATION in metadata["annotations"]
 
 
-def test_public_job_spec_hides_owner_without_mutation():
+@pytest.mark.parametrize("signed_in", [False, True])
+def test_recurring_lock_visibility_and_parent_classification(monkeypatch, signed_in):
+    parent = {
+        "metadata": {"name": "hold"}, "status": {"phase": "Recurring"},
+        "spec": {"cluster": "demo", "schedule": "0 12 1 * *", "lockOnly": True, "owner": "Holder"},
+    }
+    child = {"metadata": {"name": "hold-1"}, "spec": {"cluster": "demo", "lockOnly": True, "owner": "Holder"}}
+    normal = {
+        "metadata": {"name": "benchmark"}, "spec": {"cluster": "demo", "schedule": "0 1 * * *", "owner": "Runner"},
+    }
+    monkeypatch.setattr(fournos.k8s, "list_fournos_jobs", Mock(return_value=[parent, child, normal]))
+    archived_lock = FournosJob(name="hold-1", owner="Holder", status="Succeeded", fjob_spec={"lockUntil": "later"})
+    archived_run = FournosJob(name="run-1", owner="Runner", status="Succeeded")
+    monkeypatch.setattr(fournos, "AsyncSessionLocal", MagicMock())
+    monkeypatch.setattr(fournos.db_svc, "list_jobs_by_schedule", AsyncMock(return_value=[archived_lock, archived_run]))
+    app = FastAPI()
+    app.include_router(fournos.router)
+    with TestClient(app) as client:
+        if signed_in:
+            client.cookies.set(COOKIE_NAME, create_session_token("viewer", "user"))
+
+        def read(path):
+            response = client.get(f"/fournos/{path}")
+            assert response.status_code == 200, response.text
+            assert response.headers["cache-control"] == "private, no-store"
+            return response.json()
+
+        schedules = read("recurring-jobs")
+        children = read("recurring-jobs/hold/children")
+        overview = read("clusters/demo/overview")
+        assert overview["locks"] == read("cluster-locks")
+        assert [lock["name"] for lock in overview["locks"]] == ["hold-1"]
+        holder = "Holder" if signed_in else ""
+        assert overview["locks"][0]["owner"] == holder
+        for items in (schedules, overview["recurring_jobs"]):
+            assert {row["name"]: row["owner"] for row in items} == {"hold": holder, "benchmark": "Runner"}
+        assert [row["owner"] for row in children] == [holder, "Runner"]
+
+
+def test_public_job_spec_keeps_run_owner_and_hides_standalone_lock_holder():
     spec = {"cluster": "test-cluster", "owner": "Example Person"}
-
-    public_spec = fournos._public_job_spec(spec, include_owner=False)
-
-    assert public_spec == {"cluster": "test-cluster"}
-    assert spec["owner"] == "Example Person"
-    assert (
-        fournos._public_job_spec(spec, include_owner=True)["owner"]
-        == "Example Person"
-    )
+    assert fournos._public_job_spec(spec, include_lock_owner=False) == spec
+    lock = {**spec, "lockOnly": True}
+    assert "owner" not in fournos._public_job_spec(lock, include_lock_owner=False)
+    assert fournos._public_job_spec(lock, include_lock_owner=True) == lock
+    assert "owner" not in fournos._public_job_spec(spec, include_lock_owner=False, archived_lock=True)
+    assert lock["owner"] == "Example Person"
 
 
-def test_anonymous_cpt_list_does_not_filter_or_expose_owners(monkeypatch):
+def test_anonymous_cpt_list_shows_owners_without_enabling_owner_filter(monkeypatch):
     from starlette.requests import Request
 
     group = {
@@ -169,9 +269,9 @@ def test_anonymous_cpt_list_does_not_filter_or_expose_owners(monkeypatch):
     ))
 
     assert len(response["groups"]) == 1
-    assert response["groups"][0]["owners"] == []
-    assert response["groups"][0]["owner_label"] == ""
-    assert response["groups"][0]["attempts"][0]["owner"] == ""
+    assert response["groups"][0]["owners"] == ["runner"]
+    assert response["groups"][0]["owner_label"] == "runner"
+    assert response["groups"][0]["attempts"][0]["owner"] == "runner"
     assert response["filter_options"]["owners"] == []
 
 
@@ -240,9 +340,7 @@ def test_authenticated_cpt_list_retains_owner_filter(monkeypatch):
     assert response["filter_options"]["owners"] == ["other", "runner"]
 
 
-def test_anonymous_cpt_detail_does_not_expose_owners(monkeypatch):
-    from starlette.requests import Request
-
+def test_public_cpt_detail_shows_owners(monkeypatch):
     group = {
         "id": "group-id",
         "owners": ["runner"],
@@ -254,13 +352,11 @@ def test_anonymous_cpt_detail_does_not_expose_owners(monkeypatch):
         return [group] if group["id"] in group_ids else []
 
     monkeypatch.setattr(fournos, "_load_cpt_run_groups", load_groups)
-    request = Request({"type": "http", "headers": []})
+    response = asyncio.run(fournos.get_cpt_run_group("group-id"))
 
-    response = asyncio.run(fournos.get_cpt_run_group("group-id", request))
-
-    assert response["owners"] == []
-    assert response["owner_label"] == ""
-    assert response["attempts"][0]["owner"] == ""
+    assert response["owners"] == ["runner"]
+    assert response["owner_label"] == "runner"
+    assert response["attempts"][0]["owner"] == "runner"
 
 
 def test_live_summary_requires_successful_kubernetes_list(monkeypatch):

@@ -27,6 +27,7 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.fournos_job import FournosCptRunJobArchive, FournosJob
 from app.services.cpt_run_views import cpt_group_id
+from app.services.fournos_k8s_client import is_lock_only
 
 
 SOURCE_COLUMNS = (
@@ -130,7 +131,7 @@ def _to_control_center_record(row: Any) -> dict[str, Any]:
         "error_message": row.get("error_message") or "",
         "triggered_by_schedule": row.get("triggered_by_schedule"),
         "trigger_type": row.get("trigger_type") or "manual",
-        "is_lock": bool(spec.get("lockOnly")) if isinstance(spec, dict) else False,
+        "is_lock": is_lock_only(spec) if isinstance(spec, dict) else False,
     }
 
 

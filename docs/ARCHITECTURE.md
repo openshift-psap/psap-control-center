@@ -10,7 +10,7 @@ It provides:
 - A **reservation system** with full-cluster and partial GPU reservations, type-aware conflict detection, and namespace-level enforcement
 - **Dynamic Resource Allocation (DRA)** integration for GPU inventory and allocation tracking
 - **Hearth integration** for GPU discovery via FournosCluster CRDs
-- A **Fournos Testing workspace** for live monitoring, archived history, Forge job submission, recurring schedules, and cluster locks
+- A **Testing workspace** for live monitoring, archived history, Forge job submission, recurring schedules, and cluster locks
 - A **view-only public mode** with signed-in user and administrator write roles
 
 ---

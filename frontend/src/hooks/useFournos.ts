@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { fournosApi } from '../services/api'
+import { getPreferenceAccount, getViewerCacheKey } from '../stores/authStore'
 import type {
   FournosJobListResponse,
   FournosLiveJobSummaryResponse,
@@ -10,6 +11,7 @@ import type {
   ScheduleChildJob,
   ClusterLock,
   ClusterOverview,
+  ScheduleCalendarWindow,
   CreateClusterLockRequest,
   ForgeProject,
   GitHubPR,
@@ -61,7 +63,7 @@ export function useFournosJobs(params: {
   per_page?: number
 } = {}, enabled = true) {
   return useQuery<FournosJobListResponse>({
-    queryKey: ['fournos-jobs', params],
+    queryKey: ['fournos-jobs', params, getViewerCacheKey()],
     queryFn: () => fournosApi.listJobs(params),
     enabled,
     refetchInterval: params.tab === 'live' ? 5000 : false,
@@ -80,9 +82,11 @@ export function useFournosLiveJobSummary(enabled = true) {
   })
 }
 
+const historyPreferenceKey = (account = getPreferenceAccount()) => ['fournos-history-preference', account] as const
+
 export function useHistoryPreference(enabled: boolean) {
   return useQuery<HistoryPreferenceResponse>({
-    queryKey: ['fournos-history-preference'],
+    queryKey: historyPreferenceKey(),
     queryFn: () => fournosApi.getHistoryPreference(),
     enabled,
     retry: 1,
@@ -91,7 +95,7 @@ export function useHistoryPreference(enabled: boolean) {
 
 export function useHistoryFilterOptions(enabled: boolean) {
   return useQuery<HistoryFilterOptionsResponse>({
-    queryKey: ['fournos-history-filter-options'],
+    queryKey: ['fournos-history-filter-options', getViewerCacheKey()],
     queryFn: () => fournosApi.getHistoryFilterOptions(),
     enabled,
     staleTime: 5 * 60 * 1000,
@@ -101,11 +105,13 @@ export function useHistoryFilterOptions(enabled: boolean) {
 
 export function useSaveHistoryPreference() {
   const qc = useQueryClient()
-  return useMutation<HistoryPreferenceResponse, Error, HistoryViewState>({
-    mutationFn: (state) => fournosApi.saveHistoryPreference(state),
-    onSuccess: (data) => {
-      qc.setQueryData(['fournos-history-preference'], data)
+  return useMutation({
+    scope: { id: `history-preference-${getPreferenceAccount()}` },
+    mutationFn: ({ account, state }: { account: string; state: HistoryViewState }) => {
+      if (account !== getPreferenceAccount()) throw new Error('The signed-in account changed before saving the History view')
+      return fournosApi.saveHistoryPreference(state)
     },
+    onSuccess: (data, { account }) => qc.setQueryData(historyPreferenceKey(account), data),
     onError: (error) => toast.error(error.message || 'Failed to save History view'),
   })
 }
@@ -114,8 +120,9 @@ export function useResetHistoryPreference() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => fournosApi.resetHistoryPreference(),
-    onSuccess: () => {
-      qc.removeQueries({ queryKey: ['fournos-history-preference'] })
+    onMutate: () => historyPreferenceKey(),
+    onSuccess: (_data, _variables, key) => {
+      if (key) qc.removeQueries({ queryKey: key })
     },
     onError: (error) => toast.error(error.message || 'Failed to reset History view'),
   })
@@ -123,7 +130,7 @@ export function useResetHistoryPreference() {
 
 export function useFournosJob(name: string | undefined) {
   return useQuery<FournosJobDetailResponse>({
-    queryKey: ['fournos-job', name],
+    queryKey: ['fournos-job', name, getViewerCacheKey()],
     queryFn: () => fournosApi.getJob(name!),
     enabled: !!name,
     refetchInterval: 5000,
@@ -310,7 +317,7 @@ export function usePipelines() {
 
 export function useRecurringJobs(cluster?: string) {
   return useQuery<RecurringJob[]>({
-    queryKey: ['fournos-recurring-jobs', cluster],
+    queryKey: ['fournos-recurring-jobs', cluster, getViewerCacheKey()],
     queryFn: () => fournosApi.listRecurringJobs(cluster),
     refetchInterval: 30000,
   })
@@ -318,7 +325,7 @@ export function useRecurringJobs(cluster?: string) {
 
 export function useRecurringJobChildren(name: string | undefined) {
   return useQuery<ScheduleChildJob[]>({
-    queryKey: ['fournos-recurring-job-children', name],
+    queryKey: ['fournos-recurring-job-children', name, getViewerCacheKey()],
     queryFn: () => fournosApi.getRecurringJobChildren(name!),
     enabled: !!name,
     refetchInterval: 10000,
@@ -352,7 +359,7 @@ export function useDeleteRecurringJob() {
 
 export function useClusterLocks(cluster?: string) {
   return useQuery<ClusterLock[]>({
-    queryKey: ['fournos-cluster-locks', cluster],
+    queryKey: ['fournos-cluster-locks', cluster, getViewerCacheKey()],
     queryFn: () => fournosApi.listClusterLocks(cluster),
     refetchInterval: 30000,
   })
@@ -382,10 +389,11 @@ export function useDeleteClusterLock() {
   })
 }
 
-export function useClusterOverview(cluster: string | undefined) {
+export function useClusterOverview(cluster: string | undefined, calendar?: ScheduleCalendarWindow) {
   return useQuery<ClusterOverview>({
-    queryKey: ['fournos-cluster-overview', cluster],
-    queryFn: () => fournosApi.getClusterOverview(cluster!),
+    queryKey: ['fournos-cluster-overview', cluster, getViewerCacheKey(), calendar],
+    queryFn: () => fournosApi.getClusterOverview(cluster!, calendar),
+    staleTime: 0,
     enabled: !!cluster,
     refetchInterval: 15000,
   })
@@ -519,7 +527,7 @@ export function useCptRuns(params: {
   per_page?: number
 } = {}) {
   return useQuery<CptRunListResponse>({
-    queryKey: ['fournos-cpt-runs', params],
+    queryKey: ['fournos-cpt-runs', params, getViewerCacheKey()],
     queryFn: () => fournosApi.getCptRuns(params),
     refetchInterval: 30_000,
     retry: 1,
