@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Disclosure, Menu } from '@headlessui/react'
-import { ChevronDownIcon, EllipsisVerticalIcon, TrashIcon } from '@heroicons/react/24/outline'
+import { ChevronDownIcon, EllipsisVerticalIcon, EyeIcon, TrashIcon } from '@heroicons/react/24/outline'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { format, formatDistanceToNowStrict } from 'date-fns'
@@ -41,16 +41,22 @@ export default function ClusterCard({ cluster, latestCost, onRemove, removing }:
           {cluster.status}
         </span>
         <h3 className="min-w-0 flex-1 break-words font-semibold text-gray-900">
-          <Link to={`/clusters/${cluster.id}`} className="rounded-sm hover:underline focus-visible:outline-primary-600">
-            {cluster.name}
-          </Link>
+          {cluster.name}
         </h3>
-        {onRemove && (
-          <Menu as="div" className="relative shrink-0">
-            <Menu.Button aria-label={`Actions for ${cluster.name}`} className="rounded-md p-2 text-gray-500 hover:bg-gray-100 focus-visible:outline-primary-600">
-              <EllipsisVerticalIcon className="h-5 w-5" />
-            </Menu.Button>
-            <Menu.Items className="absolute right-0 z-10 mt-1 w-44 rounded-md border border-gray-200 bg-white p-1 shadow-lg focus:outline-none">
+        <Menu as="div" className="relative shrink-0">
+          <Menu.Button aria-label={`Actions for ${cluster.name}`} className="rounded-md p-2 text-gray-500 hover:bg-gray-100 focus-visible:outline-primary-600">
+            <EllipsisVerticalIcon className="h-5 w-5" />
+          </Menu.Button>
+          <Menu.Items className="absolute right-0 z-10 mt-1 w-44 rounded-md border border-gray-200 bg-white p-1 shadow-lg focus:outline-none">
+            <Menu.Item>
+              {({ active }) => (
+                <Link to={`/clusters/${cluster.id}`}
+                  className={clsx('flex items-center gap-2 rounded px-3 py-2 text-sm text-gray-800', active && 'bg-gray-100')}>
+                  <EyeIcon className="h-4 w-4" /> View cluster
+                </Link>
+              )}
+            </Menu.Item>
+            {onRemove && (
               <Menu.Item disabled={removing}>
                 {({ active }) => (
                   <button type="button" disabled={removing} onClick={onRemove}
@@ -59,9 +65,9 @@ export default function ClusterCard({ cluster, latestCost, onRemove, removing }:
                   </button>
                 )}
               </Menu.Item>
-            </Menu.Items>
-          </Menu>
-        )}
+            )}
+          </Menu.Items>
+        </Menu>
       </div>
 
       {cluster.description && (
