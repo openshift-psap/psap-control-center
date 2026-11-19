@@ -27,6 +27,7 @@ class FournosJob(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name = Column(String(255), unique=True, nullable=False, index=True)
+    namespace = Column(String(63), nullable=True)
     project = Column(String(255), nullable=False, index=True)
     preset = Column(String(255), default="")
     cluster = Column(String(255), nullable=False, index=True)

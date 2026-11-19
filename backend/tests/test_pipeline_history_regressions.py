@@ -596,6 +596,7 @@ def test_submission_persists_pr_provenance_before_kubernetes_create(monkeypatch)
     asyncio.run(fournos_api.submit_job(request, user=user))
 
     assert events == ["persist", "create"]
+    assert persisted["namespace"] == created_body["metadata"]["namespace"]
     assert persisted["source_repository"] == repository
     assert persisted["source_pr_number"] == 789
     assert persisted["source_requested_sha"] == sha
@@ -715,6 +716,7 @@ def test_matrix_recurring_submission_preserves_pr_provenance(monkeypatch):
 
     assert response["status"] == "ok"
     assert len(created) == len(persisted) == 3
+    assert [row["namespace"] for row in persisted] == [body["metadata"]["namespace"] for body in created]
     assert all("priority" not in body["spec"] for body in created)
     assert [
         body["spec"]["executionEngine"]["forge"]["args"][-2:]
@@ -1048,3 +1050,36 @@ def test_release_refresh_replaces_an_existing_cache(monkeypatch):
 
     assert refreshed == [{"tag_name": "new"}]
     assert fournos_api._releases_cache == refreshed
+
+
+@pytest.mark.asyncio
+async def test_archived_namespace_survives_config_changes_and_missing_watch_metadata(monkeypatch):
+    from fastapi import Request, Response
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine("sqlite+aiosqlite://")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    job = {
+        "metadata": {"name": "observed", "namespace": "original", "creationTimestamp": "2026-11-19T00:00:00Z"},
+        "spec": {"cluster": "demo"},
+        "status": {"phase": "Succeeded"},
+    }
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(database_core.Base.metadata.create_all)
+        async with sessions.begin() as session:
+            await db_service.upsert_job(session, **watcher._extract_forge_fields(job))
+            del job["metadata"]["namespace"]
+            await db_service.upsert_job(session, **watcher._extract_forge_fields(job))
+            job["metadata"]["name"] = "legacy"
+            await db_service.upsert_job(session, **watcher._extract_forge_fields(job))
+        monkeypatch.setattr(fournos_api, "AsyncSessionLocal", sessions)
+        monkeypatch.setattr(k8s, "get_fournos_job", lambda name: None)
+        monkeypatch.setattr(fournos_api.settings, "FOURNOS_NAMESPACE", "new-default")
+        request = Request({"type": "http", "headers": []})
+        observed = await fournos_api.get_job("observed", request, Response())
+        assert observed["job"]["metadata"]["namespace"] == "original"
+        legacy = await fournos_api.get_job("legacy", request, Response())
+        assert "namespace" not in legacy["job"]["metadata"]
+    finally:
+        await engine.dispose()

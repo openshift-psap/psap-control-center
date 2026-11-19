@@ -541,6 +541,8 @@ class RecurringJobResponse(BaseModel):
     schedule: str = ""  # cron expression, UTC
     phase: str = ""
     message: str = ""
+    next_scheduled_time: datetime | None = None
+    calendar_starts: dict[str, list[str]] = Field(default_factory=dict)
     last_scheduled_time: Optional[str] = None
     created_at: str = ""
 
@@ -591,6 +593,7 @@ class ClusterOverviewResponse(BaseModel):
     """
 
     cluster: str
+    as_of: datetime
     current_jobs: List[FournosJobSummary] = Field(default_factory=list)
     recurring_jobs: List[RecurringJobResponse] = Field(default_factory=list)
     locks: List[ClusterLockResponse] = Field(default_factory=list)

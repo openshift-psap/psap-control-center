@@ -667,9 +667,10 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
   }, [cluster, jobType])
   useEffect(() => {
     if (jobType !== 'forge' || step !== 2 || !clusterOverview || clusterOverview.cluster !== cluster || checkedActivity.current) return
+    if (clusterOverviewFetching || clusterOverviewError || !hasUpcomingClusterActivity(clusterOverview)) return
     checkedActivity.current = true
-    if (hasUpcomingClusterActivity(clusterOverview)) setActivityOpen(true)
-  }, [cluster, clusterOverview, jobType, step])
+    setActivityOpen(true)
+  }, [cluster, clusterOverview, clusterOverviewFetching, clusterOverviewError, jobType, step])
 
   const selectedProject = useMemo(
     () => projects?.find((p: ForgeProject) => p.name === project),

@@ -13,10 +13,11 @@ import threading
 import time
 import urllib.request
 from collections import OrderedDict, deque
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -83,7 +84,7 @@ from app.services import rhaiis_inference_logs
 from app.services import fournos_k8s_client as k8s
 from app.services import pipeline_definitions
 from app.services import project_adapters
-from app.services import project_ui_schema
+from app.services import project_ui_schema, recurring_schedule
 from app.services.source_provenance import extract_source_request_fields
 from app.services.failure_details import (
     first_actionable_failure,
@@ -612,7 +613,7 @@ def _db_job_to_fjob_dict(job) -> dict:
     return {
         "metadata": {
             "name": job.name,
-            "namespace": settings.FOURNOS_NAMESPACE,
+            **({"namespace": job.namespace} if job.namespace else {}),
             "creationTimestamp": (
                 job.created_at.isoformat() if job.created_at else ""
             ),
@@ -636,13 +637,16 @@ def _db_job_to_fjob_dict(job) -> dict:
 
 
 def _get_live_jobs_sync(*, raise_on_error: bool = False) -> list:
-    from dateutil.parser import parse
-
     jobs = (
         k8s.list_fournos_jobs(raise_on_error=True)
-        if raise_on_error
-        else k8s.list_fournos_jobs()
+        if raise_on_error else k8s.list_fournos_jobs()
     )
+    return _visible_live_jobs(jobs)
+
+
+def _visible_live_jobs(jobs: list) -> list:
+    from dateutil.parser import parse
+
     parent_subjects = {
         job.get("metadata", {}).get("name", ""): _live_job_requester_subject(job)
         for job in jobs
@@ -1623,6 +1627,7 @@ async def rerun_job(job_name: str, user=Depends(require_admin)):
             db_job = await db_svc.upsert_job(
                 session,
                 name=new_name,
+                namespace=body["metadata"]["namespace"],
                 project=project,
                 preset=" ".join(forge.get("args", [])),
                 cluster=spec.get("cluster", ""),
@@ -1764,6 +1769,7 @@ async def edit_and_submit_job(
             db_job = await db_svc.upsert_job(
                 session,
                 name=new_name,
+                namespace=body["metadata"]["namespace"],
                 project=project,
                 preset=" ".join(args),
                 cluster=cluster,
@@ -2072,6 +2078,7 @@ async def submit_job(req: SubmitJobRequest, user=Depends(require_auth)):
             db_job = await db_svc.upsert_job(
                 session,
                 name=job_name,
+                namespace=body["metadata"]["namespace"],
                 project=req.project,
                 preset=req.preset or " ".join(req.args),
                 cluster=req.cluster,
@@ -2734,6 +2741,7 @@ async def submit_matrix(req: SubmitMatrixRequest, user=Depends(require_auth)):
                 db_job = await db_svc.upsert_job(
                     session,
                     name=job_name,
+                    namespace=body["metadata"]["namespace"],
                     project=req.project,
                     preset="{} {}".format(model_item.key, " ".join(model_workloads)),
                     cluster=matrix_cluster,
@@ -3124,11 +3132,24 @@ async def github_sync_refresh(_=Depends(require_auth)):
 # fournos/fournos/handlers/lifecycle.py). No separate CRD, no Control
 # Center-managed CronJobs — this reads/writes real FournosJob objects only.
 
-def _recurring_job_to_response(job: dict) -> dict:
+def _recurring_job_to_response(
+    job: dict, *, as_of: datetime | None = None, calendar_date: date | None = None,
+    calendar_view: str = "day", zone: ZoneInfo | None = None,
+) -> dict:
     meta = job.get("metadata", {})
     spec = job.get("spec", {})
     status = job.get("status", {})
     forge = spec.get("executionEngine", {}).get("forge", {})
+    schedule = spec.get("schedule", "")
+    phase = status.get("phase", "")
+    next_time = None
+    starts = {}
+    if schedule and phase.lower() not in {"succeeded", "failed", "stopped", "cancelled", "canceled", "completed"}:
+        created = _parse_iso_utc(meta.get("creationTimestamp"))
+        now = as_of or datetime.now(timezone.utc)
+        next_time = recurring_schedule.next_start(schedule, max(now, created) if created else now)
+        if calendar_date and zone:
+            starts = recurring_schedule.calendar_starts(schedule, calendar_date, calendar_view, zone, created)
     return {
         "name": meta.get("name", ""),
         "project": forge.get("project", ""),
@@ -3136,8 +3157,10 @@ def _recurring_job_to_response(job: dict) -> dict:
         "pipeline": spec.get("pipeline", ""),
         "preset": " ".join(forge.get("args", [])),
         "owner": spec.get("owner") or "",
-        "schedule": spec.get("schedule", ""),
-        "phase": status.get("phase", ""),
+        "schedule": schedule,
+        "phase": phase,
+        "next_scheduled_time": next_time,
+        "calendar_starts": starts,
         "message": status.get("message", ""),
         "last_scheduled_time": status.get("lastScheduledTime"),
         "created_at": meta.get("creationTimestamp", ""),
@@ -3293,20 +3316,42 @@ async def delete_cluster_lock(name: str, _=Depends(require_admin)):
 # ─── routes: per-cluster overview ────────────────────────────────────────
 
 @router.get("/clusters/{cluster}/overview", response_model=ClusterOverviewResponse)
-async def cluster_overview(cluster: str, request: Request):
+async def cluster_overview(
+    cluster: str, request: Request, calendar_date: date | None = None,
+    calendar_view: Literal["day", "month"] = "day", calendar_timezone: str = "UTC",
+):
     """Backs the Submit page's live cluster activity and scheduling views.
 
     Current jobs are read live from the Fournos namespace, so the queue and
     running-job summary stays consistent with the Live Jobs and Schedules
     tabs.
     """
-    all_jobs = await _get_live_jobs(raise_on_error=True)
-    current = [
-        j for j in all_jobs if j.get("spec", {}).get("cluster") == cluster
-    ]
-    recurring = await asyncio.to_thread(k8s.list_recurring_jobs)
-    recurring = [j for j in recurring if j.get("spec", {}).get("cluster") == cluster]
-    locks = await asyncio.to_thread(k8s.list_cluster_locks, None, cluster)
+    zone = None
+    if calendar_date:
+        try:
+            zone = ZoneInfo(calendar_timezone)
+        except (ValueError, ZoneInfoNotFoundError):
+            raise HTTPException(422, "Unknown calendar timezone")
+        if calendar_view == "month":
+            calendar_date = calendar_date.replace(day=1)
+        if not 1 < calendar_date.year < 9999:
+            raise HTTPException(422, "Calendar date is outside the supported range")
+
+    def read_activity():
+        # Derive the queue, templates and locks from the same successful Kubernetes list.
+        all_jobs = k8s.list_fournos_jobs(raise_on_error=True)
+        as_of = datetime.now(timezone.utc)
+        jobs = [job for job in all_jobs if job.get("spec", {}).get("cluster") == cluster]
+        recurring = [
+            _recurring_job_to_response(
+                job, as_of=as_of, calendar_date=calendar_date, calendar_view=calendar_view, zone=zone,
+            )
+            for job in jobs if job.get("spec", {}).get("schedule")
+        ]
+        locks = [job for job in jobs if k8s.is_lock_only(job.get("spec", {}))]
+        return as_of, _visible_live_jobs(jobs), recurring, locks
+
+    as_of, current, recurring_rows, locks = await asyncio.to_thread(read_activity)
     include_owner = get_current_user(request) is not None
     current_summaries = [
         _live_job_to_summary(j) for j in current
@@ -3315,15 +3360,9 @@ async def cluster_overview(cluster: str, request: Request):
 
     return {
         "cluster": cluster,
+        "as_of": as_of,
         "current_jobs": current_summaries,
-        "recurring_jobs": _sort_latest(
-            [
-                _recurring_job_to_response(j)
-                for j in recurring
-            ],
-            "last_scheduled_time",
-            "created_at",
-        ),
+        "recurring_jobs": _sort_latest(recurring_rows, "last_scheduled_time", "created_at"),
         "locks": _sort_latest(
             [
                 _cluster_lock_to_response(j, include_owner=include_owner)

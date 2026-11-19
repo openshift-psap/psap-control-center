@@ -416,6 +416,7 @@ def _extract_forge_fields(job: dict) -> dict:
 
     return {
         "name": job_name,
+        "namespace": meta.get("namespace") or None,
         "project": forge.get("project", ""),
         "preset": preset,
         "cluster": spec.get("cluster", ""),

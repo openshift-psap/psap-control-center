@@ -15,15 +15,20 @@ describe('submission activity prompt', () => {
     expect(has()).toBe(false)
     expect(has(job('running', 'Running'))).toBe(true)
     expect(has(job('queued', 'Admitted'))).toBe(true)
+    expect(has(job('draining', 'Stopping'))).toBe(true)
     expect(has(job('near', 'Pending', '2026-10-27T02:00:00Z'))).toBe(true)
     expect(has(job('far', 'Pending', '2026-10-27T02:01:00Z'), job('finished', 'Succeeded'))).toBe(false)
   })
 
   it('checks recurring schedules across midnight and excludes expired locks', () => {
-    const recurring = (schedule: string, phase = 'Pending') => ({ ...empty, recurring_jobs: [{ schedule, phase } as RecurringJob] })
-    expect(hasUpcomingClusterActivity(recurring('0 1 * * *'), now)).toBe(true)
-    expect(hasUpcomingClusterActivity(recurring('0 3 * * *'), now)).toBe(false)
-    expect(hasUpcomingClusterActivity(recurring('0 1 * * *', 'Stopped'), now)).toBe(false)
+    const recurring = (schedule: string, next: string | null, phase = 'Recurring') => ({
+      ...empty, recurring_jobs: [{ schedule, phase, next_scheduled_time: next } as RecurringJob],
+    })
+    expect(hasUpcomingClusterActivity(recurring('*/15 * * * *', '2026-10-26T22:15:00Z'), now)).toBe(true)
+    expect(hasUpcomingClusterActivity(recurring('0 1 * * *', '2026-10-27T01:00:00Z'), now)).toBe(true)
+    expect(hasUpcomingClusterActivity(recurring('0 3 * * *', '2026-10-27T03:00:00Z'), now)).toBe(false)
+    expect(hasUpcomingClusterActivity(recurring('0 23 1 * *', '2026-11-01T23:00:00Z'), now)).toBe(false)
+    expect(hasUpcomingClusterActivity(recurring('0 1 * * *', null, 'Stopped'), now)).toBe(false)
     const lock = (start: string, until: string | null, phase = 'Running') => ({
       ...empty, locks: [{ created_at: start, lock_until: until, phase } as ClusterLock],
     })

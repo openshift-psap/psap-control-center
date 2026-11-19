@@ -11,6 +11,7 @@ import type {
   ScheduleChildJob,
   ClusterLock,
   ClusterOverview,
+  ScheduleCalendarWindow,
   CreateClusterLockRequest,
   ForgeProject,
   GitHubPR,
@@ -387,10 +388,11 @@ export function useDeleteClusterLock() {
   })
 }
 
-export function useClusterOverview(cluster: string | undefined) {
+export function useClusterOverview(cluster: string | undefined, calendar?: ScheduleCalendarWindow) {
   return useQuery<ClusterOverview>({
-    queryKey: ['fournos-cluster-overview', cluster, getViewerCacheKey()],
-    queryFn: () => fournosApi.getClusterOverview(cluster!),
+    queryKey: ['fournos-cluster-overview', cluster, getViewerCacheKey(), calendar],
+    queryFn: () => fournosApi.getClusterOverview(cluster!, calendar),
+    staleTime: 0,
     enabled: !!cluster,
     refetchInterval: 15000,
   })

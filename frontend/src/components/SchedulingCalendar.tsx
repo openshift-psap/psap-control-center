@@ -4,7 +4,7 @@ import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, XMarkIcon } from '@heroico
 import { useClusterOverview, useHoldSlot, useReleaseSlot, useSlotHolds } from '../hooks/useFournos'
 import { getUsername } from '../stores/authStore'
 import { browserTimezone, buildUtcCron, isoToLocalParts, zonedWallTimeToUtcDate } from '../utils/timezone'
-import { cronOccurrenceOnLocalDate, slotIndexFor, slotLabel, slotStart, SLOT_MINUTES, SLOTS_PER_DAY } from '../utils/cronOccurrences'
+import { slotIndexFor, slotLabel, slotStart, SLOT_MINUTES, SLOTS_PER_DAY } from '../utils/calendarSlots'
 import type { ClusterOverview, JobScheduling } from '../types'
 
 const WEEKDAY_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -79,9 +79,10 @@ function itemsForDaySorted(overview: ClusterOverview | undefined, y: number, m: 
     items.push({ hour: h, minute: mi, kind: 'job' })
   }
   for (const r of overview?.recurring_jobs ?? []) {
-    const occ = cronOccurrenceOnLocalDate(r.schedule, y, m, d, tz)
-    if (!occ) continue
-    items.push({ hour: occ.hour, minute: occ.minute, kind: 'recurring' })
+    for (const time of r.calendar_starts?.[dateKey] ?? []) {
+      const [hour, minute] = time.split(':').map(Number)
+      items.push({ hour, minute, kind: 'recurring' })
+    }
   }
   for (const lock of overview?.locks ?? []) {
     if (lock.scheduled_start_time) {
@@ -115,9 +116,10 @@ function occupancyForDay(overview: ClusterOverview | undefined, y: number, m: nu
     add(h, mi, { kind: 'job', label: `${job.name} (${job.project})`, runStart: true, runEnd: true })
   }
   for (const r of overview?.recurring_jobs ?? []) {
-    const occ = cronOccurrenceOnLocalDate(r.schedule, y, m, d, tz)
-    if (!occ) continue
-    add(occ.hour, occ.minute, { kind: 'recurring', label: `${r.name} (recurring, ${r.project})`, runStart: true, runEnd: true })
+    for (const time of r.calendar_starts?.[dateKey] ?? []) {
+      const [hour, minute] = time.split(':').map(Number)
+      add(hour, minute, { kind: 'recurring', label: `${r.name} (${time}, ${r.project})`, runStart: true, runEnd: true })
+    }
   }
   for (const lock of overview?.locks ?? []) {
     const label = `lock-${lock.owner || 'unknown'}-${lock.reason || lock.name}`
@@ -255,7 +257,6 @@ export default function SchedulingCalendar(props: SubmitProps | LockProps) {
   const tz = useMemo(() => browserTimezone(), [])
   const username = getUsername() ?? 'you'
 
-  const { data: overview } = useClusterOverview(cluster)
   const { data: holds } = useSlotHolds(cluster)
   const holdSlot = useHoldSlot()
   const releaseSlot = useReleaseSlot()
@@ -265,6 +266,12 @@ export default function SchedulingCalendar(props: SubmitProps | LockProps) {
   const [focusYear, setFocusYear] = useState(t0.y)
   const [focusMonth, setFocusMonth] = useState(t0.m) // 1-12
   const [focusDay, setFocusDay] = useState(t0.d)
+
+  const { data: overview, isError: scheduleError } = useClusterOverview(cluster, {
+    calendar_date: ymdKey(focusYear, focusMonth, view === 'month' ? 1 : focusDay),
+    calendar_view: view,
+    calendar_timezone: tz,
+  })
 
   // `selected` is the anchor (where the mouse went down — this is the only
   // slot we soft-hold against other users). `rangeEndSlot` is where the
@@ -423,7 +430,7 @@ export default function SchedulingCalendar(props: SubmitProps | LockProps) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs text-gray-400">Times shown in your local timezone ({tz}).</p>
+        <p className="text-xs text-gray-400">Times shown in your local timezone ({tz}). {view === 'month' && 'Each recurring schedule shows its first start of the day.'}</p>
         {!readOnly && (
           <button
             type="button"
@@ -435,6 +442,8 @@ export default function SchedulingCalendar(props: SubmitProps | LockProps) {
         )}
       </div>
 
+      {scheduleError && <p role="alert" className="text-sm text-amber-800">Cluster schedule unavailable.</p>}
+      {!overview && !scheduleError && <p role="status" className="text-sm text-gray-500">Loading cluster schedule…</p>}
       {holdErrorMsg && (
         <div className="flex items-center justify-between rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
           {holdErrorMsg}

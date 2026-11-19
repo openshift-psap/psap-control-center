@@ -696,6 +696,8 @@ export interface RecurringJob {
   schedule: string // cron expression, UTC
   phase: string
   message: string
+  next_scheduled_time: string | null
+  calendar_starts: Record<string, string[]>
   last_scheduled_time: string | null
   created_at: string
 }
@@ -734,7 +736,14 @@ export interface CreateClusterLockRequest {
   scheduled_start_time?: string | null
 }
 
+export interface ScheduleCalendarWindow {
+  calendar_date: string
+  calendar_view: 'month' | 'day'
+  calendar_timezone: string
+}
+
 export interface ClusterOverview {
+  as_of?: string
   cluster: string
   current_jobs: FournosJobSummary[]
   recurring_jobs: RecurringJob[]
