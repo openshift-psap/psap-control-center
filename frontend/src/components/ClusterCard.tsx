@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Disclosure, Menu } from '@headlessui/react'
-import { ChevronDownIcon, EllipsisVerticalIcon, ServerStackIcon, TrashIcon } from '@heroicons/react/24/outline'
+import { ChevronDownIcon, EllipsisVerticalIcon, TrashIcon } from '@heroicons/react/24/outline'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { format, formatDistanceToNowStrict } from 'date-fns'
@@ -33,48 +33,20 @@ export default function ClusterCard({ cluster, latestCost, onRemove, removing }:
 
   return (
     <article aria-label={cluster.name} className="card min-w-0 p-6 hover:shadow-md transition-shadow">
-      <div className="flex items-start justify-between">
-        <div className="flex min-w-0 items-center gap-3">
-          <div
-            className={`h-12 w-12 shrink-0 rounded-xl flex items-center justify-center ${
-              cluster.status === 'healthy'
-                ? 'bg-green-100'
-                : cluster.status === 'error'
-                ? 'bg-orange-100'
-                : 'bg-yellow-100'
-            }`}
-          >
-            <ServerStackIcon
-              className={`h-6 w-6 ${
-                cluster.status === 'healthy'
-                  ? 'text-green-600'
-                  : cluster.status === 'error'
-                  ? 'text-orange-600'
-                  : 'text-yellow-600'
-              }`}
-            />
-          </div>
-          <div>
-            <h3 className="break-words font-semibold text-gray-900">
-              <Link to={`/clusters/${cluster.id}`} className="rounded-sm hover:underline focus-visible:outline-primary-600">
-                {cluster.name}
-              </Link>
-            </h3>
-            <span
-              className={`badge mt-1 ${
-                cluster.status === 'healthy'
-                  ? 'badge-success'
-                  : cluster.status === 'error'
-                  ? 'badge-error'
-                  : 'badge-warning'
-              }`}
-            >
-              {cluster.status}
-            </span>
-          </div>
-        </div>
+      <div className="flex items-start gap-2">
+        <span className={clsx(
+          'badge mt-0.5 shrink-0',
+          cluster.status === 'healthy' ? 'badge-success' : cluster.status === 'error' ? 'badge-error' : 'badge-warning',
+        )}>
+          {cluster.status}
+        </span>
+        <h3 className="min-w-0 flex-1 break-words font-semibold text-gray-900">
+          <Link to={`/clusters/${cluster.id}`} className="rounded-sm hover:underline focus-visible:outline-primary-600">
+            {cluster.name}
+          </Link>
+        </h3>
         {onRemove && (
-          <Menu as="div" className="relative ml-2 shrink-0">
+          <Menu as="div" className="relative shrink-0">
             <Menu.Button aria-label={`Actions for ${cluster.name}`} className="rounded-md p-2 text-gray-500 hover:bg-gray-100 focus-visible:outline-primary-600">
               <EllipsisVerticalIcon className="h-5 w-5" />
             </Menu.Button>
