@@ -224,7 +224,14 @@ export interface TopologyNode {
   external_ip?: string
 }
 
-export interface ClusterTopology {
+export interface TopologyCheck {
+  last_checked_at: string | null
+  last_changed_at: string | null
+  check_due: boolean
+  last_check_failed: boolean
+}
+
+export interface ClusterTopology extends TopologyCheck {
   nodes: TopologyNode[]
   control_plane: TopologyNode[]
   workers: TopologyNode[]

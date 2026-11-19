@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Boolean, Text, JSON
+from sqlalchemy import Column, String, DateTime, Boolean, Text, JSON, ForeignKey
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
@@ -53,3 +53,15 @@ class Cluster(Base):
 
     def __repr__(self):
         return f"<Cluster(name={self.name}, status={self.status})>"
+
+
+class ClusterTopologySnapshot(Base):
+    __tablename__ = "cluster_topology_snapshots"
+
+    cluster_id = Column(String(36), ForeignKey("clusters.id", ondelete="CASCADE"), primary_key=True)
+    nodes = Column(JSON, nullable=True)
+    node_versions = Column(JSON, nullable=True)
+    checked_at = Column(DateTime, nullable=True)
+    changed_at = Column(DateTime, nullable=True)
+    checking_since = Column(DateTime, nullable=True)
+    last_check_failed = Column(Boolean, nullable=False, default=False)

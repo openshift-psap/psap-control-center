@@ -1,7 +1,8 @@
 import asyncio
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
@@ -10,7 +11,7 @@ from app.core.database import get_db
 from app.core.auth import require_admin, require_auth
 from app.services.cluster_service import ClusterService
 from app.services.kubernetes_service import KubernetesService
-from app.services import gpu_status_cache
+from app.services import gpu_status_cache, topology_snapshot
 from app.services.gpu_pod_history_service import record_gpu_snapshot
 from app.schemas.cluster import (
     ClusterCreate,
@@ -336,6 +337,7 @@ async def login_with_credentials(
         if not login_result.get("success"):
             raise HTTPException(status_code=400, detail=login_result.get("error"))
         
+        await topology_snapshot.clear_if_target_changed(db, cluster, login_result.get("api_server"))
         cluster.kubeconfig_path = login_result.get("kubeconfig_path")
         cluster.api_server_url = login_result.get("api_server")
         cluster.status = "pending"
@@ -382,6 +384,7 @@ async def reauthenticate_cluster(
         if not login_result.get("success"):
             raise HTTPException(status_code=400, detail=login_result.get("error"))
         
+        await topology_snapshot.clear_if_target_changed(db, cluster, login_result.get("api_server"))
         cluster.kubeconfig_path = login_result.get("kubeconfig_path")
         cluster.api_server_url = login_result.get("api_server")
         cluster.status = "pending"
@@ -400,24 +403,34 @@ async def reauthenticate_cluster(
 @router.get("/{cluster_id}/topology")
 async def get_cluster_topology(
     cluster_id: str,
-    db: AsyncSession = Depends(get_db)
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    known_changed_at: Optional[datetime] = None,
 ):
-    """Get cluster topology for visualization."""
-    service = ClusterService(db)
-    cluster = await service.get_cluster(cluster_id)
-    
+    """Read the saved graph, including its last successful check and change times."""
+    if not await ClusterService(db).get_cluster(cluster_id):
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    response.headers["Cache-Control"] = "private, no-store"
+    return await topology_snapshot.read(db, cluster_id, known_changed_at)
+
+
+@router.post("/{cluster_id}/topology/check")
+async def check_cluster_topology(
+    cluster_id: str, db: AsyncSession = Depends(get_db), known_changed_at: Optional[datetime] = None,
+):
+    cluster = await ClusterService(db).get_cluster(cluster_id)
     if not cluster:
         raise HTTPException(status_code=404, detail="Cluster not found")
-    
     if not cluster.kubeconfig_path:
         raise HTTPException(status_code=400, detail="Cluster has no kubeconfig configured")
-    
-    try:
-        k8s_service = KubernetesService(cluster.kubeconfig_path)
-        topology = await _run_in_thread(k8s_service.get_topology)
-        return topology
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    path = cluster.kubeconfig_path
+
+    def discover(versions, nodes):
+        return KubernetesService(path).check_topology(versions, nodes)
+
+    return await topology_snapshot.check(
+        db, cluster_id, lambda versions, nodes: _run_in_thread(discover, versions, nodes), known_changed_at,
+    )
 
 
 @router.get("/{cluster_id}/gpu-status", response_model=GpuAllocationStatusSchema)

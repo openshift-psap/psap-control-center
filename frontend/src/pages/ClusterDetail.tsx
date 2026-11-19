@@ -415,10 +415,15 @@ function WorkloadsByNode({
   nodes: TopologyNode[]
 }) {
   const [expandedNode, setExpandedNode] = useState<string | null>(null)
+  const knownNames = new Set(nodes.map(node => node.name))
+  const workloadNodes = [
+    ...nodes,
+    ...Object.keys(podsByNode).filter(name => !knownNames.has(name)).map(name => ({ name, status: null })),
+  ]
 
   return (
     <div className="space-y-3">
-      {nodes.map((node) => {
+      {workloadNodes.map((node) => {
         const pods = podsByNode[node.name] || []
         const isExpanded = expandedNode === node.name
         
@@ -431,12 +436,12 @@ function WorkloadsByNode({
               <div className="flex items-center gap-3">
                 <ServerStackIcon className="h-5 w-5 text-gray-400" />
                 <span className="font-medium text-gray-900">{node.name}</span>
-                <span className={clsx(
+                {node.status && <span className={clsx(
                   'badge',
                   node.status === 'Ready' ? 'badge-success' : 'badge-error'
                 )}>
                   {node.status}
-                </span>
+                </span>}
               </div>
               <div className="flex items-center gap-4">
                 <span className="text-sm text-gray-500">{pods.length} pods</span>
@@ -587,10 +592,10 @@ export default function ClusterDetail() {
   // Hearth integration: try to find a matching FournosCluster by name
   const clusterName = cluster?.name || ''
   const { data: hearthCluster } = useHearthCluster(clusterName)
-  const { data: topology, isLoading: topologyLoading, isRefetchError: topologyRefreshFailed, dataUpdatedAt: topologyUpdatedAt } = useClusterTopology(id!)
-  const { data: ocpDetails, isLoading: ocpLoading } = useOcpDetails(id!)
+  const { data: topology, isFetching: checkingTopology, isError: topologyReadFailed, refetch: checkTopology } = useClusterTopology(id!, activeTab === 'topology')
+  const { data: ocpDetails, isLoading: ocpLoading } = useOcpDetails(id!, activeTab === 'ocp')
   const { data: operatorsData, isLoading: operatorsLoading } = useClusterOperators(id!)
-  const { data: workloads, isLoading: workloadsLoading } = useClusterWorkloads(id!)
+  const { data: workloads, isLoading: workloadsLoading } = useClusterWorkloads(id!, undefined, activeTab === 'workloads')
   const { data: clusterEstimate } = useClusterEstimate(isAdmin() ? id : undefined)
 
   const refreshStatus = useRefreshClusterStatus()
@@ -652,7 +657,10 @@ export default function ClusterDetail() {
             Upload Kubeconfig
           </button>
           <button
-            onClick={() => refreshStatus.mutate(id!)}
+            onClick={() => {
+              if (activeTab === 'topology') void checkTopology({ cancelRefetch: false })
+              refreshStatus.mutate(id!)
+            }}
             disabled={refreshStatus.isPending}
             className="btn-primary"
           >
@@ -761,14 +769,26 @@ export default function ClusterDetail() {
           {/* Topology Tab */}
           {activeTab === 'topology' && (
             <div>
-              {topologyRefreshFailed && topology && (
-                <p role="status" className="mb-3 text-sm text-amber-800">Couldn’t refresh topology. Showing the snapshot from {format(topologyUpdatedAt, 'MMM d, HH:mm')}.</p>
-              )}
-              {topologyLoading ? (
-                <div className="flex items-center justify-center h-64">
-                  <ArrowPathIcon className="h-8 w-8 animate-spin text-gray-400" />
+              {topology?.last_changed_at && topology.last_checked_at && (
+                <div className="mb-8 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                  <span>Last changed {format(new Date(topology.last_changed_at), 'MMM d, yyyy HH:mm:ss')}</span>
+                  <span>Last checked {format(new Date(topology.last_checked_at), 'MMM d, yyyy HH:mm:ss')}</span>
                 </div>
-              ) : topology ? (
+              )}
+              {(topologyReadFailed || topology?.last_check_failed) && (
+                <p role="status" className="mb-8 text-sm text-amber-800">
+                  {topology?.last_changed_at ? 'Couldn’t verify the latest topology. Showing the last saved graph.' : 'Couldn’t load topology. Select Refresh to try again.'}
+                </p>
+              )}
+              {checkingTopology && (
+                <p role="status" className="mb-8 flex items-center gap-2 text-sm text-gray-500">
+                  <ArrowPathIcon className="h-4 w-4 animate-spin" /> Checking topology…
+                </p>
+              )}
+              {!checkingTopology && !topologyReadFailed && !topology?.last_check_failed && !topology?.last_changed_at && (
+                <p role="status" className="text-sm text-gray-500">No saved topology yet. Select Refresh to check again.</p>
+              )}
+              {topology?.last_changed_at && (topology.total_nodes > 0 ? (
                 <TopologyVisualization
                   key={id}
                   controlPlane={topology.control_plane}
@@ -777,8 +797,8 @@ export default function ClusterDetail() {
                   zones={topology.zones}
                 />
               ) : (
-                <p className="text-center text-gray-500">Could not load topology</p>
-              )}
+                <p className="text-center text-gray-500">No nodes in the latest topology.</p>
+              ))}
             </div>
           )}
 
@@ -924,7 +944,7 @@ export default function ClusterDetail() {
                 <div className="flex items-center justify-center h-64">
                   <ArrowPathIcon className="h-8 w-8 animate-spin text-gray-400" />
                 </div>
-              ) : workloads && topology ? (
+              ) : workloads ? (
                 <div className="space-y-6">
                   <div className="flex items-center gap-4 text-sm text-gray-500">
                     <span>{workloads.total_pods} total pods</span>
@@ -934,7 +954,7 @@ export default function ClusterDetail() {
                   
                   <WorkloadsByNode 
                     podsByNode={workloads.pods_by_node} 
-                    nodes={topology.nodes}
+                    nodes={topology?.nodes ?? []}
                   />
                 </div>
               ) : (

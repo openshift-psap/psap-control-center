@@ -803,102 +803,94 @@ class KubernetesService:
             logger.warning(f"Could not list DeviceClasses: {e}")
             return []
 
-    def get_topology(self) -> Dict[str, Any]:
-        """Get cluster topology with detailed node information for visualization."""
-        try:
-            nodes = self.core_v1.list_node(
-                _request_timeout=K8S_API_TIMEOUT
-            )
-            pods = self.core_v1.list_pod_for_all_namespaces(
-                _request_timeout=K8S_API_TIMEOUT
-            )
-            
-            # Group pods by node
-            pods_by_node = {}
-            for pod in pods.items:
-                node_name = pod.spec.node_name
-                if node_name:
-                    if node_name not in pods_by_node:
-                        pods_by_node[node_name] = []
-                    pods_by_node[node_name].append({
-                        "name": pod.metadata.name,
-                        "namespace": pod.metadata.namespace,
-                        "phase": pod.status.phase,
-                    })
-            
-            topology_nodes = []
-            control_plane_nodes = []
-            worker_nodes = []
-            infra_nodes = []
-            
-            for node in nodes.items:
-                roles = self._get_node_roles(node)
-                labels = node.metadata.labels or {}
-                
-                # Parse instance type and zone from labels
-                instance_type = labels.get("node.kubernetes.io/instance-type", 
-                                          labels.get("beta.kubernetes.io/instance-type", "unknown"))
-                zone = labels.get("topology.kubernetes.io/zone",
-                                 labels.get("failure-domain.beta.kubernetes.io/zone", "unknown"))
-                region = labels.get("topology.kubernetes.io/region",
-                                   labels.get("failure-domain.beta.kubernetes.io/region", "unknown"))
-                
-                # Get GPU information from labels (populated by NVIDIA GPU Operator)
-                gpu_count = node.status.capacity.get("nvidia.com/gpu", "0")
-                gpu_product = labels.get("nvidia.com/gpu.product", "")
-                gpu_memory = labels.get("nvidia.com/gpu.memory", "")
-                
-                # Build GPU type string
-                if gpu_product:
-                    gpu_type = gpu_product.replace("-", " ")
-                    if gpu_memory:
-                        gpu_memory_gb = int(gpu_memory) // 1024 if gpu_memory.isdigit() else gpu_memory
-                        gpu_type = f"{gpu_type} ({gpu_memory_gb}GB)"
-                else:
-                    gpu_type = "N/A" if gpu_count == "0" else "Unknown GPU"
-                
-                node_info = {
-                    "name": node.metadata.name,
-                    "status": self._get_node_status(node),
-                    "roles": roles,
-                    "cpu": node.status.capacity.get("cpu", "0"),
-                    "memory": node.status.capacity.get("memory", "0"),
-                    "memory_gb": round(self._parse_memory(node.status.capacity.get("memory", "0")) / (1024**3), 1),
-                    "gpu": gpu_count,
-                    "gpu_type": gpu_type,
-                    "instance_type": instance_type,
-                    "zone": zone,
-                    "region": region,
-                    "pod_count": len(pods_by_node.get(node.metadata.name, [])),
-                    "os_image": node.status.node_info.os_image if node.status.node_info else "unknown",
-                    "kernel_version": node.status.node_info.kernel_version if node.status.node_info else "unknown",
-                    "container_runtime": node.status.node_info.container_runtime_version if node.status.node_info else "unknown",
-                    "kubelet_version": node.status.node_info.kubelet_version if node.status.node_info else "unknown",
-                    "architecture": node.status.node_info.architecture if node.status.node_info else "unknown",
-                    "internal_ip": self._get_node_ip(node, "InternalIP"),
-                    "external_ip": self._get_node_ip(node, "ExternalIP"),
-                }
-                
-                topology_nodes.append(node_info)
-                
-                if "master" in roles or "control-plane" in roles:
-                    control_plane_nodes.append(node_info)
-                elif "infra" in roles:
-                    infra_nodes.append(node_info)
-                else:
-                    worker_nodes.append(node_info)
-            
-            return {
-                "nodes": topology_nodes,
-                "control_plane": control_plane_nodes,
-                "workers": worker_nodes,
-                "infra": infra_nodes,
-                "total_nodes": len(topology_nodes),
-                "zones": list(set(n["zone"] for n in topology_nodes if n["zone"] != "unknown")),
+    def _topology_collection(self, resource, representation, params=()):
+        return self._api_client.call_api(
+            f"/api/v1/{resource}", "GET", query_params=list(params),
+            header_params={"Accept": f"application/json;as={representation};g=meta.k8s.io;v=v1,application/json;q=0.9"},
+            response_type="object", auth_settings=["BearerToken"],
+            _return_http_data_only=True, _request_timeout=(5, 20),
+        )
+
+    def _topology_pod_counts(self):
+        # The standard Pod table includes the assigned node and omits full pod objects.
+        result = self._topology_collection("pods", "Table", [("includeObject", "None")])
+        if result["kind"] == "PodList":
+            return Counter(pod["spec"].get("nodeName") for pod in result["items"])
+        columns = [column["name"] for column in result["columnDefinitions"]]
+        if "Node" in columns:
+            index = columns.index("Node")
+            return Counter(row["cells"][index] for row in result["rows"] or [])
+        # A server can supply a different table definition.
+        pods = self.core_v1.list_pod_for_all_namespaces(_request_timeout=(5, 20))
+        return Counter(pod.spec.node_name for pod in pods.items)
+
+    def check_topology(self, saved_versions, saved_nodes):
+        """Reuse node details unless Kubernetes reports a changed node revision."""
+        counts = self._topology_pod_counts()
+        if saved_versions is not None:
+            metadata = self._topology_collection("nodes", "PartialObjectMetadataList")
+            versions = {
+                item["metadata"]["name"]: item["metadata"]["resourceVersion"]
+                for item in metadata["items"]
             }
-        except Exception as e:
-            logger.error("Error getting topology:", e)
-            return {"nodes": [], "error": str(e)}
+            if versions == saved_versions:
+                nodes = [dict(node, pod_count=counts[node["name"]]) for node in saved_nodes]
+                return versions, nodes
+
+        nodes = self.core_v1.list_node(_request_timeout=(5, 20)).items
+        versions = {node.metadata.name: node.metadata.resource_version for node in nodes}
+        return versions, [
+            self._topology_node(node, counts[node.metadata.name])
+            for node in sorted(nodes, key=lambda node: node.metadata.name)
+        ]
+
+    def _topology_node(self, node, pod_count):
+        roles = sorted(self._get_node_roles(node))
+        labels = node.metadata.labels or {}
+
+        # Parse instance type and zone from labels
+        instance_type = labels.get("node.kubernetes.io/instance-type",
+                                  labels.get("beta.kubernetes.io/instance-type", "unknown"))
+        zone = labels.get("topology.kubernetes.io/zone",
+                         labels.get("failure-domain.beta.kubernetes.io/zone", "unknown"))
+        region = labels.get("topology.kubernetes.io/region",
+                           labels.get("failure-domain.beta.kubernetes.io/region", "unknown"))
+
+        # Get GPU information from labels (populated by NVIDIA GPU Operator)
+        gpu_count = node.status.capacity.get("nvidia.com/gpu", "0")
+        gpu_product = labels.get("nvidia.com/gpu.product", "")
+        gpu_memory = labels.get("nvidia.com/gpu.memory", "")
+
+        # Build GPU type string
+        if gpu_product:
+            gpu_type = gpu_product.replace("-", " ")
+            if gpu_memory:
+                gpu_memory_gb = int(gpu_memory) // 1024 if gpu_memory.isdigit() else gpu_memory
+                gpu_type = f"{gpu_type} ({gpu_memory_gb}GB)"
+        else:
+            gpu_type = "N/A" if gpu_count == "0" else "Unknown GPU"
+
+        return {
+            "name": node.metadata.name,
+            "status": self._get_node_status(node),
+            "roles": roles,
+            "cpu": node.status.capacity.get("cpu", "0"),
+            "memory": node.status.capacity.get("memory", "0"),
+            "memory_gb": round(self._parse_memory(node.status.capacity.get("memory", "0")) / (1024**3), 1),
+            "gpu": gpu_count,
+            "gpu_type": gpu_type,
+            "instance_type": instance_type,
+            "zone": zone,
+            "region": region,
+            "pod_count": pod_count,
+            "os_image": node.status.node_info.os_image if node.status.node_info else "unknown",
+            "kernel_version": node.status.node_info.kernel_version if node.status.node_info else "unknown",
+            "container_runtime": node.status.node_info.container_runtime_version if node.status.node_info else "unknown",
+            "kubelet_version": node.status.node_info.kubelet_version if node.status.node_info else "unknown",
+            "architecture": node.status.node_info.architecture if node.status.node_info else "unknown",
+            "internal_ip": self._get_node_ip(node, "InternalIP"),
+            "external_ip": self._get_node_ip(node, "ExternalIP"),
+        }
 
     def _get_node_ip(self, node, ip_type: str) -> Optional[str]:
         """Get node IP address of specified type."""

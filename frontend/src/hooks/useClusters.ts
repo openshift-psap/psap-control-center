@@ -129,7 +129,6 @@ export function useRefreshClusterStatus() {
     mutationFn: clusterApi.refreshStatus,
     onSuccess: (_data, id) => {
       queryClient.invalidateQueries({ queryKey: ['clusterStatus', id] })
-      queryClient.invalidateQueries({ queryKey: ['clusterTopology', id] })
       queryClient.invalidateQueries({ queryKey: ['clusters'] })
       toast.success('Cluster status refreshed')
     },
@@ -157,11 +156,11 @@ export function useUploadKubeconfig() {
   })
 }
 
-export function useOcpDetails(id: string) {
+export function useOcpDetails(id: string, enabled = true) {
   return useQuery({
     queryKey: ['ocpDetails', id],
     queryFn: () => clusterApi.getOcpDetails(id),
-    enabled: !!id,
+    enabled: !!id && enabled,
     staleTime: 60000,
   })
 }
@@ -175,11 +174,11 @@ export function useClusterOperators(id: string) {
   })
 }
 
-export function useClusterWorkloads(id: string, namespace?: string) {
+export function useClusterWorkloads(id: string, namespace?: string, enabled = true) {
   return useQuery({
     queryKey: ['clusterWorkloads', id, namespace],
     queryFn: () => clusterApi.getWorkloads(id, namespace),
-    enabled: !!id,
+    enabled: !!id && enabled,
     staleTime: 30000,
   })
 }

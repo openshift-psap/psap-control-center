@@ -4,6 +4,7 @@ import type {
   ClusterStatus,
   ClusterListResponse,
   ClusterTopology,
+  TopologyCheck,
   SidebarOption,
   SidebarPreferences,
   ScheduleCalendarWindow,
@@ -136,8 +137,13 @@ export const clusterApi = {
     return data
   },
 
-  getTopology: async (id: string, signal?: AbortSignal): Promise<ClusterTopology> => {
-    const { data } = await api.get(`/clusters/${id}/topology`, { signal })
+  getTopology: async (id: string, signal?: AbortSignal, knownChangedAt?: string | null): Promise<ClusterTopology | TopologyCheck> => {
+    const { data } = await api.get(`/clusters/${id}/topology`, { signal, params: { known_changed_at: knownChangedAt } })
+    return data
+  },
+
+  checkTopology: async (id: string, signal?: AbortSignal, knownChangedAt?: string | null): Promise<ClusterTopology | TopologyCheck> => {
+    const { data } = await api.post(`/clusters/${id}/topology/check`, undefined, { signal, params: { known_changed_at: knownChangedAt } })
     return data
   },
 
