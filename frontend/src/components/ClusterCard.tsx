@@ -145,7 +145,7 @@ export default function ClusterCard({ cluster, latestCost, onRemove, removing }:
 
 function CardDisclosure({ label, summary, children }: {
   label: string
-  summary?: string
+  summary?: ReactNode
   children: ReactNode
 }) {
   return (
@@ -178,8 +178,18 @@ function ActiveGpuWorkloads({ pods }: { pods: GpuPodInfo[] }) {
       {Array.from(groups).sort(([a], [b]) => a.localeCompare(b)).map(([namespace, group]) => {
         const gpus = group.reduce((sum, pod) => sum + pod.gpu_count, 0)
         return (
-          <CardDisclosure key={namespace} label={namespace}
-            summary={`${group.length} ${group.length === 1 ? 'pod' : 'pods'} · ${gpuCount(gpus)}`}>
+          <CardDisclosure
+            key={namespace}
+            label={namespace}
+            summary={
+              <>
+                {group.length} {group.length === 1 ? 'pod' : 'pods'} ·{' '}
+                <span className="inline-block whitespace-nowrap rounded bg-blue-100 px-1.5 py-0.5 font-medium tabular-nums text-blue-800">
+                  {gpuCount(gpus)}
+                </span>
+              </>
+            }
+          >
             <ul className="space-y-1.5">
               {group.map(pod => (
                 <li key={pod.name} className="flex justify-between gap-3 text-xs">
