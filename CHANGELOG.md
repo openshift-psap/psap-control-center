@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.1](https://github.com/openshift-psap/psap-control-center/compare/psap-control-center-v1.7.0...psap-control-center-v1.7.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* include dashboard and tools links in production builds ([2f931a0](https://github.com/openshift-psap/psap-control-center/commit/2f931a00cee9c4f0b15655f0fc4603b82faeeb34))
+* restore Performance Dashboard and Tools in production ([911d61f](https://github.com/openshift-psap/psap-control-center/commit/911d61fbec4fb1e64d4d5a1732e858d2e93fe5cb))
+
 ## [1.7.0](https://github.com/openshift-psap/psap-control-center/compare/psap-control-center-v1.6.0...psap-control-center-v1.7.0) (2026-11-19)
 
 
