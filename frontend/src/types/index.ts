@@ -145,7 +145,14 @@ export interface ClusterOccupancyResponse {
   } | null
 }
 
+export interface ClusterCostSummary {
+  billing_month: string
+  total_cost: number
+  currency: string
+}
+
 export interface ClusterListResponse {
+  latest_costs?: Record<string, ClusterCostSummary> | null
   clusters: Cluster[]
   total: number
 }
