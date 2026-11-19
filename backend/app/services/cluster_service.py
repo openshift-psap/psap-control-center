@@ -11,7 +11,7 @@ from app.models.cluster_cost import ClusterCost
 from app.models.node_history import NodeHistory
 from app.schemas.cluster import ClusterCostSummary, ClusterCreate, ClusterUpdate, ClusterStatus
 from app.services.kubernetes_service import KubernetesService
-from app.services import billing_csv_service
+from app.services import billing_csv_service, topology_snapshot
 from app.services.gpu_pod_history_service import record_gpu_snapshot
 from app.core.config import settings
 from app.utils.logger import create_logger
@@ -413,6 +413,7 @@ class ClusterService:
             cluster.name
         )
         
+        await topology_snapshot.clear_if_target_changed(self.db, cluster, parsed.get("api_server"))
         cluster.kubeconfig_path = kubeconfig_path
         cluster.api_server_url = parsed.get("api_server")
         cluster.status = "pending"

@@ -1,4 +1,6 @@
+import hashlib
 import os
+from pathlib import Path
 from threading import Lock
 from typing import List, Optional
 
@@ -35,15 +37,24 @@ def _hearth_kubeconfig_disk_path() -> str:
 class HearthService:
     def __init__(self):
         self._client_lock = Lock()
+        self._client_source = None
         self._custom_api: Optional[client.CustomObjectsApi] = None
+
+    def inventory_source(self) -> str:
+        path = settings.HEARTH_KUBECONFIG_PATH or self._saved_kubeconfig_path()
+        identity = Path(path).read_bytes() if path else os.environ.get("KUBERNETES_SERVICE_HOST", "in-cluster").encode()
+        digest = hashlib.sha256(settings.HEARTH_NAMESPACE.encode() + b"\0" + identity).hexdigest()
+        return "hearth:" + digest
 
     def _get_api(self) -> client.CustomObjectsApi:
         with self._client_lock:
-            if self._custom_api is None:
+            source = self.inventory_source()
+            if self._custom_api is None or self._client_source != source:
                 path = settings.HEARTH_KUBECONFIG_PATH or self._saved_kubeconfig_path()
                 cfg = management_configuration(path)
                 cfg.retries = 0
                 self._custom_api = client.CustomObjectsApi(client.ApiClient(configuration=cfg))
+                self._client_source = source
             return self._custom_api
 
     @staticmethod

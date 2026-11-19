@@ -3,10 +3,11 @@ import base64
 import hashlib
 import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Literal, get_args
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from google.auth import exceptions as google_auth_exceptions
 from google.auth.transport import requests as google_requests
@@ -25,6 +26,8 @@ from app.core.auth import (
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.user import User
+from app.models.user_preference import UserPreference
+from app.services.user_preference_service import save_preference
 from app.utils.logger import create_logger
 
 router = APIRouter()
@@ -32,6 +35,37 @@ logger = create_logger("AuthAPI")
 
 OAUTH_STATE_COOKIE = "google_oauth_state"
 GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+
+
+SidebarOption = Literal["desktop", "testing", "performance", "tools"]
+
+
+class SidebarChoice(BaseModel):
+    expanded: bool
+
+
+@router.get("/me/sidebar", response_model=dict[SidebarOption, bool])
+async def get_sidebar_preferences(
+    response: Response, user: dict = Depends(require_auth), db: AsyncSession = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    keys = [f"sidebar.{option}" for option in get_args(SidebarOption)]
+    rows = await db.execute(select(UserPreference.preference_key, UserPreference.value).where(
+        UserPreference.subject == user["subject"], UserPreference.preference_key.in_(keys),
+    ))
+    return {key.removeprefix("sidebar."): value["expanded"] for key, value in rows}
+
+
+@router.put("/me/sidebar/{option}", response_model=SidebarChoice)
+async def set_sidebar_preference(
+    option: SidebarOption, body: SidebarChoice,
+    user: dict = Depends(require_auth), db: AsyncSession = Depends(get_db),
+):
+    await save_preference(
+        db, subject=user["subject"], preference_key=f"sidebar.{option}", value=body.model_dump(),
+    )
+    await db.commit()
+    return body
 
 
 class LoginRequest(BaseModel):

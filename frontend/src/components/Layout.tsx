@@ -1,5 +1,7 @@
 import {
+  Children,
   Fragment,
+  useRef,
   useState,
   useEffect,
   useId,
@@ -33,32 +35,13 @@ import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { version as releaseVersion } from '../../package.json'
 import LoginModal from './LoginModal'
+import { useSidebarPreferences } from '../hooks/useSidebarPreferences'
 import { useAuthConfig } from '../hooks/useAuthConfig'
 import HearthConnectModal from './HearthConnectModal'
 import { isAuthenticated, isAdmin, getDisplayName, clearSession } from '../stores/authStore'
 import { authApi } from '../services/api'
 import { useHearthStatus, useDisconnectHearth } from '../hooks/useHearth'
 import { useReservations } from '../hooks/useReservations'
-
-type NavigationItem = {
-  name: string
-  href: string | null
-  icon: typeof HomeIcon
-  adminOnly?: boolean
-  comingSoon?: boolean
-  badge?: string
-}
-
-const navigation: NavigationItem[] = [
-  { name: 'Overview', href: '/dashboard', icon: HomeIcon },
-  { name: 'Clusters', href: '/clusters', icon: ServerStackIcon },
-  { name: 'Reservations', href: '/reservations', icon: ClipboardDocumentListIcon },
-  { name: 'Calendar', href: '/calendar', icon: CalendarDaysIcon },
-  { name: 'Testing', href: null, icon: BeakerIcon },
-  { name: 'Results', href: '/results', icon: ChartBarIcon, comingSoon: true },
-  { name: 'Cost Explorer', href: '/cost-explorer', icon: CurrencyDollarIcon, adminOnly: true },
-  { name: 'Settings', href: '/settings', icon: Cog6ToothIcon, adminOnly: true },
-]
 
 const testingSubnav = [
   { id: 'jobs', name: 'Jobs', href: '/testing?tab=live' },
@@ -67,9 +50,9 @@ const testingSubnav = [
   { id: 'schedules', name: 'Schedules & Locks', href: '/testing?tab=schedules' },
 ] as const
 
-const performanceDashboardSubnav = [
-  { name: 'Production', href: import.meta.env.VITE_PERFORMANCE_DASHBOARD_PRODUCTION_URL as string | undefined },
-  { name: 'Staging', href: import.meta.env.VITE_PERFORMANCE_DASHBOARD_STAGING_URL as string | undefined },
+const inferenceDashboards = [
+  { name: 'Inference Dashboard', href: import.meta.env.VITE_PERFORMANCE_DASHBOARD_PRODUCTION_URL as string | undefined },
+  { name: 'Inference Dashboard (Staging)', href: import.meta.env.VITE_PERFORMANCE_DASHBOARD_STAGING_URL as string | undefined },
 ].filter((item): item is { name: string; href: string } => Boolean(item.href?.trim()))
 
 const psapToolsSubnav = [
@@ -98,37 +81,79 @@ function SidebarTitle() {
   )
 }
 
-const externalSections = [
-  { name: 'Performance Dashboard', icon: ChartBarIcon, links: performanceDashboardSubnav, linkSuffix: ' Performance Dashboard' },
-  { name: 'Tools', icon: WrenchScrewdriverIcon, links: psapToolsSubnav, linkSuffix: '' },
-] as const
+function SidebarPageLink({ name, href, icon: Icon, onNavigate, children }: {
+  name: string
+  href: string
+  icon: typeof HomeIcon
+  onNavigate?: () => void
+  children?: ReactNode
+}) {
+  return (
+    <NavLink to={href} onClick={onNavigate} className={({ isActive }) => clsx(
+      'group flex min-w-0 flex-1 items-center gap-x-3 border-l-[3px] px-6 py-3 text-sm font-medium transition-colors',
+      isActive
+        ? 'border-l-[#73BCF7] bg-white/10 text-white lg:[&>svg]:text-[#73BCF7]'
+        : 'border-l-transparent text-gray-300 hover:bg-white/5 hover:text-white',
+    )}>
+      <Icon className="h-5 w-5 shrink-0 lg:text-gray-500 lg:group-hover:text-gray-300" />
+      {name}
+      {children}
+    </NavLink>
+  )
+}
 
-type SectionName = 'Testing' | (typeof externalSections)[number]['name']
+function subnavClass(active: boolean) {
+  return clsx(
+    'group ml-9 mr-3 flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]',
+    active ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5 hover:text-white',
+  )
+}
 
-function SidebarSection({ name, icon: Icon, expanded, onToggle, children }: {
-  name: SectionName
+function ExternalSidebarLink({ name, href, onNavigate }: { name: string; href: string; onNavigate?: () => void }) {
+  return (
+    <li>
+      <a href={href} target="_blank" rel="noopener noreferrer" onClick={onNavigate}
+        aria-label={`${name} (opens in a new tab)`} className={subnavClass(false)}>
+        {name}
+        <ArrowTopRightOnSquareIcon className="ml-auto h-4 w-4 shrink-0 text-gray-500 group-hover:text-gray-300" />
+      </a>
+    </li>
+  )
+}
+
+function SidebarSection({ name, icon: Icon, expanded, disabled, onToggle, pageLink, children }: {
+  name: string
   icon: typeof HomeIcon
   expanded: boolean
+  disabled: boolean
   onToggle: () => void
+  pageLink?: ReactNode
   children: ReactNode
 }) {
   const panelId = useId()
   const Chevron = expanded ? ChevronUpIcon : ChevronDownIcon
+  if (Children.count(children) === 0) return <li>{pageLink}</li>
 
   return (
     <li>
-      <button
-        type="button"
-        aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`}
-        aria-expanded={expanded}
-        aria-controls={panelId}
-        onClick={onToggle}
-        className="flex w-full items-center gap-3 border-l-[3px] border-transparent py-3 pl-6 pr-4 text-left text-sm font-medium text-gray-300 hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#73BCF7]"
-      >
-        <Icon className="h-5 w-5 shrink-0 text-gray-500" />
-        {name}
-        <Chevron aria-hidden="true" className="ml-auto h-4 w-4 shrink-0" />
-      </button>
+      <div className="flex">
+        {pageLink}
+        <button
+          type="button"
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`}
+          aria-expanded={expanded}
+          disabled={disabled}
+          aria-controls={panelId}
+          onClick={onToggle}
+          className={clsx(
+            'flex items-center gap-3 py-3 pr-4 text-left text-sm font-medium text-gray-300 hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#73BCF7]',
+            pageLink ? 'shrink-0 pl-3' : 'w-full border-l-[3px] border-transparent pl-6',
+          )}
+        >
+          {!pageLink && <><Icon className="h-5 w-5 shrink-0 text-gray-500" />{name}</>}
+          <Chevron aria-hidden="true" className="ml-auto h-4 w-4 shrink-0" />
+        </button>
+      </div>
       <ul id={panelId} hidden={!expanded} className="space-y-0.5 pb-2">
         {children}
       </ul>
@@ -230,13 +255,8 @@ const envBanner = import.meta.env.VITE_ENV_BANNER as string | undefined
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [expandedSections, setExpandedSections] = useState({
-    Testing: true,
-    'Performance Dashboard': true,
-    Tools: true,
-  })
-  const toggleSection = (name: SectionName) =>
-    setExpandedSections(current => ({ ...current, [name]: !current[name] }))
+  const sidebar = useSidebarPreferences()
+  const desktopOpen = sidebar.isExpanded('desktop')
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH
 
@@ -267,16 +287,17 @@ export default function Layout() {
     return isTestingPage && currentTestingTab === id
   }
 
-  const { data: hearthStatus } = useHearthStatus()
+  const { data: hearthStatus, refetch: checkHearth } = useHearthStatus()
+  const previousPath = useRef(location.pathname)
+  useEffect(() => {
+    if (previousPath.current !== location.pathname) {
+      previousPath.current = location.pathname
+      void checkHearth({ cancelRefetch: false })
+    }
+  }, [location.pathname, checkHearth])
   const admin = isAdmin()
   const { data: pendingReservations } = useReservations({ status: 'pending' }, { enabled: admin })
   const pendingCount = admin ? pendingReservations?.total ?? 0 : 0
-  const filteredNav = navigation
-    .filter(item => !item.adminOnly || admin)
-    .map(item => item.href === '/reservations' && pendingCount > 0
-      ? { ...item, badge: `${pendingCount} pending` }
-      : item)
-
   const syncAuth = useCallback(() => setAuthed(isAuthenticated()), [])
 
   useEffect(() => {
@@ -347,90 +368,59 @@ export default function Layout() {
   function renderNavigation(onNavigate?: () => void) {
     return (
       <ul className="flex flex-1 flex-col gap-y-0.5">
-        {filteredNav.map(item => {
-          if (item.href !== null) {
+        <li><SidebarPageLink name="Overview" href="/dashboard" icon={HomeIcon} onNavigate={onNavigate} /></li>
+        <li><SidebarPageLink name="Clusters" href="/clusters" icon={ServerStackIcon} onNavigate={onNavigate} /></li>
+        <SidebarSection name="Testing" icon={BeakerIcon} expanded={sidebar.isExpanded('testing')}
+          disabled={sidebar.busy} onToggle={() => sidebar.toggle('testing')}>
+          {testingSubnav.filter(sub => sub.id !== 'submit' || authed).map(sub => {
+            const active = isTestingSubnavActive(sub.id)
             return (
-              <li key={item.name}>
-                <NavLink
-                  to={item.href}
-                  onClick={onNavigate}
-                  className={({ isActive }) => clsx(
-                    'group flex min-w-0 flex-1 gap-x-3 border-l-[3px] px-6 py-3 text-sm font-medium transition-colors',
-                    isActive
-                      ? 'border-l-[#73BCF7] bg-white/10 text-white lg:[&>svg]:text-[#73BCF7]'
-                      : 'border-l-transparent text-gray-300 hover:bg-white/5 hover:text-white'
-                  )}
-                >
-                  <item.icon className="h-5 w-5 shrink-0 lg:text-gray-500 lg:group-hover:text-gray-300" />
-                  {item.name}
-                  {item.comingSoon && (
-                    <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs text-gray-500">Soon</span>
-                  )}
-                  {item.badge && (
-                    <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                      {item.badge}
-                    </span>
-                  )}
-                </NavLink>
+              <li key={sub.id}>
+                <Link to={sub.href} onClick={onNavigate}
+                  aria-current={active ? 'page' : undefined} className={subnavClass(active)}>
+                  {sub.name}
+                </Link>
               </li>
             )
-          }
-
-          return (
-            <Fragment key={item.name}>
-              <SidebarSection
-                name="Testing"
-                icon={item.icon}
-                expanded={expandedSections.Testing}
-                onToggle={() => toggleSection('Testing')}
-              >
-                {testingSubnav.filter(sub => sub.id !== 'submit' || authed).map(sub => {
-                  const active = isTestingSubnavActive(sub.id)
-                  return (
-                    <li key={sub.id}>
-                      <Link
-                        to={sub.href}
-                        onClick={onNavigate}
-                        aria-current={active ? 'page' : undefined}
-                        className={clsx(
-                          'ml-9 mr-3 flex rounded-md px-3 py-2 text-sm transition-colors',
-                          active ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5 hover:text-white'
-                        )}
-                      >
-                        {sub.name}
-                      </Link>
-                    </li>
-                  )
-                })}
-              </SidebarSection>
-              {externalSections.filter(section => section.links.length > 0).map(section => (
-                <SidebarSection
-                  key={section.name}
-                  name={section.name}
-                  icon={section.icon}
-                  expanded={expandedSections[section.name]}
-                  onToggle={() => toggleSection(section.name)}
-                >
-                  {section.links.map(external => (
-                    <li key={external.name}>
-                      <a
-                        href={external.href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={onNavigate}
-                        aria-label={`${external.name}${section.linkSuffix} (opens in a new tab)`}
-                        className="group ml-9 mr-3 flex items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]"
-                      >
-                        {external.name}
-                        <ArrowTopRightOnSquareIcon className="ml-auto h-4 w-4 shrink-0 text-gray-500 transition-colors group-hover:text-gray-300" />
-                      </a>
-                    </li>
-                  ))}
-                </SidebarSection>
-              ))}
-            </Fragment>
-          )
-        })}
+          })}
+        </SidebarSection>
+        {/* The dashboards keep the expansion preference from their previous sidebar section. */}
+        <SidebarSection name="Results" icon={ChartBarIcon} expanded={sidebar.isExpanded('performance')}
+          disabled={sidebar.busy} onToggle={() => sidebar.toggle('performance')}
+          pageLink={
+            <SidebarPageLink name="Results" href="/results" icon={ChartBarIcon} onNavigate={onNavigate}>
+              <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs text-gray-500">Soon</span>
+            </SidebarPageLink>
+          }>
+          {inferenceDashboards.map(link => <ExternalSidebarLink key={link.name} {...link} onNavigate={onNavigate} />)}
+        </SidebarSection>
+        <SidebarSection name="Tools" icon={WrenchScrewdriverIcon} expanded={sidebar.isExpanded('tools')}
+          disabled={sidebar.busy} onToggle={() => sidebar.toggle('tools')}>
+          <li>
+            <NavLink to="/reservations" onClick={onNavigate} className={({ isActive }) => subnavClass(isActive)}>
+              <ClipboardDocumentListIcon className="h-4 w-4 shrink-0" />
+              Reservations
+              {pendingCount > 0 && (
+                <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                  {pendingCount} pending
+                </span>
+              )}
+            </NavLink>
+          </li>
+          <li>
+            <NavLink to="/calendar" onClick={onNavigate} className={({ isActive }) => subnavClass(isActive)}>
+              <CalendarDaysIcon className="h-4 w-4 shrink-0" />
+              Calendar
+            </NavLink>
+          </li>
+          {psapToolsSubnav.map(link => <ExternalSidebarLink key={link.name} {...link} onNavigate={onNavigate} />)}
+        </SidebarSection>
+        {admin && (
+          <>
+            <li><SidebarPageLink name="Cost Explorer" href="/cost-explorer" icon={CurrencyDollarIcon} onNavigate={onNavigate} /></li>
+            <li><SidebarPageLink name="Settings" href="/settings" icon={Cog6ToothIcon} onNavigate={onNavigate} /></li>
+          </>
+        )}
       </ul>
     )
   }
@@ -438,7 +428,7 @@ export default function Layout() {
   return (
     <div
       className="min-h-screen bg-[#f0f0f0]"
-      style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+      style={{ '--sidebar-width': `${desktopOpen ? sidebarWidth : 0}px` } as CSSProperties}
     >
       {envBanner && (
         <div className="fixed top-0 inset-x-0 z-[60] bg-amber-500 text-black text-center text-xs font-bold tracking-widest uppercase py-1 select-none">
@@ -488,7 +478,8 @@ export default function Layout() {
       </Transition.Root>
 
       <div
-        className={clsx('hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:flex-col', envBanner && 'lg:top-7')}
+        id="desktop-sidebar"
+        className={clsx('hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex-col', desktopOpen && 'lg:flex', envBanner && 'lg:top-7')}
         style={{ width: sidebarWidth }}
       >
         <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-[#212427] px-0 pb-4">
@@ -543,6 +534,18 @@ export default function Layout() {
             onClick={() => setSidebarOpen(true)}
           >
             <span className="sr-only">Open sidebar</span>
+            <Bars3Icon className="h-6 w-6" />
+          </button>
+
+          <button
+            type="button"
+            className="-m-2.5 hidden rounded p-2.5 text-gray-300 hover:text-white lg:block"
+            aria-label={desktopOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+            aria-expanded={desktopOpen}
+            aria-controls="desktop-sidebar"
+            disabled={sidebar.busy}
+            onClick={() => sidebar.toggle('desktop')}
+          >
             <Bars3Icon className="h-6 w-6" />
           </button>
 

@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, it, vi } from 'vitest'
 import { clusterApi } from '../services/api'
 import { clearSession, setSession } from '../stores/authStore'
-import type { Cluster } from '../types'
+import type { Cluster, ClusterListResponse } from '../types'
 import Clusters from './Clusters'
 
 afterEach(() => { cleanup(); clearSession(); vi.restoreAllMocks() })
@@ -15,22 +15,25 @@ function renderClusters(admin = false) {
     id: name, name, status: 'healthy', is_active: true, color: '', provider: 'ibm',
     created_at: '', updated_at: '',
   }))
+  const summary = {
+    observed_at: new Date().toISOString(), fresh_until: new Date(Date.now() + 360_000).toISOString(), stale: false, total_gpus: 8, allocated_gpus: 4, gpu_nodes: 1,
+    namespaces: [
+      { namespace: 'bench', gpu_count: 3, pods: [
+        { name: 'training-a', namespace: 'bench', gpu_count: 2 },
+        { name: 'training-b', namespace: 'bench', gpu_count: 1 },
+      ] },
+      { namespace: 'inference', gpu_count: 1, pods: [{ name: 'serving', namespace: 'inference', gpu_count: 1 }] },
+    ],
+  }
   vi.spyOn(clusterApi, 'list').mockResolvedValue({
-    clusters, total: 2,
+    clusters, total: 2, gpu_summaries: { alpha: summary, beta: summary },
     latest_costs: { alpha: { billing_month: '2026-10', total_cost: 0, currency: 'USD' } },
   })
   vi.spyOn(clusterApi, 'getRefreshSchedule').mockResolvedValue({
     server_time: '', last_refresh: null, next_refresh: null, in_progress: false, total: 2, completed: 2,
   })
   vi.spyOn(clusterApi, 'getRefreshDisplayPreference').mockResolvedValue({ mode: 'countdown' })
-  vi.spyOn(clusterApi, 'getGpuStatus').mockResolvedValue({
-    gpu_allocation_mode: 'legacy', dra_available: false, total_gpus: 8, allocated_gpus: 4,
-    free_gpus: 4, gpu_types: [], gpu_pods: [
-      { name: 'training-a', namespace: 'bench', gpu_count: 2 },
-      { name: 'training-b', namespace: 'bench', gpu_count: 1 },
-      { name: 'serving', namespace: 'inference', gpu_count: 1 },
-    ],
-  })
+  vi.spyOn(clusterApi, 'getGpuStatus')
   const history = vi.spyOn(clusterApi, 'getGpuPodHistory').mockResolvedValue({ total: 0, pods: [] })
   const cost = vi.spyOn(clusterApi, 'getCost').mockResolvedValue([
     { billing_month: '2026-10', total_cost: 0, currency: 'USD' },
@@ -117,4 +120,22 @@ it('only removes the selected cluster after an admin explicitly confirms', async
   expect(remove).not.toHaveBeenCalled()
   fireEvent.click(nextDialog.getByRole('button', { name: 'Remove cluster' }))
   await waitFor(() => expect(remove.mock.calls.map(([id]) => id)).toEqual(['beta']))
+})
+
+it('moves a cluster ahead of idle peers as its allocated count changes', async () => {
+  const { client } = renderClusters()
+  await screen.findAllByRole('button', { name: /bench.*2 pods/ })
+  const order = () => screen.getAllByRole('article').map(card => card.getAttribute('aria-label'))
+  const list = await vi.mocked(clusterApi.list).mock.results[0].value as ClusterListResponse
+  const summaries = { ...list.gpu_summaries! }
+  const change = (name: string) => {
+    summaries[name] = { ...summaries[name], allocated_gpus: 0 }
+    client.setQueriesData({ queryKey: ['clusters'] }, { ...list, gpu_summaries: { ...summaries } })
+  }
+  expect(order()).toEqual(['alpha', 'beta'])
+  act(() => change('alpha'))
+  await waitFor(() => expect(order()).toEqual(['beta', 'alpha']))
+  act(() => change('beta'))
+  await waitFor(() => expect(order()).toEqual(['alpha', 'beta']))
+  expect(clusterApi.getGpuStatus).not.toHaveBeenCalled()
 })

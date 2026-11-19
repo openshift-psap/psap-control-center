@@ -1,6 +1,6 @@
 """Shared per-cluster GPU snapshots, ordered by the time the pod list was read."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -40,3 +40,33 @@ async def store(db: AsyncSession, cluster_id: str, observed_at: datetime, status
         select(ClusterGpuSnapshot.status).where(ClusterGpuSnapshot.cluster_id == cluster_id)
     )
     return winner.scalar_one()
+
+
+async def card_summaries(db: AsyncSession, cluster_ids: list[str]) -> dict:
+    if not cluster_ids:
+        return {}
+    cutoff = datetime.utcnow() - timedelta(seconds=GPU_STATUS_CACHE_TTL_SECONDS)
+    rows = await db.execute(select(ClusterGpuSnapshot).where(ClusterGpuSnapshot.cluster_id.in_(cluster_ids)))
+    summaries = {}
+    for row in rows.scalars():
+        status = row.status
+        # A failed legacy probe returns default zeros. DRA can measure allocations
+        # from claims even when it cannot list pods.
+        if status.get("gpu_allocation_mode", "legacy") == "legacy" and status.get("pod_inventory_complete") is False:
+            continue
+        namespaces = {}
+        for pod in status.get("gpu_pods", []):
+            ns = pod["namespace"]
+            group = namespaces.setdefault(ns, {"namespace": ns, "gpu_count": 0, "pods": []})
+            group["pods"].append(pod)
+            group["gpu_count"] += pod["gpu_count"]
+        observed = row.observed_at.replace(tzinfo=timezone.utc)
+        summaries[row.cluster_id] = {
+            "observed_at": observed, "fresh_until": observed + timedelta(seconds=GPU_STATUS_CACHE_TTL_SECONDS),
+            "stale": row.observed_at < cutoff,
+            "total_gpus": status["total_gpus"], "allocated_gpus": status["allocated_gpus"],
+            "gpu_nodes": sum(1 for node in status.get("nodes", []) if node["gpu_capacity"] > 0)
+                if status.get("nodes") else sum(t["node_count"] for t in status.get("gpu_types", [])),
+            "namespaces": [namespaces[name] for name in sorted(namespaces)],
+        }
+    return summaries

@@ -4,6 +4,10 @@ import type {
   ClusterStatus,
   ClusterListResponse,
   ClusterTopology,
+  PanelResponse,
+  TopologyCheck,
+  SidebarOption,
+  SidebarPreferences,
   ScheduleCalendarWindow,
   OcpDetails,
   Operator,
@@ -61,10 +65,16 @@ api.interceptors.response.use(
   }
 )
 
+export interface PanelParams {
+  signal?: AbortSignal
+  saved_only: boolean
+  known_changed_at?: string | null
+}
+
 export const clusterApi = {
-  list: async (activeOnly = false, includeLatestCost = false): Promise<ClusterListResponse> => {
+  list: async (activeOnly = false, includeLatestCost = false, includeGpuSummary = false): Promise<ClusterListResponse> => {
     const { data } = await api.get('/clusters', {
-      params: { active_only: activeOnly, include_latest_cost: includeLatestCost || undefined },
+      params: { active_only: activeOnly, include_latest_cost: includeLatestCost || undefined, include_gpu_summary: includeGpuSummary || undefined },
     })
     return data
   },
@@ -134,23 +144,28 @@ export const clusterApi = {
     return data
   },
 
-  getTopology: async (id: string): Promise<ClusterTopology> => {
-    const { data } = await api.get(`/clusters/${id}/topology`)
+  getTopology: async (id: string, signal?: AbortSignal, knownChangedAt?: string | null): Promise<ClusterTopology | TopologyCheck> => {
+    const { data } = await api.get(`/clusters/${id}/topology`, { signal, params: { known_changed_at: knownChangedAt } })
     return data
   },
 
-  getOcpDetails: async (id: string): Promise<OcpDetails> => {
-    const { data } = await api.get(`/clusters/${id}/ocp-details`)
+  checkTopology: async (id: string, signal?: AbortSignal, knownChangedAt?: string | null): Promise<ClusterTopology | TopologyCheck> => {
+    const { data } = await api.post(`/clusters/${id}/topology/check`, undefined, { signal, params: { known_changed_at: knownChangedAt } })
     return data
   },
 
-  getOperators: async (id: string): Promise<{ operators: Operator[]; total: number }> => {
-    const { data } = await api.get(`/clusters/${id}/operators`)
+  getOcpDetails: async (id: string, { signal, ...params }: PanelParams): Promise<PanelResponse<OcpDetails>> => {
+    const { data } = await api.get(`/clusters/${id}/ocp-details`, { signal, params })
     return data
   },
 
-  getWorkloads: async (id: string, namespace?: string): Promise<WorkloadsResponse> => {
-    const { data } = await api.get(`/clusters/${id}/workloads`, { params: { namespace } })
+  getOperators: async (id: string, { signal, ...params }: PanelParams): Promise<PanelResponse<{ operators: Operator[]; total: number }>> => {
+    const { data } = await api.get(`/clusters/${id}/operators`, { signal, params })
+    return data
+  },
+
+  getWorkloads: async (id: string, { signal, ...params }: PanelParams, namespace?: string): Promise<PanelResponse<WorkloadsResponse>> => {
+    const { data } = await api.get(`/clusters/${id}/workloads`, { signal, params: { ...params, namespace } })
     return data
   },
 
@@ -319,12 +334,21 @@ export const hearthApi = {
   },
 
   getCluster: async (name: string): Promise<HearthCluster> => {
-    const { data } = await api.get(`/hearth/clusters/${name}`)
+    const { data } = await api.get(`/hearth/clusters/${name}`, { params: { allow_saved_hardware: true } })
     return data
   },
 }
 
 export const authApi = {
+  getSidebarPreferences: async (): Promise<SidebarPreferences> => {
+    const { data } = await api.get('/auth/me/sidebar')
+    return data
+  },
+
+  saveSidebarChoice: async (option: SidebarOption, expanded: boolean): Promise<void> => {
+    await api.put(`/auth/me/sidebar/${option}`, { expanded })
+  },
+
   config: async (): Promise<AuthConfig> => {
     const { data } = await api.get('/auth/config')
     return data

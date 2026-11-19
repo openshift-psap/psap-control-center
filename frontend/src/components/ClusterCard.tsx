@@ -7,25 +7,19 @@ import { format, formatDistanceToNowStrict } from 'date-fns'
 import clsx from 'clsx'
 import { clusterApi } from '../services/api'
 import { useClusterCosts } from '../hooks/useClusterCost'
-import type { Cluster, ClusterCostSummary, GpuPodInfo } from '../types'
+import type { Cluster, ClusterCostSummary, CardGpuSummary, NamespaceGpuPods } from '../types'
 import GpuDonutChart from './GpuDonutChart'
 
-export default function ClusterCard({ cluster, latestCost, onRemove, removing }: {
+export default function ClusterCard({ cluster, gpuData, latestCost, onRemove, removing }: {
   cluster: Cluster
+  gpuData?: CardGpuSummary
   latestCost?: ClusterCostSummary | null
   onRemove?: () => void
   removing: boolean
 }) {
-  const { data: gpuData } = useQuery({
-    queryKey: ['gpu-status', cluster.id],
-    queryFn: () => clusterApi.getGpuStatus(cluster.id),
-    enabled: cluster.status === 'healthy',
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  })
   const cTotal = gpuData?.total_gpus ?? parseInt(cluster.gpu_count || '0')
   const cUsed = gpuData?.allocated_gpus ?? 0
-  const gpuNodeCount = gpuData?.gpu_types.reduce((sum, type) => sum + type.node_count, 0)
+  const gpuNodeCount = gpuData?.gpu_nodes
 
   const costSummary = latestCost
     ? `${billingMonth(latestCost.billing_month)} · ${money(latestCost.total_cost, latestCost.currency)}`
@@ -75,7 +69,7 @@ export default function ClusterCard({ cluster, latestCost, onRemove, removing }:
       )}
 
       <div className="mt-4 flex items-center gap-4">
-        {cTotal > 0 && (
+        {gpuData && cTotal > 0 && (
           <GpuDonutChart used={cUsed} total={cTotal} size={72} strokeWidth={7} />
         )}
         <dl className="cluster-card-metrics">
@@ -106,7 +100,13 @@ export default function ClusterCard({ cluster, latestCost, onRemove, removing }:
         </dl>
       </div>
 
-      {gpuData?.gpu_pods.length ? <ActiveGpuWorkloads pods={gpuData.gpu_pods} /> : null}
+      {gpuData && (
+        <p className="mt-2 text-xs text-gray-500">
+          {gpuData.stale ? 'Last known GPU usage' : 'GPU usage observed'}{' '}
+          <time dateTime={gpuData.observed_at}>{format(new Date(gpuData.observed_at), 'MMM d, HH:mm')}</time>
+        </p>
+      )}
+      {gpuData?.namespaces.length ? <ActiveGpuWorkloads namespaces={gpuData.namespaces} /> : null}
       <div className="mt-4 divide-y divide-gray-100 border-t border-gray-100">
         <CardDisclosure label="Past GPU workloads" summary="Up to 25 recent">
           <PastWorkloads clusterId={cluster.id} />
@@ -142,19 +142,11 @@ function CardDisclosure({ label, summary, children }: {
   )
 }
 
-function ActiveGpuWorkloads({ pods }: { pods: GpuPodInfo[] }) {
-  const groups = new Map<string, GpuPodInfo[]>()
-  for (const pod of pods) {
-    const group = groups.get(pod.namespace)
-    if (group) group.push(pod)
-    else groups.set(pod.namespace, [pod])
-  }
-
+function ActiveGpuWorkloads({ namespaces }: { namespaces: NamespaceGpuPods[] }) {
   return (
     <section className="mt-4 border-t border-gray-100 pt-3">
       <h4 className="text-xs font-medium text-gray-600">Active GPU workloads</h4>
-      {Array.from(groups).sort(([a], [b]) => a.localeCompare(b)).map(([namespace, group]) => {
-        const gpus = group.reduce((sum, pod) => sum + pod.gpu_count, 0)
+      {namespaces.map(({ namespace, pods: group, gpu_count: gpus }) => {
         return (
           <CardDisclosure
             key={namespace}
