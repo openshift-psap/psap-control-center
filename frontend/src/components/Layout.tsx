@@ -87,7 +87,7 @@ function clampSidebarWidth(width: number) {
 
 function SidebarTitle() {
   return (
-    <h1 className="font-display text-2xl font-bold text-white lg:text-xl">
+    <h1 className="font-display text-xl font-bold text-white lg:text-lg">
       PSAP Control{' '}
       <span className="whitespace-nowrap">
         Center <span className="font-sans text-xs font-medium text-gray-300">v{releaseVersion}</span>
@@ -100,7 +100,7 @@ function PerformanceDashboardSection({ onNavigate }: { onNavigate?: () => void }
   if (performanceDashboardSubnav.length === 0) return null
   return (
     <li>
-      <div className="flex items-center gap-x-3 border-l-[3px] border-l-transparent px-6 py-3 text-lg font-medium text-gray-300">
+      <div className="flex items-center gap-x-3 border-l-[3px] border-l-transparent px-6 py-3 text-sm font-medium text-gray-300">
         <ChartBarIcon className="h-5 w-5 shrink-0 text-gray-500" />
         <span>Performance Dashboard</span>
       </div>
@@ -113,7 +113,7 @@ function PerformanceDashboardSection({ onNavigate }: { onNavigate?: () => void }
               rel="noopener noreferrer"
               onClick={onNavigate}
               aria-label={`${item.name} Performance Dashboard (opens in a new tab)`}
-              className="group ml-9 mr-3 flex items-center gap-2 rounded-md px-3 py-2 text-lg text-gray-400 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]"
+              className="group ml-9 mr-3 flex items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]"
             >
               <span>{item.name}</span>
               <ArrowTopRightOnSquareIcon className="ml-auto h-4 w-4 shrink-0 text-gray-500 transition-colors group-hover:text-gray-300" />
@@ -129,7 +129,7 @@ function PsapToolsSection({ onNavigate }: { onNavigate?: () => void }) {
   if (psapToolsSubnav.length === 0) return null
   return (
     <li>
-      <div className="flex items-center gap-x-3 border-l-[3px] border-l-transparent px-6 py-3 text-lg font-medium text-gray-300">
+      <div className="flex items-center gap-x-3 border-l-[3px] border-l-transparent px-6 py-3 text-sm font-medium text-gray-300">
         <WrenchScrewdriverIcon className="h-5 w-5 shrink-0 text-gray-500" />
         <span>Tools</span>
       </div>
@@ -142,7 +142,7 @@ function PsapToolsSection({ onNavigate }: { onNavigate?: () => void }) {
               rel="noopener noreferrer"
               onClick={onNavigate}
               aria-label={`${item.name} (opens in a new tab)`}
-              className="group ml-9 mr-3 flex items-center gap-2 rounded-md px-3 py-2 text-lg text-gray-400 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]"
+              className="group ml-9 mr-3 flex items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-400 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]"
             >
               <span>{item.name}</span>
               <ArrowTopRightOnSquareIcon className="ml-auto h-4 w-4 shrink-0 text-gray-500 transition-colors group-hover:text-gray-300" />
@@ -406,7 +406,7 @@ export default function Layout() {
                             onClick={() => setSidebarOpen(false)}
                             className={({ isActive }) =>
                               clsx(
-                                'group flex gap-x-3 px-6 py-3 text-lg font-medium transition-colors border-l-[3px]',
+                                'group flex gap-x-3 px-6 py-3 text-sm font-medium transition-colors border-l-[3px]',
                                 isActive
                                   ? 'bg-white/10 text-white border-l-[#73BCF7]'
                                   : 'text-gray-300 hover:bg-white/5 hover:text-white border-l-transparent'
@@ -439,7 +439,7 @@ export default function Layout() {
                                         onClick={() => setSidebarOpen(false)}
                                         aria-current={isActive ? 'page' : undefined}
                                         className={clsx(
-                                          'ml-9 mr-3 flex rounded-md px-3 py-2 text-lg transition-colors',
+                                          'ml-9 mr-3 flex rounded-md px-3 py-2 text-sm transition-colors',
                                           isActive
                                             ? 'bg-white/10 text-white'
                                             : 'text-gray-400 hover:bg-white/5 hover:text-white'
@@ -490,7 +490,7 @@ export default function Layout() {
                     to={item.href}
                     className={({ isActive }) =>
                       clsx(
-                        'group flex gap-x-3 px-6 py-3 text-lg font-medium transition-all duration-200 border-l-[3px]',
+                        'group flex gap-x-3 px-6 py-3 text-sm font-medium transition-all duration-200 border-l-[3px]',
                         isActive
                           ? 'bg-white/10 text-white border-l-[#73BCF7]'
                           : 'text-gray-300 hover:bg-white/5 hover:text-white border-l-transparent'
@@ -529,7 +529,7 @@ export default function Layout() {
                                 to={subItem.href}
                                 aria-current={isActive ? 'page' : undefined}
                                 className={clsx(
-                                  'ml-9 mr-3 flex rounded-md px-3 py-2 text-lg transition-colors',
+                                  'ml-9 mr-3 flex rounded-md px-3 py-2 text-sm transition-colors',
                                   isActive
                                     ? 'bg-white/10 text-white'
                                     : 'text-gray-400 hover:bg-white/5 hover:text-white'
@@ -557,9 +557,9 @@ export default function Layout() {
                 rel="noopener noreferrer"
                 className="block rounded-lg bg-white/5 p-4 transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#73BCF7]"
               >
-                <p className="text-sm font-medium text-gray-500 uppercase tracking-wide">Organization</p>
-                <p className="mt-1 text-lg font-semibold text-white">OpenShift PSAP</p>
-                <p className="text-sm text-gray-400">Performance & Scale for AI Platforms</p>
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Organization</p>
+                <p className="mt-1 text-sm font-semibold text-white">OpenShift PSAP</p>
+                <p className="text-xs text-gray-400">Performance & Scale for AI Platforms</p>
               </a>
             </div>
           </nav>
