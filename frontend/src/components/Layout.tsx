@@ -42,28 +42,26 @@ import { useReservations } from '../hooks/useReservations'
 
 type NavigationItem = {
   name: string
-  href: string
+  href: string | null
   icon: typeof HomeIcon
   adminOnly?: boolean
   comingSoon?: boolean
   badge?: string
 }
 
-const testingHref = '/testing?tab=live'
-
 const navigation: NavigationItem[] = [
   { name: 'Overview', href: '/dashboard', icon: HomeIcon },
   { name: 'Clusters', href: '/clusters', icon: ServerStackIcon },
   { name: 'Reservations', href: '/reservations', icon: ClipboardDocumentListIcon },
   { name: 'Calendar', href: '/calendar', icon: CalendarDaysIcon },
-  { name: 'Testing', href: testingHref, icon: BeakerIcon },
+  { name: 'Testing', href: null, icon: BeakerIcon },
   { name: 'Results', href: '/results', icon: ChartBarIcon, comingSoon: true },
   { name: 'Cost Explorer', href: '/cost-explorer', icon: CurrencyDollarIcon, adminOnly: true },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon, adminOnly: true },
 ]
 
 const testingSubnav = [
-  { id: 'jobs', name: 'Jobs', href: testingHref },
+  { id: 'jobs', name: 'Jobs', href: '/testing?tab=live' },
   { id: 'submit', name: 'Submit', href: '/testing?tab=submit' },
   { id: 'cpt', name: 'CPT Jobs', href: '/testing?tab=cpt' },
   { id: 'schedules', name: 'Schedules & Locks', href: '/testing?tab=schedules' },
@@ -107,10 +105,9 @@ const externalSections = [
 
 type SectionName = 'Testing' | (typeof externalSections)[number]['name']
 
-function SidebarSection({ name, icon: Icon, link, expanded, onToggle, children }: {
+function SidebarSection({ name, icon: Icon, expanded, onToggle, children }: {
   name: SectionName
   icon: typeof HomeIcon
-  link?: ReactNode
   expanded: boolean
   onToggle: () => void
   children: ReactNode
@@ -120,28 +117,18 @@ function SidebarSection({ name, icon: Icon, link, expanded, onToggle, children }
 
   return (
     <li>
-      <div className="flex">
-        {link}
-        <button
-          type="button"
-          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`}
-          aria-expanded={expanded}
-          aria-controls={panelId}
-          onClick={onToggle}
-          className={clsx(
-            'flex items-center gap-3 text-left text-sm font-medium text-gray-300 hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#73BCF7]',
-            link ? 'shrink-0 px-4' : 'w-full border-l-[3px] border-transparent py-3 pl-6 pr-4'
-          )}
-        >
-          {!link && (
-            <>
-              <Icon className="h-5 w-5 shrink-0 text-gray-500" />
-              {name}
-            </>
-          )}
-          <Chevron aria-hidden="true" className="ml-auto h-4 w-4 shrink-0" />
-        </button>
-      </div>
+      <button
+        type="button"
+        aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 border-l-[3px] border-transparent py-3 pl-6 pr-4 text-left text-sm font-medium text-gray-300 hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#73BCF7]"
+      >
+        <Icon className="h-5 w-5 shrink-0 text-gray-500" />
+        {name}
+        <Chevron aria-hidden="true" className="ml-auto h-4 w-4 shrink-0" />
+      </button>
       <ul id={panelId} hidden={!expanded} className="space-y-0.5 pb-2">
         {children}
       </ul>
@@ -274,8 +261,9 @@ export default function Layout() {
   const isTestingJobDetail = location.pathname.startsWith('/testing/jobs/')
   const isTestingSubnavActive = (id: (typeof testingSubnav)[number]['id']) => {
     if (id === 'jobs') {
-      return isTestingJobDetail || (isTestingPage && (currentTestingTab === 'live' || currentTestingTab === 'history'))
+      return isTestingJobDetail || (isTestingPage && ['live', 'history', 'queued'].includes(currentTestingTab))
     }
+    if (id === 'schedules' && location.pathname.startsWith('/testing/schedules/')) return true
     return isTestingPage && currentTestingTab === id
   }
 
@@ -360,37 +348,39 @@ export default function Layout() {
     return (
       <ul className="flex flex-1 flex-col gap-y-0.5">
         {filteredNav.map(item => {
-          const link = (
-            <NavLink
-              to={item.href}
-              onClick={onNavigate}
-              className={({ isActive }) => clsx(
-                'group flex min-w-0 flex-1 gap-x-3 border-l-[3px] px-6 py-3 text-sm font-medium transition-colors',
-                isActive
-                  ? 'border-l-[#73BCF7] bg-white/10 text-white lg:[&>svg]:text-[#73BCF7]'
-                  : 'border-l-transparent text-gray-300 hover:bg-white/5 hover:text-white'
-              )}
-            >
-              <item.icon className="h-5 w-5 shrink-0 lg:text-gray-500 lg:group-hover:text-gray-300" />
-              {item.name}
-              {item.comingSoon && (
-                <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs text-gray-500">Soon</span>
-              )}
-              {item.badge && (
-                <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                  {item.badge}
-                </span>
-              )}
-            </NavLink>
-          )
-          if (item.href !== testingHref) return <li key={item.name}>{link}</li>
+          if (item.href !== null) {
+            return (
+              <li key={item.name}>
+                <NavLink
+                  to={item.href}
+                  onClick={onNavigate}
+                  className={({ isActive }) => clsx(
+                    'group flex min-w-0 flex-1 gap-x-3 border-l-[3px] px-6 py-3 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'border-l-[#73BCF7] bg-white/10 text-white lg:[&>svg]:text-[#73BCF7]'
+                      : 'border-l-transparent text-gray-300 hover:bg-white/5 hover:text-white'
+                  )}
+                >
+                  <item.icon className="h-5 w-5 shrink-0 lg:text-gray-500 lg:group-hover:text-gray-300" />
+                  {item.name}
+                  {item.comingSoon && (
+                    <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs text-gray-500">Soon</span>
+                  )}
+                  {item.badge && (
+                    <span className="ml-auto rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                      {item.badge}
+                    </span>
+                  )}
+                </NavLink>
+              </li>
+            )
+          }
 
           return (
             <Fragment key={item.name}>
               <SidebarSection
                 name="Testing"
                 icon={item.icon}
-                link={link}
                 expanded={expandedSections.Testing}
                 onToggle={() => toggleSection('Testing')}
               >
