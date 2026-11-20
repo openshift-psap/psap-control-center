@@ -6,7 +6,9 @@ import JobResultLinks from './JobResultLinks'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
-function show(runUrl = 'https://mlflow.example/run') {
+const runRoute = '/experiments/5/runs/1234567890abcdef1234567890abcdef'
+
+function show(runUrl = 'https://mlflow.example/base/#' + runRoute + '/artifacts?workspace=team') {
   render(<QueryClientProvider client={new QueryClient()}>
     <JobResultLinks job="demo" runUrl={runUrl} ciUrl="https://ci.example/artifacts" />
   </QueryClientProvider>)
@@ -27,6 +29,9 @@ it('browses on demand, opens files as plain text, and remembers the folder acros
   fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
   fireEvent.click(await screen.findByRole('button', { name: 'large.json' }))
   expect(screen.getByText(/exceeds the 64 KiB/)).toBeVisible()
+  const fileLink = screen.getByRole('link', { name: 'Open this file in MLflow' })
+  expect(fileLink).toHaveAttribute('href', 'https://mlflow.example/base/#' + runRoute + '/artifacts/large.json?workspace=team')
+  expect(fileLink).toHaveAttribute('target', '_blank')
   expect(preview).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'stage/' }))
   fireEvent.click(await screen.findByRole('button', { name: 'status.yaml' }))
@@ -39,6 +44,28 @@ it('browses on demand, opens files as plain text, and remembers the folder acros
   fireEvent.click(screen.getByRole('button', { name: 'Artifacts' }))
   await screen.findByRole('button', { name: 'stage/' })
   expect(screen.queryByText('<b>success</b>')).toBeNull()
+})
+
+it.each([
+  ['https://mlflow.example/ui/?lang=en#' + runRoute + '/artifacts/old/file?workspace=team',
+    'https://mlflow.example/ui/?lang=en#' + runRoute + '/artifacts/stage/log%20%231%3F.txt?workspace=team'],
+  ['https://mlflow.example/ui' + runRoute + '?workspace=team',
+    'https://mlflow.example/ui' + runRoute + '/artifacts/stage/log%20%231%3F.txt?workspace=team'],
+])('links to the selected nested file when the backend detects the preview limit for %s', async (runUrl, expected) => {
+  vi.spyOn(fournosApi, 'getMlflowDirectory').mockImplementation(async (_job, path) => ({
+    files: path ? [{ path: 'stage/log #1?.txt', file_size: null, is_dir: false }]
+      : [{ path: 'stage', file_size: null, is_dir: true }],
+    next_page_token: null,
+  }))
+  vi.spyOn(fournosApi, 'getMlflowPreview').mockRejectedValue(
+    Object.assign(new Error('Preview too large'), { isAxiosError: true, response: { status: 413 } }),
+  )
+  show(runUrl)
+  fireEvent.click(screen.getByRole('button', { name: 'Explore files' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'stage/' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'log #1?.txt' }))
+  expect(await screen.findByRole('link', { name: 'Open this file in MLflow' })).toHaveAttribute('href', expected)
+  expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
 })
 
 it('keeps the CI link when the job has no MLflow run', () => {

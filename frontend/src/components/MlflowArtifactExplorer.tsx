@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { isAxiosError } from 'axios'
 import { DocumentTextIcon, FolderIcon } from '@heroicons/react/24/outline'
 import { fournosApi } from '../services/api'
 import type { MlflowArtifact } from '../types'
@@ -12,6 +13,20 @@ interface Props {
   job: string
   runUrl: string
   open?: boolean
+}
+
+function artifactUrl(runUrl: string, path: string) {
+  const url = new URL(runUrl)
+  const pathRouted = url.pathname.includes('/runs/')
+  const fragment = url.hash.slice(1)
+  const route = pathRouted ? url.pathname : fragment.split('?')[0]
+  const runRoot = route.match(/^.*?\/runs\/[^/]+/)?.[0]
+  if (!runRoot) return
+
+  const destination = runRoot + '/artifacts/' + path.split('/').map(encodeURIComponent).join('/')
+  if (pathRouted) url.pathname = destination
+  else url.hash = destination + fragment.slice(route.length)
+  return url.href
 }
 
 export default function MlflowArtifactExplorer({ id, job, runUrl, open = true }: Props) {
@@ -33,6 +48,8 @@ export default function MlflowArtifactExplorer({ id, job, runUrl, open = true }:
     enabled: open && Boolean(file) && !tooLarge,
     staleTime: 30_000, gcTime: 0, retry: false, refetchOnWindowFocus: false,
   })
+  const exceedsLimit = tooLarge || (isAxiosError(preview.error) && preview.error.response?.status === 413)
+  const fileUrl = file && exceedsLimit ? artifactUrl(runUrl, file.path) : undefined
   const entries = (directory.data?.pages.flatMap(page => page.files) ?? [])
     .sort((a, b) => Number(b.is_dir) - Number(a.is_dir) || a.path.localeCompare(b.path))
   const parts = folder ? folder.split('/') : []
@@ -75,7 +92,11 @@ export default function MlflowArtifactExplorer({ id, job, runUrl, open = true }:
           {file ? <>
             <p className="break-all font-semibold text-gray-900">{file.path.split('/').pop()}</p>
             {file.file_size != null && <p className="mb-2 text-xs text-gray-500">{file.file_size.toLocaleString()} bytes</p>}
-            {tooLarge ? <p>This file exceeds the 64 KiB preview limit. Open it in MLflow.</p>
+            {exceedsLimit ? <p>This file exceeds the 64 KiB preview limit.{' '}
+              <a href={fileUrl ?? runUrl} target="_blank" rel="noopener noreferrer" className={linkStyle + ' underline'}>
+                {fileUrl ? 'Open this file in MLflow' : 'Open this run in MLflow'}
+              </a>.
+            </p>
               : preview.isPending ? <p>Loading preview…</p>
               : preview.isError ? <p role="alert">{preview.error.message}{' '}<button className={linkStyle} onClick={() => void preview.refetch()}>Retry</button></p>
               : preview.data.text ? <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded bg-gray-50 p-3 font-mono text-xs">{preview.data.text}</pre>
