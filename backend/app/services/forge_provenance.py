@@ -10,7 +10,7 @@ from typing import Optional
 import httpx
 
 from app.core.config import settings
-from app.services.mlflow_failure_provider import _client_options, parse_run_reference
+from app.services.mlflow_failure_provider import mlflow_client_options, parse_run_reference
 
 
 FORGE_VERSION_FILENAME = "forge.git_version"
@@ -156,7 +156,7 @@ async def fetch_forge_versions(
     owns_client = client is None
     try:
         if client is None:
-            client = httpx.AsyncClient(**_client_options(workspace))
+            client = httpx.AsyncClient(**mlflow_client_options(workspace))
         return await _discover_versions(client, run_id)
     except (httpx.HTTPError, ValueError):
         return ForgeVersionResult(state="pending")

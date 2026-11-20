@@ -33,6 +33,17 @@ class MlflowCompletionResult:
     test_results: list[dict] = field(default_factory=list)
 
 
+def live_run_url(job: dict) -> str:
+    """Read the MLflow link published by the execution engine in job status."""
+    value = job
+    for key in ("status", "engineStatus", "forge", "exportArtifacts",
+                "caliper_artifacts_export", "backends", "mlflow", "run_url"):
+        if not isinstance(value, dict):
+            return ""
+        value = value.get(key)
+    return value if isinstance(value, str) else ""
+
+
 def parse_run_reference(run_url: str) -> Optional[tuple[str, str, str]]:
     parsed = urlparse(run_url or "")
     fragment_path, _, fragment_query = parsed.fragment.partition("?")
@@ -54,7 +65,7 @@ def parse_run_reference(run_url: str) -> Optional[tuple[str, str, str]]:
     return match.group(1), workspace, artifact_hint
 
 
-def _client_options(workspace: str) -> dict:
+def mlflow_client_options(workspace: str) -> dict:
     headers = {"X-MLFLOW-WORKSPACE": workspace} if workspace else {}
     auth = None
     if settings.MLFLOW_TRACKING_USERNAME and settings.MLFLOW_TRACKING_PASSWORD:
@@ -207,7 +218,7 @@ async def fetch_caliper_completion(
     owns_client = client is None
     try:
         if client is None:
-            client = httpx.AsyncClient(**_client_options(workspace))
+            client = httpx.AsyncClient(**mlflow_client_options(workspace))
         if artifact_hint.rsplit("/", 1)[-1] == METADATA_FILENAME:
             hinted = await _read_metadata(client, run_id, artifact_hint)
             if hinted is not None:

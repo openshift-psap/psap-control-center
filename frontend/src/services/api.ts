@@ -31,6 +31,7 @@ import type {
   RefreshDisplayMode,
   RefreshDisplayPreference,
   FournosLiveJobSummaryResponse,
+  MlflowDirectory,
 } from '../types'
 import { createLogger } from '../utils/logger'
 import { clearSession } from '../stores/authStore'
@@ -549,6 +550,20 @@ export const fournosApi = {
 
   getJob: async (name: string) => {
     const { data } = await api.get(`/fournos/jobs/${name}`)
+    return data
+  },
+
+  getMlflowDirectory: async (job: string, path: string, pageToken: string, signal: AbortSignal): Promise<MlflowDirectory> => {
+    const { data } = await api.get(`/fournos/jobs/${encodeURIComponent(job)}/mlflow/artifacts`, {
+      params: { path, page_token: pageToken || undefined }, signal,
+    })
+    return data
+  },
+
+  getMlflowPreview: async (job: string, path: string, signal: AbortSignal): Promise<{ text: string }> => {
+    const { data } = await api.get(`/fournos/jobs/${encodeURIComponent(job)}/mlflow/preview`, {
+      params: { path }, signal,
+    })
     return data
   },
 
