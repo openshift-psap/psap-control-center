@@ -12,7 +12,6 @@ interface Props {
   job: string
   runUrl?: string
   ciUrl?: string
-  viewer: string | null
 }
 
 function webLink(value?: string) {
@@ -23,15 +22,15 @@ function webLink(value?: string) {
   } catch { /* Ignore malformed links in historical records. */ }
 }
 
-export default function JobResultLinks({ job, runUrl: recordedRun, ciUrl: recordedCi, viewer }: Props) {
+export default function JobResultLinks({ job, runUrl: recordedRun, ciUrl: recordedCi }: Props) {
   const runUrl = webLink(recordedRun)
   const ciUrl = webLink(recordedCi)
   const panel = useId()
   const [open, setOpen] = useState(false)
   const [folder, setFolder] = useState('')
   const [file, setFile] = useState<MlflowArtifact | null>(null)
-  const enabled = Boolean(open && viewer && runUrl)
-  const key = ['mlflow-artifacts', viewer, job, runUrl]
+  const enabled = Boolean(open && runUrl)
+  const key = ['mlflow-artifacts', job, runUrl]
   const directory = useInfiniteQuery({
     queryKey: [...key, 'folder', folder],
     queryFn: ({ pageParam, signal }) => fournosApi.getMlflowDirectory(job, folder, pageParam, signal),
@@ -58,7 +57,7 @@ export default function JobResultLinks({ job, runUrl: recordedRun, ciUrl: record
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2" aria-label="Job results">
-        {viewer && runUrl && (
+        {runUrl && (
           <button type="button" className={action} aria-expanded={open} aria-controls={panel} onClick={() => setOpen(!open)}>
             {open ? <ChevronDownIcon className="h-4 w-4" /> : <ChevronRightIcon className="h-4 w-4" />} Explore files
           </button>
