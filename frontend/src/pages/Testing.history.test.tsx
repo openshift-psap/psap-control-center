@@ -123,9 +123,56 @@ describe('History table', () => {
     expect(screen.getByText('v1.2.3')).toBeInTheDocument()
     expect(screen.getByTitle('sha256:abcd')).toBeInTheDocument()
     expect(screen.getByText('00h 01m 00s')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'MLflow' })).toHaveAttribute('href', archived.mlflow_url)
+    expect(screen.getByRole('link', { name: 'Open in MLflow' })).toHaveAttribute('href', archived.mlflow_url)
     fireEvent.click(screen.getByRole('button', { name: 'Triggered By' }))
     expect(onSort).toHaveBeenCalledWith('triggered_by')
+  })
+
+  it('inspects the selected History row on demand and returns focus when collapsed, including signed out', async () => {
+    const list = vi.spyOn(fournosApi, 'getMlflowDirectory').mockImplementation(async (job, path) => ({
+      files: path
+        ? [{ path: 'stage/status.yaml', is_dir: false, file_size: 8 }]
+        : [{ path: job === archived.name ? 'stage' : 'other', is_dir: true, file_size: null }],
+      next_page_token: null,
+    }))
+    const preview = vi.spyOn(fournosApi, 'getMlflowPreview').mockResolvedValue({ text: 'passed: true' })
+    const jobs = [archived, { ...archived, name: 'second-run', mlflow_url: 'https://example.org/second' }]
+    render(<QueryClientProvider client={new QueryClient()}><MemoryRouter>
+      <JobsTable jobs={jobs} source="history" sort={{ by: 'date', dir: 'desc' }} onSort={vi.fn()} />
+    </MemoryRouter></QueryClientProvider>)
+    const [header, first, second] = screen.getAllByRole('row')
+    const inspect = within(first).getByRole('button', { name: 'Inspect' })
+    const external = within(first).getByRole('link', { name: 'Open in MLflow' })
+    expect(external).toHaveAttribute('target', '_blank')
+    expect(inspect.nextElementSibling).toBe(external)
+    expect(list).not.toHaveBeenCalled()
+    fireEvent.click(inspect)
+    const panel = screen.getByRole('region', { name: 'MLflow artifacts' })
+    expect(inspect).toHaveAttribute('aria-controls', panel.id)
+    expect(panel.closest('tr')).toBe(first.nextElementSibling)
+    expect(panel.closest('td')?.colSpan).toBe(within(header).getAllByRole('columnheader').length)
+    fireEvent.click(await within(panel).findByRole('button', { name: 'stage/' }))
+    fireEvent.click(await within(panel).findByRole('button', { name: 'status.yaml' }))
+    expect(await within(panel).findByText('passed: true')).toBeVisible()
+    expect(preview).toHaveBeenCalledWith(archived.name, 'stage/status.yaml', expect.any(AbortSignal))
+
+    const inspectSecond = within(second).getByRole('button', { name: 'Inspect' })
+    fireEvent.click(inspectSecond)
+    expect(await screen.findByRole('button', { name: 'other/' })).toBeVisible()
+    expect(screen.queryByText('passed: true')).toBeNull()
+    expect(inspect).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('region', { name: 'MLflow artifacts' }).closest('tr')).toBe(second.nextElementSibling)
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse file inspector' }))
+    expect(inspectSecond).toHaveFocus()
+    expect(inspectSecond).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('region', { name: 'MLflow artifacts' })).toBeNull()
+  })
+
+  it('omits MLflow actions when the archived run has no usable link', () => {
+    const jobs = [{ ...archived, mlflow_url: '' }, { ...archived, name: 'invalid', mlflow_url: 'broken' }]
+    render(<MemoryRouter><JobsTable jobs={jobs} source="history" sort={{ by: 'date', dir: 'desc' }} onSort={vi.fn()} /></MemoryRouter>)
+    expect(screen.queryByRole('button', { name: 'Inspect' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Open in MLflow' })).toBeNull()
   })
 
   it('shows recorded owners and handles missing owners and partial provenance when signed out', () => {

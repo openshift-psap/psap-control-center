@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback, Fragment, type ComponentType } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback, useId, Fragment, type ComponentType } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Menu, Transition } from '@headlessui/react'
 import {
@@ -14,7 +14,7 @@ import {
   LockClosedIcon,
   WrenchScrewdriverIcon,
   MagnifyingGlassIcon,
-  ChartBarIcon,
+  ArrowTopRightOnSquareIcon,
   ChevronUpIcon,
   ChevronDownIcon,
   ChevronUpDownIcon,
@@ -44,6 +44,8 @@ import { workItemFromInput } from '../utils/workItems'
 import RunGroupSelector from '../components/RunGroupSelector'
 import CptJobsPanel from '../components/CptJobsPanel'
 import JobNameSearch from '../components/JobNameSearch'
+import MlflowArtifactExplorer from '../components/MlflowArtifactExplorer'
+import { webLink } from '../utils/webLink'
 import {
   filterCptClusterOptions,
   getHearthClusterOptions,
@@ -382,6 +384,10 @@ export function JobsTable({
   onRerun?: (name: string) => void
   onEdit?: (name: string) => void
 }) {
+  const panelId = useId()
+  const [inspected, setInspected] = useState<{ name: string; runUrl: string } | null>(null)
+  const inspectButton = useRef<HTMLButtonElement>(null)
+
   if (jobs.length === 0) {
     return (
       <div className="text-center py-12 text-gray-500">
@@ -391,7 +397,7 @@ export function JobsTable({
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto [container-type:inline-size]">
       <table className="min-w-full divide-y divide-gray-200">
         <thead className="bg-gray-50">
           <tr>
@@ -413,9 +419,11 @@ export function JobsTable({
             <th className="px-4 py-3" />
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-200">
-          {jobs.map((job) => (
-            <tr key={job.name} className="hover:bg-gray-50">
+        {jobs.map((job) => {
+          const runUrl = source === 'history' ? webLink(job.mlflow_url) : undefined
+          const expanded = Boolean(runUrl && inspected?.name === job.name && inspected.runUrl === runUrl)
+          return <tbody key={job.name}>
+            <tr className="hover:bg-gray-50">
               <td className="px-4 py-3 text-base">
                 <span className={clsx('px-2 py-0.5 rounded-full text-sm font-medium', STATUS_COLORS[job.status] || STATUS_COLORS.Unknown)}>
                   {job.status}
@@ -506,15 +514,20 @@ export function JobsTable({
               )}
               {source === 'history' && (
                 <td className="px-4 py-3 text-base text-center">
-                  {job.mlflow_url ? (
-                    <a
-                      href={job.mlflow_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-sm font-medium text-indigo-700 hover:bg-indigo-100"
-                    >
-                      <ChartBarIcon className="h-3.5 w-3.5" /> MLflow
-                    </a>
+                  {runUrl ? (
+                    <div className="inline-flex flex-col items-stretch gap-1 whitespace-nowrap">
+                      <button type="button" ref={expanded ? inspectButton : undefined}
+                        aria-expanded={expanded} aria-controls={expanded ? panelId : undefined}
+                        onClick={() => setInspected(expanded ? null : { name: job.name, runUrl })}
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-sm font-medium text-indigo-700 hover:bg-indigo-100">
+                        {expanded ? <ChevronUpIcon className="h-3.5 w-3.5" /> : <ChevronDownIcon className="h-3.5 w-3.5" />}
+                        {expanded ? 'Collapse' : 'Inspect'}
+                      </button>
+                      <a href={runUrl} target="_blank" rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-sm font-medium text-indigo-600 hover:bg-gray-50">
+                        Open in MLflow <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
+                      </a>
+                    </div>
                   ) : (
                     <span className="text-gray-300">-</span>
                   )}
@@ -535,8 +548,28 @@ export function JobsTable({
                 )}
               </td>
             </tr>
-          ))}
-        </tbody>
+            {expanded && runUrl && (
+              <tr>
+                <td colSpan={12} className="border-t border-indigo-100 bg-indigo-50/40 p-0">
+                  <div className="sticky left-0 w-full max-w-[100cqw] p-3">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <span className="break-all text-sm font-medium text-gray-700">MLflow files · {job.name}</span>
+                      <button type="button" aria-label="Collapse file inspector"
+                        className="inline-flex items-center gap-1 rounded px-2 py-1 text-sm font-medium text-indigo-600 hover:bg-indigo-50"
+                        onClick={() => {
+                          inspectButton.current?.focus()
+                          setInspected(null)
+                        }}>
+                        <ChevronUpIcon className="h-4 w-4" /> Collapse
+                      </button>
+                    </div>
+                    <MlflowArtifactExplorer key={runUrl} id={panelId} job={job.name} runUrl={runUrl} />
+                  </div>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        })}
       </table>
     </div>
   )
