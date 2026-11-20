@@ -27,7 +27,7 @@ from app.services.failure_details import (
     first_actionable_failure,
     merge_caliper_failure,
 )
-from app.services.mlflow_failure_provider import fetch_caliper_completion
+from app.services.mlflow_failure_provider import fetch_caliper_completion, live_run_url
 from app.services.forge_provenance import fetch_forge_versions
 from app.services.source_provenance import extract_source_request_fields
 from app.models.fournos_job import FournosJob
@@ -288,15 +288,7 @@ def _extract_forge_fields(job: dict) -> dict:
     forge = spec.get("executionEngine", {}).get("forge", {})
     status = job.get("status", {})
 
-    mlflow_info = (
-        status.get("engineStatus", {})
-        .get("forge", {})
-        .get("exportArtifacts", {})
-        .get("caliper_artifacts_export", {})
-        .get("backends", {})
-        .get("mlflow", {})
-    )
-    mlflow_url = mlflow_info.get("run_url", "") if mlflow_info else ""
+    mlflow_url = live_run_url(job)
 
     args = forge.get("args", [])
     preset = " ".join(args) if args else ""

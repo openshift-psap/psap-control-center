@@ -40,6 +40,8 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.fournos_job import FournosCptRunJobArchive, FournosJob
 from app.schemas.fournos import (
+    ArtifactDirectory,
+    ArtifactPreview,
     ClusterLockResponse,
     ClusterOverviewResponse,
     FournosLiveJobSummaryResponse,
@@ -74,6 +76,8 @@ from app.schemas.fournos import (
     WorkItemReference,
     WorkItemUpdate,
 )
+from app.services import mlflow_artifacts
+from app.services.mlflow_failure_provider import live_run_url
 from app.services import github_sync_service
 from app.services import slot_hold_service as slot_holds
 from app.schemas.ui_schema import ProjectUiSchemaResponse, UiPipeline
@@ -1384,7 +1388,7 @@ async def get_job(job_name: str, request: Request, response: Response):
                 "status": job.get("status", {}),
                 "source": "live",
                 "duration_seconds": None,
-                "mlflow_url": (archived.mlflow_url or "") if archived else "",
+                "mlflow_url": (archived.mlflow_url if archived else "") or live_run_url(job),
                 "ci_artifacts_url": "",
             },
             "pods": pods,
@@ -1473,6 +1477,39 @@ async def get_job(job_name: str, request: Request, response: Response):
         "run_groups": db_svc.serialize_run_groups(db_job),
         "can_edit_run_groups": _can_edit_run_groups(db_job, current_user),
     }
+
+
+async def _job_mlflow_url(job_name: str, _user=Depends(require_auth)) -> str:
+    async with AsyncSessionLocal() as session:
+        recorded = await session.scalar(select(FournosJob.mlflow_url).where(FournosJob.name == job_name))
+    if recorded:
+        return recorded
+    live = await asyncio.to_thread(k8s.get_fournos_job, job_name)
+    url = live_run_url(live or {})
+    if not url:
+        raise HTTPException(404, "No MLflow run is recorded for this job.")
+    return url
+
+
+@router.get("/jobs/{job_name}/mlflow/artifacts", response_model=ArtifactDirectory)
+async def list_job_artifacts(
+    response: Response,
+    path: str = Query("", max_length=2048),
+    page_token: str = Query("", max_length=4096),
+    run_url: str = Depends(_job_mlflow_url),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    return await mlflow_artifacts.list_directory(run_url, path, page_token)
+
+
+@router.get("/jobs/{job_name}/mlflow/preview", response_model=ArtifactPreview)
+async def preview_job_artifact(
+    response: Response,
+    path: str = Query(..., min_length=1, max_length=2048),
+    run_url: str = Depends(_job_mlflow_url),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    return await mlflow_artifacts.preview_file(run_url, path)
 
 
 def _rhaiis_inference_logs_job_eligible(job: dict) -> bool:

@@ -18,7 +18,7 @@ import {
   ForwardIcon,
 } from '@heroicons/react/24/solid'
 import clsx from 'clsx'
-import { isAdmin, isAuthenticated } from '../stores/authStore'
+import { getPreferenceAccount, isAdmin, isAuthenticated } from '../stores/authStore'
 import {
   useFournosJob,
   useCancelJob,
@@ -32,6 +32,7 @@ import {
 import type { PipelineStage, FournosPod } from '../types'
 import { workItemFromInput } from '../utils/workItems'
 import { buildFournosJobYaml } from '../utils/fournosJobPreview'
+import JobResultLinks from '../components/JobResultLinks'
 import RunGroupSelector from '../components/RunGroupSelector'
 
 function formatDuration(startStr: string | null, endStr: string | null): string {
@@ -516,10 +517,8 @@ export default function TestingJobDetail() {
       )}
 
       {(job.mlflow_url || job.ci_artifacts_url) && (
-        <div className="flex flex-wrap gap-2" aria-label="Job results">
-          {job.mlflow_url && <a href={job.mlflow_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-indigo-600 hover:bg-indigo-50"><span aria-hidden="true">📊</span> MLflow Results</a>}
-          {job.ci_artifacts_url && <a href={job.ci_artifacts_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-indigo-600 hover:bg-indigo-50"><span aria-hidden="true">📁</span> CI Artifacts</a>}
-        </div>
+        <JobResultLinks key={JSON.stringify([name, job.mlflow_url, getPreferenceAccount()])}
+          job={name!} runUrl={job.mlflow_url} ciUrl={job.ci_artifacts_url} viewer={getPreferenceAccount()} />
       )}
 
       {editSubmitOpen && isAdmin() && (

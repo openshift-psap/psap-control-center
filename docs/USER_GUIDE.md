@@ -203,6 +203,11 @@ Select an archived job to inspect its saved stage snapshots, events, duration,
 artifact links, and MLflow link when available. Administrators may rerun a job
 or permanently delete its archived record.
 
+On a live or archived job with an MLflow run, signed-in users can select
+**Explore files** beside **Open in MLflow**. Open folders to browse the run,
+use the breadcrumb to go back, and select a file for a text preview (up to
+64 KiB). Use **Open in MLflow** for larger or binary files.
+
 ### Submitting a Job
 
 1. Open **Testing** and select **Submit Job**.

@@ -23,6 +23,21 @@ def _validate_fournos_gpu_type(value: str) -> str:
 
 # -- Job schemas --
 
+class ArtifactEntry(BaseModel):
+    path: str
+    is_dir: bool
+    file_size: Optional[int] = None
+
+
+class ArtifactDirectory(BaseModel):
+    files: List[ArtifactEntry]
+    next_page_token: Optional[str] = None
+
+
+class ArtifactPreview(BaseModel):
+    text: str
+
+
 class FournosJobSummary(BaseModel):
     name: str
     project: str = ""

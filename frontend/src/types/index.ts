@@ -1151,3 +1151,14 @@ export interface ProjectUiSchemaResponse {
   project: string
   ui_schema: ProjectUiSchema | null
 }
+
+export interface MlflowArtifact {
+  path: string
+  is_dir: boolean
+  file_size: number | null
+}
+
+export interface MlflowDirectory {
+  files: MlflowArtifact[]
+  next_page_token: string | null
+}
