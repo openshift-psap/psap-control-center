@@ -18,7 +18,7 @@ import {
   ForwardIcon,
 } from '@heroicons/react/24/solid'
 import clsx from 'clsx'
-import { getPreferenceAccount, isAdmin, isAuthenticated } from '../stores/authStore'
+import { isAdmin, isAuthenticated } from '../stores/authStore'
 import {
   useFournosJob,
   useCancelJob,
@@ -517,8 +517,8 @@ export default function TestingJobDetail() {
       )}
 
       {(job.mlflow_url || job.ci_artifacts_url) && (
-        <JobResultLinks key={JSON.stringify([name, job.mlflow_url, getPreferenceAccount()])}
-          job={name!} runUrl={job.mlflow_url} ciUrl={job.ci_artifacts_url} viewer={getPreferenceAccount()} />
+        <JobResultLinks key={JSON.stringify([name, job.mlflow_url])}
+          job={name!} runUrl={job.mlflow_url} ciUrl={job.ci_artifacts_url} />
       )}
 
       {editSubmitOpen && isAdmin() && (

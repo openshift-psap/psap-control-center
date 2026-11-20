@@ -1479,7 +1479,8 @@ async def get_job(job_name: str, request: Request, response: Response):
     }
 
 
-async def _job_mlflow_url(job_name: str, _user=Depends(require_auth)) -> str:
+async def _job_mlflow_url(job_name: str) -> str:
+    """Resolve the public job's recorded run for read-only artifact browsing."""
     async with AsyncSessionLocal() as session:
         recorded = await session.scalar(select(FournosJob.mlflow_url).where(FournosJob.name == job_name))
     if recorded:

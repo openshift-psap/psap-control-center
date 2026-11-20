@@ -40,18 +40,11 @@ def sign_in(client):
     client.cookies.set(COOKIE_NAME, create_session_token("team-member", "user"))
 
 
-@pytest.mark.parametrize("route", ["artifacts", "preview?path=result.txt"])
-def test_signed_out_requests_stop_before_lookup(explorer, route):
-    client, session, upstream, live = explorer
-    assert client.get(route).status_code == 401
-    session.scalar.assert_not_called()
-    upstream.assert_not_called()
-    live.assert_not_called()
-
-
-def test_folder_uses_recorded_run_and_workspace_and_forwards_pagination(explorer):
+@pytest.mark.parametrize("signed_in", [False, True])
+def test_folder_uses_recorded_run_and_workspace_and_forwards_pagination(explorer, signed_in):
     client, _, upstream, live = explorer
-    sign_in(client)
+    if signed_in:
+        sign_in(client)
     upstream.return_value = httpx.Response(200, json={
         "root_uri": "storage-location",
         "files": [{"path": "test/index.json", "file_size": "120"}, {"path": "test/suite", "is_dir": True}],
@@ -72,9 +65,11 @@ def test_folder_uses_recorded_run_and_workspace_and_forwards_pagination(explorer
     live.assert_not_called()
 
 
-def test_live_reference_when_archive_has_no_link(explorer):
+@pytest.mark.parametrize("signed_in", [False, True])
+def test_live_reference_when_archive_has_no_link(explorer, signed_in):
     client, session, upstream, live = explorer
-    sign_in(client)
+    if signed_in:
+        sign_in(client)
     session.scalar.return_value = None
     live.return_value = {"status": {"engineStatus": {"forge": {"exportArtifacts": {
         "caliper_artifacts_export": {"backends": {"mlflow": {"run_url": RUN_URL}}}
@@ -91,14 +86,12 @@ def test_live_reference_when_archive_has_no_link(explorer):
 @pytest.mark.parametrize("path", ["../other", "/elsewhere", "a/../b", "a%2Fb", "a\\b"])
 def test_invalid_path_stops_before_mlflow(explorer, path):
     client, _, upstream, _ = explorer
-    sign_in(client)
     assert client.get("preview?path=" + quote(path, safe="")).status_code == 422
     upstream.assert_not_called()
 
 
 def test_foreign_link_and_missing_run(explorer):
     client, session, upstream, _ = explorer
-    sign_in(client)
     session.scalar.return_value = RUN_URL.replace("mlflow.example", "another.example")
     assert client.get("artifacts").status_code == 422
     session.scalar.return_value = ""
@@ -117,7 +110,6 @@ def test_foreign_link_and_missing_run(explorer):
 ])
 def test_preview_errors_and_stream_limit(explorer, response, status):
     client, _, upstream, _ = explorer
-    sign_in(client)
     upstream.return_value = response
     assert client.get("preview", params={"path": "result"}).status_code == status
     assert upstream.call_count == 1

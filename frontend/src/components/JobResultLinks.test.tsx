@@ -6,9 +6,9 @@ import JobResultLinks from './JobResultLinks'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
-function show(viewer: string | null = 'google:team-member', runUrl = 'https://mlflow.example/run') {
+function show(runUrl = 'https://mlflow.example/run') {
   render(<QueryClientProvider client={new QueryClient()}>
-    <JobResultLinks job="demo" viewer={viewer} runUrl={runUrl} ciUrl="https://ci.example/artifacts" />
+    <JobResultLinks job="demo" runUrl={runUrl} ciUrl="https://ci.example/artifacts" />
   </QueryClientProvider>)
 }
 
@@ -41,11 +41,11 @@ it('browses on demand, opens files as plain text, and remembers the folder acros
   expect(screen.queryByText('<b>success</b>')).toBeNull()
 })
 
-it('keeps external links while signed out and never loads the directory', () => {
+it('keeps the CI link when the job has no MLflow run', () => {
   const list = vi.spyOn(fournosApi, 'getMlflowDirectory')
-  show(null)
+  show('')
   expect(screen.queryByRole('button', { name: 'Explore files' })).toBeNull()
-  expect(screen.getByRole('link', { name: 'Open in MLflow' })).toHaveAttribute('href', 'https://mlflow.example/run')
+  expect(screen.queryByRole('link', { name: 'Open in MLflow' })).toBeNull()
   expect(screen.getByRole('link', { name: 'CI Artifacts' })).toBeVisible()
   expect(list).not.toHaveBeenCalled()
 })
