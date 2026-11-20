@@ -7,6 +7,10 @@ import type { SidebarOption, SidebarPreferences } from '../types'
 
 const guestKey = 'psap-sidebar-guest'
 
+function sidebarExpanded(choices: SidebarPreferences | undefined, option: SidebarOption) {
+  return choices?.[option] ?? (option !== 'tools')
+}
+
 function readGuestChoices(): SidebarPreferences {
   try {
     return JSON.parse(localStorage.getItem(guestKey) || '{}') ?? {}
@@ -34,7 +38,7 @@ export function useSidebarPreferences() {
         queryKey: ['sidebar-preferences', account], queryFn: authApi.getSidebarPreferences,
       })
       if (getPreferenceAccount() !== account) return
-      const expanded = !(choices[option] ?? true)
+      const expanded = !sidebarExpanded(choices, option)
       await authApi.saveSidebarChoice(option, expanded)
       return expanded
     },
@@ -46,7 +50,7 @@ export function useSidebarPreferences() {
     onError: () => toast.error('Could not save your sidebar preference. Please try again.'),
   })
   const choices = account ? query.data : guest
-  const isExpanded = (option: SidebarOption) => choices?.[option] ?? true
+  const isExpanded = (option: SidebarOption) => sidebarExpanded(choices, option)
   const toggle = (option: SidebarOption) => {
     if (account) {
       save.mutate({ account, option })

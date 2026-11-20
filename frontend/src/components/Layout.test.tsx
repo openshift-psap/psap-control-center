@@ -82,6 +82,8 @@ it('opens Coming Soon and toggles the saved dashboard choice on each Results act
     expect(link).toHaveAttribute('aria-expanded', 'false')
     expect(results.queryByRole('link', { name: /^Inference Dashboard/ })).toBeNull()
     expect(setItem).toHaveBeenLastCalledWith('psap-sidebar-guest', JSON.stringify({ performance: false }))
+    expect(screen.queryByRole('link', { name: 'Calendar' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Tools' }))
     fireEvent.click(screen.getByRole('link', { name: 'Calendar' }))
     fireEvent.click(results.getByRole('button', { name: 'Expand Results' }))
     expect(screen.getByLabelText('Current location')).toHaveTextContent('/calendar')
@@ -134,6 +136,28 @@ it('keeps Reservations, its admin pending count, and Calendar inside Tools', () 
     expect(screen.getAllByRole('link', { name: /^Reservations/ })).toHaveLength(1)
   } finally {
     view.unmount()
+    clearSession()
+  }
+})
+
+it('starts Tools closed for a signed-in user with no Tools preference and saves the first expansion', async () => {
+  setSession({ username: 'viewer', role: 'user' })
+  const client = new QueryClient()
+  const key = ['sidebar-preferences', 'local:viewer']
+  client.setQueryData(key, { testing: true })
+  const save = vi.spyOn(authApi, 'saveSidebarChoice').mockResolvedValue(undefined)
+  const view = renderLayout('/clusters', client)
+  try {
+    const tools = screen.getByRole('button', { name: 'Expand Tools' })
+    expect(tools).toHaveAttribute('aria-expanded', 'false')
+    expect(save).not.toHaveBeenCalled()
+    fireEvent.click(tools)
+    expect(await screen.findByRole('link', { name: 'Calendar' })).toBeVisible()
+    expect(save).toHaveBeenCalledWith('tools', true)
+    expect(client.getQueryData(key)).toEqual({ testing: true, tools: true })
+  } finally {
+    view.unmount()
+    save.mockRestore()
     clearSession()
   }
 })
