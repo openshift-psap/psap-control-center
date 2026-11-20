@@ -8,6 +8,7 @@ import {
   useCallback,
   type CSSProperties,
   type ReactNode,
+  type MouseEventHandler,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
@@ -81,15 +82,17 @@ function SidebarTitle() {
   )
 }
 
-function SidebarPageLink({ name, href, icon: Icon, onNavigate, children }: {
+function SidebarPageLink({ name, href, icon: Icon, onNavigate, expanded, controls, children }: {
   name: string
   href: string
   icon: typeof HomeIcon
-  onNavigate?: () => void
+  onNavigate?: MouseEventHandler<HTMLAnchorElement>
+  expanded?: boolean
+  controls?: string
   children?: ReactNode
 }) {
   return (
-    <NavLink to={href} onClick={onNavigate} className={({ isActive }) => clsx(
+    <NavLink to={href} onClick={onNavigate} aria-expanded={expanded} aria-controls={controls} className={({ isActive }) => clsx(
       'group flex min-w-0 flex-1 items-center gap-x-3 border-l-[3px] px-6 py-3 text-sm font-medium transition-colors',
       isActive
         ? 'border-l-[#73BCF7] bg-white/10 text-white lg:[&>svg]:text-[#73BCF7]'
@@ -121,18 +124,30 @@ function ExternalSidebarLink({ name, href, onNavigate }: { name: string; href: s
   )
 }
 
-function SidebarSection({ name, icon: Icon, expanded, disabled, onToggle, pageLink, children }: {
+function SidebarSection({ name, icon: Icon, expanded, disabled, onToggle, page, children }: {
   name: string
   icon: typeof HomeIcon
   expanded: boolean
   disabled: boolean
   onToggle: () => void
-  pageLink?: ReactNode
+  page?: { href: string; badge: string; onNavigate?: () => void }
   children: ReactNode
 }) {
   const panelId = useId()
   const Chevron = expanded ? ChevronUpIcon : ChevronDownIcon
-  if (Children.count(children) === 0) return <li>{pageLink}</li>
+  const hasLinks = Children.count(children) > 0
+  const pageLink = page && (
+    <SidebarPageLink name={name} href={page.href} icon={Icon}
+      expanded={hasLinks ? expanded : undefined} controls={hasLinks ? panelId : undefined}
+      onNavigate={event => {
+        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+        if (hasLinks) onToggle()
+        page.onNavigate?.()
+      }}>
+      <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs text-gray-500">{page.badge}</span>
+    </SidebarPageLink>
+  )
+  if (!hasLinks) return <li>{pageLink}</li>
 
   return (
     <li>
@@ -387,11 +402,7 @@ export default function Layout() {
         {/* The dashboards keep the expansion preference from their previous sidebar section. */}
         <SidebarSection name="Results" icon={ChartBarIcon} expanded={sidebar.isExpanded('performance')}
           disabled={sidebar.busy} onToggle={() => sidebar.toggle('performance')}
-          pageLink={
-            <SidebarPageLink name="Results" href="/results" icon={ChartBarIcon} onNavigate={onNavigate}>
-              <span className="ml-auto rounded-full bg-white/10 px-2 py-0.5 text-xs text-gray-500">Soon</span>
-            </SidebarPageLink>
-          }>
+          page={{ href: '/results', badge: 'Soon', onNavigate }}>
           {inferenceDashboards.map(link => <ExternalSidebarLink key={link.name} {...link} onNavigate={onNavigate} />)}
         </SidebarSection>
         <SidebarSection name="Tools" icon={WrenchScrewdriverIcon} expanded={sidebar.isExpanded('tools')}

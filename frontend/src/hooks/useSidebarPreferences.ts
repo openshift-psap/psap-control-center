@@ -25,24 +25,33 @@ export function useSidebarPreferences() {
     staleTime: Infinity, retry: 1,
   })
   const save = useMutation({
-    mutationFn: ({ option, expanded }: { account: string; option: SidebarOption; expanded: boolean }) =>
-      authApi.saveSidebarChoice(option, expanded),
-    onSuccess: (_, { account, option, expanded }) => {
+    // A second activation can arrive while loading the preference or saving the first.
+    // Apply each flip to the last confirmed choice for that account.
+    scope: { id: `sidebar-preferences:${account}` },
+    mutationFn: async ({ account, option }: { account: string; option: SidebarOption }) => {
+      if (getPreferenceAccount() !== account) return
+      const choices = await client.ensureQueryData({
+        queryKey: ['sidebar-preferences', account], queryFn: authApi.getSidebarPreferences,
+      })
+      if (getPreferenceAccount() !== account) return
+      const expanded = !(choices[option] ?? true)
+      await authApi.saveSidebarChoice(option, expanded)
+      return expanded
+    },
+    onSuccess: (expanded, { account, option }) => {
+      if (expanded === undefined) return
       const savedKey = ['sidebar-preferences', account]
-      const needsReload = !client.getQueryData(savedKey)
       client.setQueryData<SidebarPreferences>(savedKey, current => ({ ...current, [option]: expanded }))
-      if (needsReload) void client.invalidateQueries({ queryKey: savedKey })
     },
     onError: () => toast.error('Could not save your sidebar preference. Please try again.'),
   })
   const choices = account ? query.data : guest
   const isExpanded = (option: SidebarOption) => choices?.[option] ?? true
   const toggle = (option: SidebarOption) => {
-    const expanded = !isExpanded(option)
     if (account) {
-      save.mutate({ account, option, expanded })
+      save.mutate({ account, option })
     } else {
-      const next = { ...guest, [option]: expanded }
+      const next = { ...guest, [option]: !isExpanded(option) }
       setGuest(next)
       try {
         localStorage.setItem(guestKey, JSON.stringify(next))
