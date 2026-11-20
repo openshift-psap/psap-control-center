@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.8.0](https://github.com/openshift-psap/psap-control-center/compare/psap-control-center-v1.7.1...psap-control-center-v1.8.0) (2026-11-20)
+
+
+### Features
+
+* add expandable workload and cost sections to cluster cards ([f28a271](https://github.com/openshift-psap/psap-control-center/commit/f28a27187567aa855a27b99c1f3abb41db1108e2))
+* add on-demand cluster card histories and namespace summaries ([d971dac](https://github.com/openshift-psap/psap-control-center/commit/d971dacc767999e76600be33cee09c4983a6c09c))
+* promote cluster monitoring and sidebar updates to production ([e9b31d3](https://github.com/openshift-psap/psap-control-center/commit/e9b31d3dffd82506a6cf4904c24a4e1bde58d029))
+
 ## [1.7.1](https://github.com/openshift-psap/psap-control-center/compare/psap-control-center-v1.7.0...psap-control-center-v1.7.1) (2026-11-19)
 
 
