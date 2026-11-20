@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterAll, expect, it, vi } from 'vitest'
 import Layout from './Layout'
 import Results from '../pages/Results'
 import { clearSession, setSession } from '../stores/authStore'
+import { authApi } from '../services/api'
 
 vi.hoisted(() => {
   vi.stubEnv('VITE_PERFORMANCE_DASHBOARD_PRODUCTION_URL', 'https://inference.example.test')
@@ -53,7 +54,7 @@ it('toggles Testing from its label without leaving the current view, and navigat
   expect(location).toHaveTextContent('/testing?tab=live')
 })
 
-it('opens the Results page separately from its dashboard disclosure and preserves the previous choice', () => {
+it('opens Coming Soon and toggles the saved dashboard choice on each Results activation', () => {
   const setItem = vi.fn()
   vi.stubGlobal('localStorage', {
     getItem: (key: string) => key === 'psap-sidebar-guest' ? '{"performance":false}' : null,
@@ -65,17 +66,57 @@ it('opens the Results page separately from its dashboard disclosure and preserve
     const results = within(section)
     expect(screen.queryByRole('button', { name: /Performance Dashboard/ })).toBeNull()
     expect(results.queryByRole('link', { name: /^Inference Dashboard/ })).toBeNull()
-    fireEvent.click(results.getByRole('link', { name: /^Results/ }))
+    const link = results.getByRole('link', { name: /^Results/ })
+    expect(link).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(link)
     expect(screen.getByRole('heading', { name: 'Coming Soon' })).toBeVisible()
-    fireEvent.click(results.getByRole('button', { name: 'Expand Results' }))
+    expect(link).toHaveAttribute('aria-expanded', 'true')
     const dashboards = results.getAllByRole('link', { name: /^Inference Dashboard/ })
     expect(dashboards.map(link => link.textContent)).toEqual(['Inference Dashboard', 'Inference Dashboard (Staging)'])
     expect(dashboards.map(link => link.getAttribute('href'))).toEqual(['https://inference.example.test', 'https://staging.example.test'])
     expect(dashboards.every(link => link.getAttribute('target') === '_blank')).toBe(true)
     expect(screen.getByLabelText('Current location')).toHaveTextContent('/results')
     expect(setItem).toHaveBeenCalledWith('psap-sidebar-guest', JSON.stringify({ performance: true }))
+    fireEvent.click(link)
+    expect(screen.getByRole('heading', { name: 'Coming Soon' })).toBeVisible()
+    expect(link).toHaveAttribute('aria-expanded', 'false')
+    expect(results.queryByRole('link', { name: /^Inference Dashboard/ })).toBeNull()
+    expect(setItem).toHaveBeenLastCalledWith('psap-sidebar-guest', JSON.stringify({ performance: false }))
+    expect(screen.queryByRole('link', { name: 'Calendar' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Tools' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Calendar' }))
+    fireEvent.click(results.getByRole('button', { name: 'Expand Results' }))
+    expect(screen.getByLabelText('Current location')).toHaveTextContent('/calendar')
+    expect(link).toHaveAttribute('aria-expanded', 'true')
   } finally {
     vi.unstubAllGlobals()
+  }
+})
+
+it('remembers both signed-in Results clicks when the first save is still pending', async () => {
+  setSession({ username: 'viewer', role: 'user' })
+  let finishFirstSave!: () => void
+  const firstSave = new Promise<void>(resolve => { finishFirstSave = resolve })
+  const save = vi.spyOn(authApi, 'saveSidebarChoice').mockResolvedValue(undefined).mockReturnValueOnce(firstSave)
+  const client = new QueryClient()
+  const key = ['sidebar-preferences', 'local:viewer']
+  client.setQueryData(key, { performance: false })
+  const view = renderLayout('/calendar', client)
+  try {
+    const link = screen.getByRole('link', { name: /^Results/ })
+    fireEvent.click(link)
+    expect(screen.getByRole('heading', { name: 'Coming Soon' })).toBeVisible()
+    await waitFor(() => expect(save).toHaveBeenCalledWith('performance', true))
+    fireEvent.click(link)
+    finishFirstSave()
+    await waitFor(() => expect(save.mock.calls).toEqual([['performance', true], ['performance', false]]))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Expand Results' })).toBeEnabled())
+    expect(client.getQueryData(key)).toEqual({ performance: false })
+  } finally {
+    finishFirstSave()
+    view.unmount()
+    save.mockRestore()
+    clearSession()
   }
 })
 
@@ -95,6 +136,28 @@ it('keeps Reservations, its admin pending count, and Calendar inside Tools', () 
     expect(screen.getAllByRole('link', { name: /^Reservations/ })).toHaveLength(1)
   } finally {
     view.unmount()
+    clearSession()
+  }
+})
+
+it('starts Tools closed for a signed-in user with no Tools preference and saves the first expansion', async () => {
+  setSession({ username: 'viewer', role: 'user' })
+  const client = new QueryClient()
+  const key = ['sidebar-preferences', 'local:viewer']
+  client.setQueryData(key, { testing: true })
+  const save = vi.spyOn(authApi, 'saveSidebarChoice').mockResolvedValue(undefined)
+  const view = renderLayout('/clusters', client)
+  try {
+    const tools = screen.getByRole('button', { name: 'Expand Tools' })
+    expect(tools).toHaveAttribute('aria-expanded', 'false')
+    expect(save).not.toHaveBeenCalled()
+    fireEvent.click(tools)
+    expect(await screen.findByRole('link', { name: 'Calendar' })).toBeVisible()
+    expect(save).toHaveBeenCalledWith('tools', true)
+    expect(client.getQueryData(key)).toEqual({ testing: true, tools: true })
+  } finally {
+    view.unmount()
+    save.mockRestore()
     clearSession()
   }
 })
