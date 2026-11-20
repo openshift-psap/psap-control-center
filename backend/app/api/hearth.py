@@ -1,6 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from starlette.concurrency import run_in_threadpool
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.services import resource_observations
 from app.core.auth import require_admin
 from app.core.config import settings
 from app.schemas.hearth import (
@@ -18,17 +22,50 @@ router = APIRouter()
 logger = create_logger("HearthAPI")
 
 
-@router.get("/status", response_model=HearthStatusResponse)
-def get_hearth_status():
-    if not settings.HEARTH_ENABLED:
-        return HearthStatusResponse(
-            available=False,
-            configured=False,
-            error="Hearth integration is disabled",
-        )
+async def _inventory(db, service, ttl):
+    # Only the parsed public inventory enters the database. A changed management
+    # connection uses a separate key even when two API workers overlap a reconnect.
+    source = await run_in_threadpool(service.inventory_source)
 
+    def discover():
+        items = service.list_clusters()
+        if source != service.inventory_source():
+            raise RuntimeError("Management connection changed")
+        return [c.model_dump(mode="json", exclude={"observed_at"}) for c in sorted(items, key=lambda c: c.name)], None
+
+    items, meta = await resource_observations.observe(
+        db, source, "inventory", ttl=ttl, discover=lambda *_: run_in_threadpool(discover),
+    )
+    if source != await run_in_threadpool(service.inventory_source):
+        raise HTTPException(503, "Management connection changed")
+    return items or [], meta
+
+
+def _observed_cluster(item, meta):
+    if meta["last_check_failed"] or meta["last_checked_at"] is None:
+        item = {
+            **item, "locked": None, "availability_verified": False, "owner": None, "owner_set_at": None,
+            "lock_expires_at": None, "lock_job_name": None, "kubeconfig_status": "Unknown", "conditions": [],
+        }
+    return HearthClusterResponse(**item, observed_at=meta["last_checked_at"])
+
+
+@router.get("/status", response_model=HearthStatusResponse)
+async def get_hearth_status(db: AsyncSession = Depends(get_db)):
     service = get_hearth_service()
-    return service.get_status()
+    if not settings.HEARTH_ENABLED or not service.is_configured():
+        return HearthStatusResponse(available=False, configured=False)
+    try:
+        items, meta = await _inventory(db, service, resource_observations.INVENTORY_TTL)
+        return HearthStatusResponse(
+            available=not meta["last_check_failed"] and meta["last_checked_at"] is not None, configured=True,
+            cluster_count=len(items), cluster_names=[c["name"] for c in items],
+            total_gpus=sum((c.get("hardware") or {}).get("total_gpus", 0) for c in items),
+            locked_clusters=sum(bool(c.get("locked")) for c in items), observed_at=meta["last_checked_at"],
+        )
+    except Exception as exc:
+        logger.warning(f"Hearth status unavailable: {type(exc).__name__}")
+        return HearthStatusResponse(available=False, configured=True, error="Hearth is unavailable")
 
 
 @router.post(
@@ -151,54 +188,34 @@ async def disconnect_hearth(
     "/clusters",
     response_model=HearthClusterListResponse,
 )
-def list_hearth_clusters():
+async def list_hearth_clusters(db: AsyncSession = Depends(get_db)):
     if not settings.HEARTH_ENABLED:
-        return HearthClusterListResponse(
-            clusters=[], total=0, available=False
-        )
-
+        return HearthClusterListResponse(clusters=[], total=0, available=False)
     try:
-        service = get_hearth_service()
-        clusters = service.list_clusters()
+        items, meta = await _inventory(db, get_hearth_service(), resource_observations.LOCK_TTL)
         return HearthClusterListResponse(
-            clusters=clusters,
-            total=len(clusters),
-            available=True,
+            clusters=[_observed_cluster(item, meta) for item in items], total=len(items), observed_at=meta["last_checked_at"],
+            available=meta["last_checked_at"] is not None and not meta["last_check_failed"],
         )
     except Exception as exc:
-        logger.error("Failed to list Hearth clusters:", exc)
-        return HearthClusterListResponse(
-            clusters=[], total=0, available=False
-        )
+        logger.warning(f"Hearth inventory unavailable: {type(exc).__name__}")
+        return HearthClusterListResponse(clusters=[], total=0, available=False)
 
 
-@router.get(
-    "/clusters/{cluster_name}",
-    response_model=HearthClusterResponse,
-)
-def get_hearth_cluster(cluster_name: str):
+@router.get("/clusters/{cluster_name}", response_model=HearthClusterResponse)
+async def get_hearth_cluster(cluster_name: str, db: AsyncSession = Depends(get_db), allow_saved_hardware: bool = False):
     if not settings.HEARTH_ENABLED:
-        raise HTTPException(
-            status_code=503,
-            detail="Hearth integration is disabled",
-        )
-
+        raise HTTPException(503, "Hearth integration is disabled")
     try:
-        service = get_hearth_service()
-        cluster = service.get_cluster(cluster_name)
-        if not cluster:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"Hearth cluster '{cluster_name}' not found"
-                ),
-            )
-        return cluster
-    except HTTPException:
-        raise
+        items, meta = await _inventory(db, get_hearth_service(), resource_observations.LOCK_TTL)
     except Exception as exc:
-        logger.error("Failed to get Hearth cluster:", exc)
-        raise HTTPException(
-            status_code=503,
-            detail="Hearth is unavailable",
-        ) from exc
+        raise HTTPException(503, "Hearth is unavailable") from exc
+    verified = meta["last_checked_at"] is not None and not meta["last_check_failed"]
+    if not verified and not allow_saved_hardware:
+        raise HTTPException(503, "Hearth availability could not be verified")
+    for item in items:
+        if item["name"] == cluster_name:
+            return _observed_cluster(item, meta)
+    if not verified:
+        raise HTTPException(503, "Hearth availability could not be verified")
+    raise HTTPException(404, f"Hearth cluster '{cluster_name}' not found")

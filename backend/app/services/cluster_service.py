@@ -1,7 +1,7 @@
 import asyncio
 import time
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select, tuple_
 from typing import List, Optional
 from datetime import datetime
 import os
@@ -9,9 +9,9 @@ import os
 from app.models.cluster import Cluster, CLUSTER_COLORS
 from app.models.cluster_cost import ClusterCost
 from app.models.node_history import NodeHistory
-from app.schemas.cluster import ClusterCreate, ClusterUpdate, ClusterStatus
+from app.schemas.cluster import ClusterCostSummary, ClusterCreate, ClusterUpdate, ClusterStatus
 from app.services.kubernetes_service import KubernetesService
-from app.services import billing_csv_service
+from app.services import billing_csv_service, topology_snapshot
 from app.services.gpu_pod_history_service import record_gpu_snapshot
 from app.core.config import settings
 from app.utils.logger import create_logger
@@ -413,6 +413,7 @@ class ClusterService:
             cluster.name
         )
         
+        await topology_snapshot.clear_if_target_changed(self.db, cluster, parsed.get("api_server"))
         cluster.kubeconfig_path = kubeconfig_path
         cluster.api_server_url = parsed.get("api_server")
         cluster.status = "pending"
@@ -493,6 +494,29 @@ class ClusterService:
 
         await self.db.commit()
         return updated
+
+    async def get_latest_cost_summaries(self, cluster_ids: list[str]) -> dict[str, ClusterCostSummary]:
+        if not cluster_ids:
+            return {}
+        latest = (
+            select(ClusterCost.cluster_id, func.max(ClusterCost.billing_month))
+            .where(
+                ClusterCost.cluster_id.in_(cluster_ids),
+                ClusterCost.total_cost.is_not(None),
+                ClusterCost.error.is_(None),
+            )
+            .group_by(ClusterCost.cluster_id)
+        )
+        rows = await self.db.execute(
+            select(ClusterCost.cluster_id, ClusterCost.billing_month, ClusterCost.total_cost, ClusterCost.currency)
+            .where(tuple_(ClusterCost.cluster_id, ClusterCost.billing_month).in_(latest))
+        )
+        return {
+            row.cluster_id: ClusterCostSummary(
+                billing_month=row.billing_month, total_cost=row.total_cost, currency=row.currency,
+            )
+            for row in rows
+        }
 
     async def get_cluster_costs(self, cluster_id: str) -> List[ClusterCost]:
         result = await self.db.execute(

@@ -1,3 +1,4 @@
+from uuid import uuid4
 import asyncio
 import threading
 from unittest.mock import Mock
@@ -42,18 +43,25 @@ def test_management_transport_uses_service_ip_and_proxy_exclusions(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_sign_in_config_remains_responsive_during_hearth_lookup(monkeypatch):
+async def test_sign_in_config_remains_responsive_during_hearth_lookup(monkeypatch, observation_db):
     started = threading.Event()
     release = threading.Event()
 
     def slow_lookup():
         started.set()
         assert release.wait(timeout=4), "Hearth lookup blocked the API event loop"
-        return {"available": True, "configured": True}
+        return []
 
     monkeypatch.setattr(hearth.settings, "HEARTH_ENABLED", True)
-    monkeypatch.setattr(hearth.get_hearth_service(), "get_status", slow_lookup)
+    monkeypatch.setattr(hearth.get_hearth_service(), "is_configured", lambda: True)
+    key = "hearth:" + str(uuid4())
+    monkeypatch.setattr(hearth.get_hearth_service(), "inventory_source", lambda: key)
+    monkeypatch.setattr(hearth.get_hearth_service(), "list_clusters", slow_lookup)
     app = FastAPI()
+    async def database():
+        async with observation_db() as db:
+            yield db
+    app.dependency_overrides[hearth.get_db] = database
     app.include_router(hearth.router, prefix="/hearth")
     app.include_router(auth.router, prefix="/auth")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:

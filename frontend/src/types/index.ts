@@ -1,4 +1,8 @@
+export type SidebarOption = 'desktop' | 'testing' | 'performance' | 'tools'
+export type SidebarPreferences = Partial<Record<SidebarOption, boolean>>
+
 export interface Cluster {
+  operator_count?: number | null
   id: string
   name: string
   description?: string
@@ -145,7 +149,31 @@ export interface ClusterOccupancyResponse {
   } | null
 }
 
+export interface ClusterCostSummary {
+  billing_month: string
+  total_cost: number
+  currency: string
+}
+
+export interface NamespaceGpuPods {
+  namespace: string
+  gpu_count: number
+  pods: GpuPodInfo[]
+}
+
+export interface CardGpuSummary {
+  fresh_until: string
+  observed_at: string
+  stale: boolean
+  total_gpus: number
+  allocated_gpus: number
+  gpu_nodes: number
+  namespaces: NamespaceGpuPods[]
+}
+
 export interface ClusterListResponse {
+  gpu_summaries?: Record<string, CardGpuSummary> | null
+  latest_costs?: Record<string, ClusterCostSummary> | null
   clusters: Cluster[]
   total: number
 }
@@ -214,7 +242,14 @@ export interface TopologyNode {
   external_ip?: string
 }
 
-export interface ClusterTopology {
+export interface TopologyCheck {
+  last_checked_at: string | null
+  last_changed_at: string | null
+  check_due: boolean
+  last_check_failed: boolean
+}
+
+export interface ClusterTopology extends TopologyCheck {
   nodes: TopologyNode[]
   control_plane: TopologyNode[]
   workers: TopologyNode[]
@@ -222,6 +257,12 @@ export interface ClusterTopology {
   total_nodes: number
   zones: string[]
 }
+
+export interface PanelObservation extends TopologyCheck {
+  failed_resources?: string[]
+}
+
+export type PanelResponse<T> = (T | { unchanged: true } | { empty: true }) & { observation: PanelObservation }
 
 export interface OcpDetails {
   cluster_version?: string
@@ -302,6 +343,7 @@ export interface HearthCondition {
 }
 
 export interface HearthCluster {
+  observed_at?: string | null
   name: string
   kubeconfig_secret: string
   owner?: string
@@ -309,7 +351,8 @@ export interface HearthCluster {
   gpu_discovery_interval?: string
   hardware?: HearthHardware
   kubeconfig_status?: string
-  locked: boolean
+  availability_verified?: boolean
+  locked: boolean | null
   lock_expires_at?: string
   owner_set_at?: string
   lock_job_name?: string
@@ -325,6 +368,7 @@ export interface HearthClusterListResponse {
 }
 
 export interface HearthStatus {
+  cluster_names?: string[]
   available: boolean
   configured: boolean
   cluster_count: number
@@ -856,6 +900,7 @@ export interface SubmitMatrixModelInput {
 }
 
 export interface SubmitMatrixRequest {
+  verify_hearth_target?: boolean
   project: string
   cluster: string
   pipeline: string

@@ -1407,7 +1407,7 @@ function SubmitForm({ onSubmitted }: { onSubmitted?: (name: string) => void }) {
           onSubmitted={onSubmitted}
           onMatrixConstraintsChange={setMatrixClusterConstraints}
           onRhaiisCptModeChange={handleRhaiisCptModeChange}
-          matrixClusterValid={matrixClusterValid}
+          matrixClusterValid={useHearthForCpt ? matrixClusterValid : undefined}
           onOpenScheduleModal={() => setScheduleModalOpen(true)}
           matrixPipelinePortalTarget={rhaiisSinglePage ? rhaiisPipelineSetupTarget : null}
         />

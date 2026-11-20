@@ -453,6 +453,7 @@ export default function DynamicSubmitForm({
           pipeline: basics.pipeline,
           args,
           config_overrides: mergeMatrixConfigOverrides(selectedPipeline.overrides, overrides),
+          verify_hearth_target: matrixClusterValid !== undefined,
           matrix_mode_id: activeMode.id,
           selected_pipeline_key: selectedPipeline.key,
           matrix_pipeline_key: activeMode.id === 'cpt' ? selectedPipeline.key : '',

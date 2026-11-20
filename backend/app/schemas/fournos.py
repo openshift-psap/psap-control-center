@@ -466,6 +466,7 @@ class SubmitMatrixModelInput(BaseModel):
 
 
 class SubmitMatrixRequest(BaseModel):
+    verify_hearth_target: bool = False
     project: str
     cluster: str
     pipeline: str = "forge-full"

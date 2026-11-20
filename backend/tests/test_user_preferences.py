@@ -119,3 +119,48 @@ def test_refresh_preference_update_uses_authenticated_subject(monkeypatch):
         value={"mode": "last_update"},
     )
     db.commit.assert_awaited_once()
+
+
+def test_sidebar_choices_round_trip_for_the_authenticated_account_only(monkeypatch):
+    import httpx
+    from fastapi import FastAPI
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.api import auth as auth_api
+    from app.core.auth import COOKIE_NAME, create_session_token
+    from app.core.database import get_db
+    from app.models.user_preference import UserPreference
+
+    monkeypatch.setattr(user_preference_service.settings, "DATABASE_URL", "sqlite+aiosqlite://")
+
+    async def exercise():
+        engine = create_async_engine("sqlite+aiosqlite://")
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(UserPreference.__table__.create)
+            sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+            async def test_db():
+                async with sessions() as session:
+                    yield session
+
+            app = FastAPI()
+            app.include_router(auth_api.router)
+            app.dependency_overrides[get_db] = test_db
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                assert (await client.get("/me/sidebar")).status_code == 401
+                assert (await client.put("/me/sidebar/desktop", json={"expanded": False})).status_code == 401
+                first = create_session_token("first", "user", subject="local:first")
+                client.cookies.set(COOKIE_NAME, first)
+                assert (await client.put("/me/sidebar/tools", json={"expanded": False})).is_success
+                assert (await client.put("/me/sidebar/desktop", json={"expanded": False})).is_success
+                assert (await client.put("/me/sidebar/desktop", json={"expanded": True})).is_success
+                assert (await client.put("/me/sidebar/arbitrary", json={"expanded": True})).status_code == 422
+                client.cookies.set(COOKIE_NAME, create_session_token("second", "user", subject="local:second"))
+                assert (await client.get("/me/sidebar")).json() == {}
+                client.cookies.set(COOKIE_NAME, first)
+                assert (await client.get("/me/sidebar")).json() == {"desktop": True, "tools": False}
+        finally:
+            await engine.dispose()
+
+    asyncio.run(exercise())
